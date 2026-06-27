@@ -1,0 +1,22 @@
+{
+  "name": "@moltentech/operator-flux-app",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "description": "Operator Flux App (inbound leg): serves the signed Provider Manifest + stats, hosts checkout/manage, and relays Stripe webhooks to MoltenTech. Stateless; holds the operator's restricted Stripe key.",
+  "scripts": {
+    "start": "tsx src/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@moltentech/protocol": "file:../protocol",
+    "stripe": "^17.4.0",
+    "tsx": "^4.19.2",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.2"
+  }
+}

@@ -1,0 +1,38 @@
+{
+  "name": "@moltentech/protocol",
+  "version": "0.1.0",
+  "description": "Shared wire contracts for the MoltenTech marketplace: Provider Manifest + agent/Flux-App JSON messages. Single source of truth imported by the web app, the operator agent, and the operator Flux App.",
+  "license": "MIT",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./src/index.ts",
+      "default": "./src/index.ts"
+    },
+    "./signing": {
+      "types": "./src/signing.ts",
+      "import": "./src/signing.ts",
+      "default": "./src/signing.ts"
+    }
+  },
+  "files": ["src"],
+  "bin": {
+    "mt-manifest": "./src/cli.ts"
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "manifest": "tsx src/cli.ts"
+  },
+  "dependencies": {
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}

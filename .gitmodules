@@ -1,0 +1,4 @@
+[submodule "arcane-mage"]
+	path = arcane-mage
+	url = https://github.com/w2vy/arcane-mage.git
+	branch = cluster-architecture

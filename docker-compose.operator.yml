@@ -1,0 +1,38 @@
+# Operator-side marketplace stack (the remote-operator legs), used for the pve25
+# live E2E and as the basis for the public moltentech-operator repo.
+#
+# The two services run on DIFFERENT hosts, gated by compose profiles:
+#   - on the operator's Proxmox box (pve25):   docker compose -f docker-compose.operator.yml --profile agent     up -d --build
+#   - beside MT (w2vy, for this test):          docker compose -f docker-compose.operator.yml --profile flux-app up -d --build
+#
+# Both build from the REPO ROOT context (protocol/ + arcane-mage/ in scope). Fill
+# .env.operator on each host (see .env.operator.example); never commit it.
+name: moltentech-operator
+
+services:
+  # Outbound-only provisioning agent. Holds the LOCAL Proxmox creds; no inbound ports.
+  agent:
+    profiles: ["agent"]
+    build:
+      context: .
+      dockerfile: ./agent/Dockerfile
+    container_name: moltentech-agent
+    restart: unless-stopped
+    env_file: [.env.operator]
+    # No published ports — the agent only dials out (MT 443 + local Proxmox :8006).
+
+  # Inbound leg: serves the signed manifest + stats, hosts checkout/manage, relays
+  # Stripe webhooks to MT. Stateless; the only secrets are the restricted Stripe key
+  # + webhook secret (env). The offline-signed manifest is mounted read-only.
+  flux-app:
+    profiles: ["flux-app"]
+    build:
+      context: .
+      dockerfile: ./flux-app/Dockerfile
+    container_name: moltentech-flux-app
+    restart: unless-stopped
+    env_file: [.env.operator]
+    volumes:
+      - ./flux-app/manifest.json:/app/flux-app/manifest.json:ro
+    ports:
+      - "8088:8088"   # fronted by the fluxapp-staging.moltentech.us Caddy vhost

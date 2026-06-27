@@ -1,0 +1,21 @@
+{
+  "name": "@moltentech/operator-agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "description": "Outbound-only operator agent: pulls provisioning jobs from MoltenTech, executes them on the LOCAL Proxmox, posts results, and re-asserts the listing. Holds the local Proxmox creds; opens no inbound.",
+  "scripts": {
+    "start": "tsx src/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@moltentech/protocol": "file:../protocol",
+    "tsx": "^4.19.2",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.2"
+  }
+}
