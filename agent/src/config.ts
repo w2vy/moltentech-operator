@@ -15,6 +15,7 @@ export type AgentConfig = {
   providerSlug: string;
   pollIntervalMs: number;
   listingIntervalMs: number;
+  healthIntervalMs: number;
   /** Local Proxmox the agent provisions against (creds NEVER leave the operator). */
   proxmox: { url?: string; tokenId?: string; tokenSecret?: string };
   /** Local Proxmox/node defaults the agent stamps into the arcane-mage YAML. */
@@ -58,6 +59,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AgentConfig {
     providerSlug: req(env, "PROVIDER_SLUG"),
     pollIntervalMs: Number(env.AGENT_POLL_INTERVAL_MS ?? 10_000),
     listingIntervalMs: Number(env.AGENT_LISTING_INTERVAL_MS ?? 60_000),
+    healthIntervalMs: Number(env.AGENT_HEALTH_INTERVAL_MS ?? 60_000),
     proxmox,
     host: {
       network: env.PROXMOX_NETWORK ?? "vmbr0",

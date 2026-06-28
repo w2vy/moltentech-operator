@@ -4,6 +4,8 @@ import {
   JobResult,
   ListingAssert,
   type ListingTier,
+  HealthReport,
+  type NodeHealth,
 } from "@moltentech/protocol";
 
 /**
@@ -58,6 +60,35 @@ export class MtClient {
       body: JSON.stringify(payload),
     });
     if (!res.ok) throw new Error(`listing failed: ${res.status}`);
+  }
+
+  /** Fetch this provider's live nodes so the agent knows which local VMs to health-check. */
+  async getNodes(): Promise<
+    { tier: string; host: string; apiPort: number; vmName: string; nodeName: string }[]
+  > {
+    const res = await fetch(`${this.baseUrl}/api/agent/nodes`, { headers: this.headers() });
+    if (!res.ok) throw new Error(`nodes fetch failed: ${res.status}`);
+    const body = (await res.json()) as {
+      nodes?: { tier: string; host: string; apiPort: number; vmName: string; nodeName: string }[];
+    };
+    return body.nodes ?? [];
+  }
+
+  /** Report per-VM running state gathered from the LOCAL Proxmox. */
+  async reportHealth(nodes: NodeHealth[]): Promise<void> {
+    const payload: HealthReport = {
+      schemaVersion: SCHEMA_VERSION,
+      providerSlug: this.providerSlug,
+      reportedAt: new Date().toISOString(),
+      nodes,
+    };
+    HealthReport.parse(payload);
+    const res = await fetch(`${this.baseUrl}/api/agent/health`, {
+      method: "PUT",
+      headers: this.headers(),
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) throw new Error(`health report failed: ${res.status}`);
   }
 
   // providerSlug is set by the caller via withProvider() so assertListing can stamp it.

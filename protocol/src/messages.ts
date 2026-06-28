@@ -244,3 +244,25 @@ export const ManageResponse = Envelope.extend({
   ok: z.boolean(),
 });
 export type ManageResponse = z.infer<typeof ManageResponse>;
+
+// ───────────────────────────────────────────────────────────────────────────
+// 7. health  —  agent → MT  (periodic per-node VM liveness from local Proxmox)
+//    The agent can see its own hypervisor; MT cannot (operator hosts live outside
+//    MT's cluster API). So the operator reports each owned VM's running state and
+//    MT raises node_down from it — plus a staleness check when the agent goes
+//    silent. Auth: per-provider agent key (provider-scoped).
+// ───────────────────────────────────────────────────────────────────────────
+export const NodeHealth = z.object({
+  vmName: z.string().min(1),
+  running: z.boolean(),
+  /** Raw Proxmox status (running|stopped|paused|…) or "missing" if not found. */
+  status: z.string().min(1),
+});
+export type NodeHealth = z.infer<typeof NodeHealth>;
+
+export const HealthReport = Envelope.extend({
+  providerSlug: ProviderSlug,
+  reportedAt: Timestamp,
+  nodes: z.array(NodeHealth),
+});
+export type HealthReport = z.infer<typeof HealthReport>;
