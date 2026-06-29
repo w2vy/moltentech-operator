@@ -16,7 +16,8 @@ services:
     build:
       context: .
       dockerfile: ./agent/Dockerfile
-    container_name: moltentech-agent
+    # No container_name: Compose names it <project>-agent-1 so multiple operator
+    # stacks (e.g. prod + a staging instance via -p) coexist without a collision.
     restart: unless-stopped
     env_file: [.env.operator]
     # No published ports — the agent only dials out (MT 443 + local Proxmox :8006).
@@ -29,7 +30,7 @@ services:
     build:
       context: .
       dockerfile: ./coalition/Dockerfile
-    container_name: moltentech-coalition
+    # No container_name (see agent) — auto-named per project so instances coexist.
     restart: unless-stopped
     env_file: [.env.operator]
     volumes:
