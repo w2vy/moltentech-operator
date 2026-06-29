@@ -6,13 +6,13 @@ import {
   ManageResponse,
   PaymentEvent,
 } from "@moltentech/protocol";
-import type { FluxAppConfig } from "./config";
+import type { CoalitionConfig } from "./config";
 import { ensurePrice, type StripeLike, type StripeEvent } from "./stripe";
 
 /** Mint a subscription Checkout Session (with trial) on the operator's Stripe account. */
 export async function handleCheckout(
   stripe: StripeLike,
-  cfg: FluxAppConfig,
+  cfg: CoalitionConfig,
   req: CheckoutInitRequest
 ): Promise<CheckoutInitResponse> {
   const priceCents = cfg.tierPrices[req.tier];
@@ -123,7 +123,7 @@ export function normalizeEvent(event: StripeEvent, providerSlug: string): Paymen
 
 /** Relay a normalized PaymentEvent outbound to MT. Returns true iff MT accepted. */
 export async function relayPaymentEvent(
-  cfg: Pick<FluxAppConfig, "mtBaseUrl" | "agentKey">,
+  cfg: Pick<CoalitionConfig, "mtBaseUrl" | "agentKey">,
   ev: PaymentEvent,
   fetchImpl: typeof fetch = fetch
 ): Promise<boolean> {
@@ -138,11 +138,11 @@ export async function relayPaymentEvent(
 /**
  * Verify + handle a Stripe webhook. Returns the HTTP status to send Stripe:
  * 200 = acked (handled or ignored); 400 = bad signature; 502 = relay to MT failed,
- * so Stripe re-delivers (its retry IS the durable queue — the Flux App stays stateless).
+ * so Stripe re-delivers (its retry IS the durable queue — the Coalition stays stateless).
  */
 export async function handleWebhook(
   stripe: StripeLike,
-  cfg: FluxAppConfig,
+  cfg: CoalitionConfig,
   rawBody: string | Buffer,
   signature: string,
   fetchImpl: typeof fetch = fetch

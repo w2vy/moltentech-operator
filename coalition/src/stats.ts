@@ -5,9 +5,9 @@ import {
   type StatsTier,
   type TierKey,
 } from "@moltentech/protocol";
-import type { FluxAppConfig } from "./config";
+import type { CoalitionConfig } from "./config";
 
-// In-memory only — stats are regenerable, never persisted (the Flux App is stateless
+// In-memory only — stats are regenerable, never persisted (the Coalition is stateless
 // and runs on a Syncthing-replicated data partition where mutable files conflict).
 let latest: StatsSnapshot | null = null;
 export function getStatsSnapshot(): StatsSnapshot | null {
@@ -17,7 +17,7 @@ export function getStatsSnapshot(): StatsSnapshot | null {
 const NODE_TIMEOUT_MS = 10_000;
 
 /** Fetch the provider's live node list from MT (authoritative). */
-async function fetchNodes(cfg: FluxAppConfig, fetchImpl: typeof fetch): Promise<AgentNode[]> {
+async function fetchNodes(cfg: CoalitionConfig, fetchImpl: typeof fetch): Promise<AgentNode[]> {
   const res = await fetchImpl(`${cfg.mtBaseUrl}/api/agent/nodes`, {
     headers: { Authorization: `Bearer ${cfg.agentKey}` },
   });
@@ -63,7 +63,7 @@ const avg = (xs: number[]): number | null => (xs.length ? xs.reduce((a, b) => a 
  * v0.1 derives EPS/ddwrite/uptime from getbenchmarks (uptime = % reachable this
  * pass). pnrEligible/arcaneOs/responseTime are left null pending richer sources.
  */
-export async function collectStats(cfg: FluxAppConfig, fetchImpl: typeof fetch = fetch): Promise<StatsSnapshot> {
+export async function collectStats(cfg: CoalitionConfig, fetchImpl: typeof fetch = fetch): Promise<StatsSnapshot> {
   const nodes = await fetchNodes(cfg, fetchImpl);
   const samples = await Promise.all(nodes.map((n) => pollNode(n, fetchImpl).then((s) => ({ node: n, s }))));
 

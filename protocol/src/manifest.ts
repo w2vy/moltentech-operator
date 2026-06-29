@@ -3,7 +3,7 @@ import { Envelope, ProviderSlug, TierKey, Timestamp } from "./common";
 
 /**
  * Provider Manifest — the operator's signed self-description, published as a
- * static JSON blob at the Flux App's stable HTTPS URL and **pulled** by MT.
+ * static JSON blob at the Coalition's stable HTTPS URL and **pulled** by MT.
  *
  * Trust model:
  * - Signed **offline** with the operator's ed25519 key; `signature` is detached
@@ -12,7 +12,7 @@ import { Envelope, ProviderSlug, TierKey, Timestamp } from "./common";
  *   NOT carry secrets, does NOT advertise the operator's Proxmox `:8006`, and
  *   does NOT carry authoritative price (price is asserted by the agent via the
  *   listing message and materialized into the operator's Stripe Price).
- * - Served as immutable-per-deploy config so multiple Flux App instances are
+ * - Served as immutable-per-deploy config so multiple Coalition instances are
  *   byte-identical (Syncthing replicates, never merges).
  */
 export const ProviderManifestTier = z.object({
@@ -32,8 +32,8 @@ export const ProviderManifestBody = Envelope.extend({
     description: z.string().optional(),
     contact: z.string().optional(),
   }),
-  /** Stable HTTPS base URL of the operator's Flux App (stats pull + payment/manage endpoints). */
-  fluxAppUrl: z.string().url(),
+  /** Stable HTTPS base URL of the operator's Coalition (stats pull + payment/manage endpoints). */
+  coalitionUrl: z.string().url(),
   /** ed25519 public key (base64) used to verify `signature`. */
   pubkey: z.string().min(1),
   /** Tiers the operator offers (price is NOT here — see listing assert). */

@@ -4,7 +4,7 @@ import { z } from "zod";
  * Bump when a breaking change is made to any message or the manifest. Every
  * payload carries `schemaVersion` so the receiver can reject mismatches.
  */
-export const SCHEMA_VERSION = 1 as const;
+export const SCHEMA_VERSION = 2 as const;
 
 /** The three hosting tiers. Floor prices live in the web app (`lib/tiers.ts`). */
 export const TierKey = z.enum(["cumulus", "nimbus", "stratus"]);
@@ -29,10 +29,10 @@ export const Timestamp = z.string().datetime();
 
 /**
  * Auth conventions (carried in HTTP headers, not the JSON body):
- * - Flux App → MT and agent → MT: `Authorization: Bearer <per-provider key>`;
+ * - Coalition → MT and agent → MT: `Authorization: Bearer <per-provider key>`;
  *   MT stores only `sha256(key)` as `Provider.agentKeyHash` and scopes every
  *   query to the matched provider.
- * - MT → Flux App (checkout-init / manage): `Authorization: Bearer <MT-issued key>`
+ * - MT → Coalition (checkout-init / manage): `Authorization: Bearer <MT-issued key>`
  *   so randoms can't mint sessions on the operator's Stripe account.
  */
 export const HEADER_AUTHORIZATION = "authorization";

@@ -13,7 +13,7 @@ Three components, each isolated by trust boundary:
 | Component | Where it runs | Holds | Network |
 |-----------|---------------|-------|---------|
 | **`agent/`** | A trusted always-on host with LAN reach to your Proxmox `:8006` | Your **local Proxmox token** | Outbound only — pulls provision jobs from MoltenTech, never receives a push |
-| **`flux-app/`** | A Flux node (ArcaneOS) — the inbound leg | Your **restricted Stripe key + webhook secret** (if using Stripe) | Inbound: serves the signed manifest + stats; relays Stripe webhooks outbound to MoltenTech |
+| **`coalition/`** | A Flux node (ArcaneOS) — the inbound leg | Your **restricted Stripe key + webhook secret** (if using Stripe) | Inbound: serves the signed manifest + stats; relays Stripe webhooks outbound to MoltenTech |
 | **`protocol/`** | Shared library | — | The typed wire contracts (zod) both legs speak + the manifest signing CLI |
 
 The **agent** provisions your local Proxmox via the bundled
@@ -32,7 +32,7 @@ cp .env.operator.example .env.operator   # fill the subset each host needs
 docker compose -f docker-compose.operator.yml --profile agent    up -d --build
 
 # On your Flux node (the inbound leg):
-docker compose -f docker-compose.operator.yml --profile flux-app up -d --build
+docker compose -f docker-compose.operator.yml --profile coalition up -d --build
 ```
 
 Already cloned without submodules? `git submodule update --init --recursive`.

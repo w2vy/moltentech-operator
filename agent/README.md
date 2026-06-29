@@ -12,7 +12,7 @@ MoltenTech  ◀──(agent pushes)─  POST /api/agent/jobs/{id}/result
 MoltenTech  ◀──(heartbeat)────  PUT  /api/agent/listing  (price/capacity)
 ```
 
-Stats and payments are NOT here — those live on the operator's **Flux App** (the
+Stats and payments are NOT here — those live on the operator's **Coalition** (the
 inbound leg). This agent is control-plane only; the Flux nodes run on Proxmox.
 
 ## Run

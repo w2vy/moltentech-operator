@@ -1,7 +1,7 @@
 {
   "name": "@moltentech/protocol",
   "version": "0.1.0",
-  "description": "Shared wire contracts for the MoltenTech marketplace: Provider Manifest + agent/Flux-App JSON messages. Single source of truth imported by the web app, the operator agent, and the operator Flux App.",
+  "description": "Shared wire contracts for the MoltenTech marketplace: Provider Manifest + agent/Coalition JSON messages. Single source of truth imported by the web app, the operator agent, and the operator Coalition.",
   "license": "MIT",
   "type": "module",
   "main": "./src/index.ts",

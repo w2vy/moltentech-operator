@@ -9,14 +9,14 @@ async function main() {
   const cfg = loadConfig();
   const stripe = createStripe(cfg.stripeSecretKey);
 
-  await collectStats(cfg).catch((e) => console.error("[flux-app] initial stats error:", e.message));
+  await collectStats(cfg).catch((e) => console.error("[coalition] initial stats error:", e.message));
   setInterval(() => {
-    collectStats(cfg).catch((e) => console.error("[flux-app] stats error:", e.message));
+    collectStats(cfg).catch((e) => console.error("[coalition] stats error:", e.message));
   }, STATS_INTERVAL_MS);
 
   const server = createServer(stripe, cfg);
   server.listen(cfg.port, () => {
-    console.log(`[flux-app] provider=${cfg.providerSlug} listening on :${cfg.port} (mt=${cfg.mtBaseUrl})`);
+    console.log(`[coalition] provider=${cfg.providerSlug} listening on :${cfg.port} (mt=${cfg.mtBaseUrl})`);
   });
 
   const stop = () => server.close(() => process.exit(0));
@@ -25,6 +25,6 @@ async function main() {
 }
 
 main().catch((err) => {
-  console.error("[flux-app] fatal:", err);
+  console.error("[coalition] fatal:", err);
   process.exit(1);
 });

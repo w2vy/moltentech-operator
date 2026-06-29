@@ -1,7 +1,7 @@
 import Stripe from "stripe";
 
 /**
- * The narrow slice of Stripe the Flux App uses, as an interface so the payment
+ * The narrow slice of Stripe the Coalition uses, as an interface so the payment
  * logic can be unit-tested with a fake (real Stripe calls need live keys).
  */
 export type StripeEvent = { id: string; type: string; data: { object: Record<string, unknown> } };

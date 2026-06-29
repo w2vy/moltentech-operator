@@ -8,7 +8,7 @@ node_modules/
 !.env.operator.example
 
 # Operator instance data (signed manifest + signing key) — never commit
-flux-app/manifest.json
+coalition/manifest.json
 manifest-key.pem
 manifest-pubkey.txt
 manifest.body.json

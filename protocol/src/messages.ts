@@ -9,14 +9,14 @@ import {
 } from "./common";
 
 // ───────────────────────────────────────────────────────────────────────────
-// 1. checkout-init  —  MT → operator Flux App
-//    MT asks the Flux App to quote the price and mint a subscription Checkout
+// 1. checkout-init  —  MT → operator Coalition
+//    MT asks the Coalition to quote the price and mint a subscription Checkout
 //    Session (trial enabled) on the OPERATOR's Stripe account. Auth: MT-issued key.
 // ───────────────────────────────────────────────────────────────────────────
 export const CheckoutInitRequest = Envelope.extend({
   providerSlug: ProviderSlug,
   tier: TierKey,
-  /** The MT customer buying — the Flux App passes email to Checkout and echoes mtCustomerId back in events. */
+  /** The MT customer buying — the Coalition passes email to Checkout and echoes mtCustomerId back in events. */
   customer: z.object({
     mtCustomerId: z.string().min(1),
     email: z.string().email(),
@@ -31,7 +31,7 @@ export type CheckoutInitRequest = z.infer<typeof CheckoutInitRequest>;
 export const CheckoutInitResponse = Envelope.extend({
   /** Stripe-hosted Checkout URL to redirect the customer to. */
   checkoutUrl: z.string().url(),
-  /** The price the Flux App will actually charge (MT confirms == listed before redirect). */
+  /** The price the Coalition will actually charge (MT confirms == listed before redirect). */
   priceCents: PriceCents,
   currency: Currency,
   /** Free-trial length applied (operator-selectable 1–7). */
@@ -40,8 +40,8 @@ export const CheckoutInitResponse = Envelope.extend({
 export type CheckoutInitResponse = z.infer<typeof CheckoutInitResponse>;
 
 // ───────────────────────────────────────────────────────────────────────────
-// 2. payment-event  —  operator Flux App → MT
-//    Normalized Stripe webhook relayed outbound. The Flux App does NOT 200-ack
+// 2. payment-event  —  operator Coalition → MT
+//    Normalized Stripe webhook relayed outbound. The Coalition does NOT 200-ack
 //    Stripe until MT accepts this, so Stripe's retry is the durable queue.
 //    Auth: per-provider key. `stripeEventId` is the idempotency key at MT.
 // ───────────────────────────────────────────────────────────────────────────
@@ -191,7 +191,7 @@ export const ListingAssert = Envelope.extend({
 export type ListingAssert = z.infer<typeof ListingAssert>;
 
 // ───────────────────────────────────────────────────────────────────────────
-// 6. stats  —  published by the Flux App's external collector; MT PULLS it.
+// 6. stats  —  published by the Coalition's external collector; MT PULLS it.
 //    Hairpin-proof (polled from outside the operator LAN). No secrets.
 // ───────────────────────────────────────────────────────────────────────────
 export const StatsTier = z.object({
@@ -206,8 +206,8 @@ export const StatsTier = z.object({
 });
 export type StatsTier = z.infer<typeof StatsTier>;
 
-// A live node the Flux App's collector should poll (public host:apiPort). MT is
-// the authoritative source (it knows the provider's slots); the Flux App fetches
+// A live node the Coalition's collector should poll (public host:apiPort). MT is
+// the authoritative source (it knows the provider's slots); the Coalition fetches
 // this list via GET /api/agent/nodes, then polls each node's Flux API externally.
 export const AgentNode = z.object({
   tier: TierKey,
@@ -225,7 +225,7 @@ export const StatsSnapshot = Envelope.extend({
 export type StatsSnapshot = z.infer<typeof StatsSnapshot>;
 
 // ───────────────────────────────────────────────────────────────────────────
-// 7. manage  —  MT → operator Flux App  (customer self-service)
+// 7. manage  —  MT → operator Coalition  (customer self-service)
 //    Open the operator-account billing portal, or cancel a subscription.
 //    Auth: MT-issued key.
 // ───────────────────────────────────────────────────────────────────────────
