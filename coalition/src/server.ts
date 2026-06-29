@@ -1,7 +1,7 @@
 import http from "node:http";
 import { readFileSync } from "node:fs";
 import { CheckoutInitRequest, ManageRequest } from "@moltentech/protocol";
-import type { FluxAppConfig } from "./config";
+import type { CoalitionConfig } from "./config";
 import type { StripeLike } from "./stripe";
 import { handleCheckout, handleManage, handleWebhook } from "./payments";
 import { getStatsSnapshot } from "./stats";
@@ -16,10 +16,10 @@ function readBody(req: http.IncomingMessage): Promise<Buffer> {
 }
 
 /**
- * The inbound Flux App server. Public: the signed manifest + stats. Authenticated
- * (MT-issued fluxAppKey): /checkout + /manage. Stripe-signed: /webhook (raw body).
+ * The inbound Coalition server. Public: the signed manifest + stats. Authenticated
+ * (MT-issued coalitionKey): /checkout + /manage. Stripe-signed: /webhook (raw body).
  */
-export function createServer(stripe: StripeLike, cfg: FluxAppConfig): http.Server {
+export function createServer(stripe: StripeLike, cfg: CoalitionConfig): http.Server {
   return http.createServer(async (req, res) => {
     const send = (status: number, obj: unknown) => {
       res.writeHead(status, { "content-type": "application/json" });
@@ -55,9 +55,9 @@ export function createServer(stripe: StripeLike, cfg: FluxAppConfig): http.Serve
         return send(status, { received: status === 200 });
       }
 
-      // MT -> Flux App, authenticated with the MT-issued key.
+      // MT -> Coalition, authenticated with the MT-issued key.
       if (method === "POST" && (url === "/checkout" || url === "/manage")) {
-        if (req.headers["authorization"] !== `Bearer ${cfg.fluxAppKey}`) {
+        if (req.headers["authorization"] !== `Bearer ${cfg.coalitionKey}`) {
           return send(401, { error: "Unauthorized" });
         }
         let json: unknown;
@@ -83,7 +83,7 @@ export function createServer(stripe: StripeLike, cfg: FluxAppConfig): http.Serve
 
       send(404, { error: "not found" });
     } catch (err) {
-      console.error("[flux-app] handler error:", (err as Error).message);
+      console.error("[coalition] handler error:", (err as Error).message);
       send(500, { error: "internal" });
     }
   });

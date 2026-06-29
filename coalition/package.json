@@ -1,10 +1,10 @@
 {
-  "name": "@moltentech/operator-flux-app",
+  "name": "@moltentech/operator-coalition",
   "version": "0.1.0",
   "private": true,
   "type": "module",
   "license": "MIT",
-  "description": "Operator Flux App (inbound leg): serves the signed Provider Manifest + stats, hosts checkout/manage, and relays Stripe webhooks to MoltenTech. Stateless; holds the operator's restricted Stripe key.",
+  "description": "Operator Coalition (inbound leg): serves the signed Provider Manifest + stats, hosts checkout/manage, and relays Stripe webhooks to MoltenTech. Stateless; holds the operator's restricted Stripe key.",
   "scripts": {
     "start": "tsx src/index.ts",
     "typecheck": "tsc --noEmit"

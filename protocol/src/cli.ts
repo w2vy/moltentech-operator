@@ -33,7 +33,7 @@ function die(msg: string): never {
 }
 
 const BODY_TEMPLATE = {
-  schemaVersion: 1,
+  schemaVersion: 2,
   provider: {
     slug: "your-slug",
     name: "Your Operator Name",
@@ -41,7 +41,7 @@ const BODY_TEMPLATE = {
     description: "Short description shown on the marketplace card.",
     contact: "ops@example.com",
   },
-  fluxAppUrl: "https://your-flux-app.example",
+  coalitionUrl: "https://your-coalition.example",
   tiers: [{ tier: "nimbus", capacity: 8, storagePool: "local-lvm" }],
   trialDays: 1,
   manualApproval: false,
@@ -98,7 +98,7 @@ function main() {
       const out = JSON.stringify(manifest, null, 2) + "\n";
       if (outPath) {
         writeFileSync(outPath, out);
-        console.log(`Wrote signed manifest to ${outPath}. Publish it at your Flux App's /.well-known/mt-provider.json`);
+        console.log(`Wrote signed manifest to ${outPath}. Publish it at your Coalition's /.well-known/mt-provider.json`);
       } else {
         process.stdout.write(out);
       }

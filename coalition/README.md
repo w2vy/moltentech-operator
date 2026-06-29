@@ -1,4 +1,4 @@
-# @moltentech/operator-flux-app
+# @moltentech/operator-coalition
 
 The operator's **inbound** leg, deployed on Flux (ArcaneOS). Stateless; holds the
 operator's restricted Stripe key + webhook secret. Three jobs:
@@ -22,15 +22,15 @@ Stripe ────▶ POST /webhook ──relay(Bearer agentKey)──▶ MT /a
 |---|---|---|---|
 | GET | `/.well-known/mt-provider.json` | none | signed manifest |
 | GET | `/stats` | none | StatsSnapshot |
-| POST | `/checkout` | `Bearer FLUXAPP_KEY` | mint Checkout Session (trial) |
-| POST | `/manage` | `Bearer FLUXAPP_KEY` | billing portal / cancel |
+| POST | `/checkout` | `Bearer COALITION_KEY` | mint Checkout Session (trial) |
+| POST | `/manage` | `Bearer COALITION_KEY` | billing portal / cancel |
 | POST | `/webhook` | Stripe signature | verify + relay to MT |
 
 ## Run
 ```sh
 npm install
 PROVIDER_SLUG=my-op MT_BASE_URL=https://www.moltentech.us \
-AGENT_KEY=<relay key (operator->MT)> FLUXAPP_KEY=<MT-issued key (MT->operator)> \
+AGENT_KEY=<relay key (operator->MT)> COALITION_KEY=<MT-issued key (MT->operator)> \
 STRIPE_SECRET_KEY=rk_live_<restricted> STRIPE_WEBHOOK_SECRET=whsec_... \
 TIER_PRICES_JSON='{"nimbus":2200,"cumulus":700}' TRIAL_DAYS=1 \
 MANIFEST_PATH=./manifest.json npm start
