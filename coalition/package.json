@@ -7,7 +7,8 @@
   "description": "Operator Coalition (inbound leg): serves the signed Provider Manifest + stats, hosts checkout/manage, and relays Stripe webhooks to MoltenTech. Stateless; holds the operator's restricted Stripe key.",
   "scripts": {
     "start": "tsx src/index.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test src/auth.test.ts"
   },
   "dependencies": {
     "@moltentech/protocol": "file:../protocol",

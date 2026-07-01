@@ -11,6 +11,13 @@ export type CoalitionConfig = {
   agentKey: string;
   /** MT-issued key the Coalition requires on inbound /checkout and /manage (MT -> operator). */
   coalitionKey: string;
+  /**
+   * Global MT ed25519 public key (base64 raw), pinned at deploy from MT's
+   * /api/mt-pubkey. When set, inbound /checkout + /manage are verified by
+   * signature; the `coalitionKey` bearer stays as a dual-accept fallback. Leave
+   * unset to keep bearer-only until the operator has pinned the key.
+   */
+  mtPubkey?: string;
   /** Operator's restricted Stripe key + webhook signing secret (the only secrets here). */
   stripeSecretKey: string;
   stripeWebhookSecret: string;
@@ -35,6 +42,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CoalitionConfi
     mtBaseUrl: req(env, "MT_BASE_URL").replace(/\/$/, ""),
     agentKey: req(env, "AGENT_KEY"),
     coalitionKey: req(env, "COALITION_KEY"),
+    mtPubkey: env.MT_PUBKEY || undefined,
     stripeSecretKey: req(env, "STRIPE_SECRET_KEY"),
     stripeWebhookSecret: req(env, "STRIPE_WEBHOOK_SECRET"),
     manifestPath: env.MANIFEST_PATH ?? "./manifest.json",
