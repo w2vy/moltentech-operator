@@ -5,6 +5,7 @@ import type { CoalitionConfig } from "./config";
 import type { StripeLike } from "./stripe";
 import { handleCheckout, handleManage, handleWebhook } from "./payments";
 import { getStatsSnapshot } from "./stats";
+import { verifyMtRequest } from "./auth";
 
 function readBody(req: http.IncomingMessage): Promise<Buffer> {
   return new Promise((resolve, reject) => {
@@ -55,14 +56,17 @@ export function createServer(stripe: StripeLike, cfg: CoalitionConfig): http.Ser
         return send(status, { received: status === 200 });
       }
 
-      // MT -> Coalition, authenticated with the MT-issued key.
+      // MT -> Coalition: signature-authenticated (dual-accept legacy bearer). Read the
+      // raw body first — the signature covers its hash, and we reject before parsing.
       if (method === "POST" && (url === "/checkout" || url === "/manage")) {
-        if (req.headers["authorization"] !== `Bearer ${cfg.coalitionKey}`) {
-          return send(401, { error: "Unauthorized" });
+        const raw = await readBody(req);
+        const authz = verifyMtRequest(cfg, "POST", url, raw, req.headers);
+        if (!authz.ok) {
+          return send(authz.status, { error: authz.error });
         }
         let json: unknown;
         try {
-          json = JSON.parse((await readBody(req)).toString() || "{}");
+          json = JSON.parse(raw.toString() || "{}");
         } catch {
           return send(400, { error: "Invalid JSON" });
         }
