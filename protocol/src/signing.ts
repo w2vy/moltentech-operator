@@ -1,4 +1,5 @@
 import {
+  createHash,
   createPrivateKey,
   createPublicKey,
   generateKeyPairSync,
@@ -100,4 +101,63 @@ export function importPrivateKeyPem(pem: string): KeyObject {
 export function publicKeyBase64FromPrivate(key: KeyObject): string {
   const jwk = createPublicKey(key).export({ format: "jwk" }) as { x: string };
   return Buffer.from(jwk.x, "base64url").toString("base64");
+}
+
+// ── Request-envelope signing (Phase 0a: retires the symmetric agentKey/coalitionKey) ──
+//
+// Runtime requests between the parties are authenticated by signing a small
+// canonical *envelope* rather than by a shared bearer token. Signing the
+// envelope (not just the body) covers method/path/target-provider and, via
+// `bodyHash`, the payload — so empty-body POSTs (e.g. agent `claim`) are
+// authenticated too. The detached ed25519 signature travels in an
+// `X-MT-Signature` header (`HEADER_MT_SIGNATURE`); the envelope fields travel
+// alongside it so the verifier re-derives the exact signed bytes.
+//
+// Anti-replay is `issuedAt` (bounded skew, `checkFreshness`) + `nonce`. The
+// nonce *store* is stateful and per-host, so it stays with the caller (agent /
+// MT); this module only defines the freshness predicate and the nonce contract.
+
+export interface RequestEnvelope {
+  /** HTTP method, upper-case, e.g. "POST". */
+  method: string;
+  /** Request path (no origin, no query), e.g. "/api/agent/claim". */
+  path: string;
+  /** Provider slug the request is scoped to (binds the sig to one provider). */
+  slug: string;
+  /** ISO-8601 instant the request was signed. */
+  issuedAt: string;
+  /** Single-use random token; the verifier rejects a repeated nonce. */
+  nonce: string;
+  /** sha256(rawBody) hex, or "" for an empty body. See `bodyHash`. */
+  bodyHash: string;
+}
+
+/** sha256 of the raw request body as lowercase hex (`""` → hash of empty input). */
+export function bodyHash(raw: string | Buffer): string {
+  return createHash("sha256").update(raw).digest("hex");
+}
+
+/** Sign a request envelope with an ed25519 private key → detached signature, base64. */
+export function signRequest(env: RequestEnvelope, privateKey: KeyObject): string {
+  return sign(null, Buffer.from(canonicalize(env), "utf8"), privateKey).toString("base64");
+}
+
+/** Verify a request-envelope signature (base64) against a base64 raw ed25519 pubkey. */
+export function verifyRequest(
+  env: RequestEnvelope,
+  signatureB64: string,
+  pubkeyB64: string
+): boolean {
+  return verifyDetached(canonicalize(env), signatureB64, pubkeyB64);
+}
+
+/**
+ * True when `issuedAt` is within ±`skewMs` (default 120s) of now — the staleness
+ * half of anti-replay (the nonce store is the caller's). Rejects unparseable input.
+ */
+export function checkFreshness(issuedAt: string, opts?: { skewMs?: number }): boolean {
+  const skewMs = opts?.skewMs ?? 120_000;
+  const t = Date.parse(issuedAt);
+  if (Number.isNaN(t)) return false;
+  return Math.abs(Date.now() - t) <= skewMs;
 }
