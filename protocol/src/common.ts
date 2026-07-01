@@ -36,6 +36,13 @@ export const Timestamp = z.string().datetime();
  *   so randoms can't mint sessions on the operator's Stripe account.
  */
 export const HEADER_AUTHORIZATION = "authorization";
+/**
+ * Asymmetric request-envelope signature (Phase 0a+, replaces the symmetric
+ * `Authorization: Bearer` tokens above). Carries the base64 ed25519 detached
+ * signature produced by `signRequest`; the signed envelope fields travel in the
+ * body/headers so the verifier re-derives the exact bytes. See `./signing`.
+ */
+export const HEADER_MT_SIGNATURE = "x-mt-signature";
 /** Stripe-style idempotency: dedupe retried deliveries of the same logical event. */
 export const HEADER_IDEMPOTENCY_KEY = "idempotency-key";
 
