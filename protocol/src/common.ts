@@ -43,6 +43,18 @@ export const HEADER_AUTHORIZATION = "authorization";
  * body/headers so the verifier re-derives the exact bytes. See `./signing`.
  */
 export const HEADER_MT_SIGNATURE = "x-mt-signature";
+/**
+ * Agent → MT request-envelope signature (Phase B, replaces the symmetric
+ * `agentKey` bearer). The agent signs the envelope with its manifest ed25519
+ * key (the private half of `Provider.manifestPubkey`) and MT re-derives + verifies
+ * it against that pinned pubkey. Unlike the single-tenant Coalition, MT serves many
+ * providers, so the claimed provider slug travels in `HEADER_AGENT_SLUG` (bound
+ * into the signed envelope, so a forged slug fails verification).
+ */
+export const HEADER_AGENT_SIGNATURE = "x-agent-signature";
+export const HEADER_AGENT_TIMESTAMP = "x-agent-timestamp";
+export const HEADER_AGENT_NONCE = "x-agent-nonce";
+export const HEADER_AGENT_SLUG = "x-agent-slug";
 /** Stripe-style idempotency: dedupe retried deliveries of the same logical event. */
 export const HEADER_IDEMPOTENCY_KEY = "idempotency-key";
 
