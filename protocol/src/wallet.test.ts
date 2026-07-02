@@ -4,7 +4,7 @@ import { secp256k1 } from "@noble/curves/secp256k1";
 import { sha256 } from "@noble/hashes/sha256";
 import { ripemd160 } from "@noble/hashes/ripemd160";
 import { base58check } from "@scure/base";
-import { verifyFluxSignature, verifyOwnerAuth } from "./wallet";
+import { verifyFluxSignature, verifyOwnerAuth, signFluxMessage } from "./wallet";
 import { ownerAuthMessage, type OwnerAuth, type OwnerAuthClaim } from "./messages";
 
 // ── Independent signer ──────────────────────────────────────────────────────
@@ -156,6 +156,29 @@ test("verifyOwnerAuth rejects a tampered signature", () => {
   const buf = Buffer.from(auth.signature, "base64");
   buf[10] = buf[10]! ^ 0xff;
   assert.equal(verifyOwnerAuth({ ...auth, signature: buf.toString("base64") }, address).ok, false);
+});
+
+// ── signFluxMessage (the mt-authorize headless signer) ───────────────────────
+// Round-trips against the file's independent verifier path (verifyFluxSignature).
+test("signFluxMessage (zelid) round-trips with verifyFluxSignature", () => {
+  const { address, signature } = signFluxMessage(PRIV, MESSAGE);
+  assert.equal(verifyFluxSignature(address, MESSAGE, signature), true);
+});
+
+test("signFluxMessage (flux t1) round-trips with verifyFluxSignature", () => {
+  const { address, signature } = signFluxMessage(PRIV, MESSAGE, { type: "flux" });
+  assert.equal(verifyFluxSignature(address, MESSAGE, signature), true);
+});
+
+test("signFluxMessage accepts a hex private key", () => {
+  const hex = Buffer.from(PRIV).toString("hex");
+  const { address, signature } = signFluxMessage(hex, MESSAGE);
+  assert.equal(verifyFluxSignature(address, MESSAGE, signature), true);
+});
+
+test("signFluxMessage over an owner-auth message verifies via verifyOwnerAuth", () => {
+  const { address, signature } = signFluxMessage(PRIV, ownerAuthMessage(CLAIM));
+  assert.deepEqual(verifyOwnerAuth({ ...CLAIM, signature }, address), { ok: true });
 });
 
 // External-wallet compatibility guard. The wire format was proven against a real
