@@ -1,6 +1,7 @@
 import { secp256k1 } from "@noble/curves/secp256k1";
 import { sha256 } from "@noble/hashes/sha256";
 import { ripemd160 } from "@noble/hashes/ripemd160";
+import { hexToBytes } from "@noble/hashes/utils";
 import { base58check } from "@scure/base";
 import { ownerAuthMessage, type OwnerAuth } from "./messages";
 
@@ -130,4 +131,32 @@ export function verifyOwnerAuth(
     return { ok: false, reason: "signature does not match the pinned owner address" };
   }
   return { ok: true };
+}
+
+const SIGN_MAGIC = { zelid: "Bitcoin Signed Message:\n", flux: "Zelcash Signed Message:\n" } as const;
+const SIGN_VERSION = { zelid: Uint8Array.from([0x00]), flux: Uint8Array.from([0x1c, 0xb8]) } as const;
+
+/**
+ * Produce a Flux/Bitcoin `signmessage` signature over `message` with a raw private
+ * key. Returns the signer's address and the 65-byte compact recoverable base64
+ * signature — the inverse of `verifyFluxSignature`. For the headless `mt-authorize`
+ * path; the preferred owner flow signs in Zelcore/ZelID so the private key never
+ * leaves the wallet. `type` picks the address surface: `zelid` (Bitcoin magic, `1…`)
+ * or `flux` (Zelcash magic, `t1…`).
+ */
+export function signFluxMessage(
+  privateKey: string | Uint8Array,
+  message: string,
+  opts?: { type?: "zelid" | "flux" }
+): { address: string; signature: string } {
+  const type = opts?.type ?? "zelid";
+  const priv = typeof privateKey === "string" ? hexToBytes(privateKey.replace(/^0x/, "")) : privateKey;
+  const pub = secp256k1.getPublicKey(priv, true);
+  const sig = secp256k1.sign(magicHash(SIGN_MAGIC[type], message), priv);
+  const header = 27 + sig.recovery + 4; // recovery id + compressed-key flag
+  const signature = Buffer.from(
+    concat(Uint8Array.from([header]), sig.toCompactRawBytes())
+  ).toString("base64");
+  const address = b58c.encode(concat(SIGN_VERSION[type], ripemd160(sha256(pub))));
+  return { address, signature };
 }
