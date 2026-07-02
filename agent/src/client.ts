@@ -1,3 +1,4 @@
+import type { KeyObject } from "node:crypto";
 import {
   SCHEMA_VERSION,
   Job,
@@ -7,27 +8,43 @@ import {
   HealthReport,
   type NodeHealth,
 } from "@moltentech/protocol";
+import { signAgentRequest } from "./signing";
+
+/** How the client authenticates to MT: an asymmetric signature or the legacy bearer. */
+export type MtClientAuth =
+  | { kind: "signature"; key: KeyObject }
+  | { kind: "bearer"; agentKey: string };
 
 /**
- * Typed, outbound-only client for the MoltenTech agent API. All calls are
- * Bearer-authenticated with the per-provider agent key; responses are validated
+ * Typed, outbound-only client for the MoltenTech agent API. Requests are
+ * authenticated either by signing a canonical request envelope with the manifest
+ * key (Phase B) or by the legacy per-provider bearer; responses are validated
  * against the shared protocol schemas.
  */
 export class MtClient {
   constructor(
     private readonly baseUrl: string,
-    private readonly agentKey: string
+    private readonly auth: MtClientAuth
   ) {}
 
-  private headers(): Record<string, string> {
-    return { "Content-Type": "application/json", Authorization: `Bearer ${this.agentKey}` };
+  /** Auth headers for one request; the signed envelope binds method/path/slug/body. */
+  private authHeaders(method: string, path: string, rawBody: string): Record<string, string> {
+    if (this.auth.kind === "signature") {
+      return signAgentRequest(this.auth.key, method, path, this.providerSlug, rawBody);
+    }
+    return { Authorization: `Bearer ${this.auth.agentKey}` };
+  }
+
+  private headers(method: string, path: string, rawBody: string): Record<string, string> {
+    return { "Content-Type": "application/json", ...this.authHeaders(method, path, rawBody) };
   }
 
   /** Claim (lease) any provisioning jobs MT has queued for this provider. */
   async claimJobs(): Promise<Job[]> {
-    const res = await fetch(`${this.baseUrl}/api/agent/jobs/claim`, {
+    const path = "/api/agent/jobs/claim";
+    const res = await fetch(`${this.baseUrl}${path}`, {
       method: "POST",
-      headers: this.headers(),
+      headers: this.headers("POST", path, ""),
     });
     if (!res.ok) throw new Error(`claim failed: ${res.status}`);
     const body = (await res.json()) as { jobs?: unknown[] };
@@ -37,10 +54,12 @@ export class MtClient {
   /** Report a finished job; MT runs the slot/rental transitions. */
   async postResult(result: JobResult): Promise<void> {
     JobResult.parse(result);
-    const res = await fetch(`${this.baseUrl}/api/agent/jobs/${result.jobId}/result`, {
+    const path = `/api/agent/jobs/${result.jobId}/result`;
+    const raw = JSON.stringify(result);
+    const res = await fetch(`${this.baseUrl}${path}`, {
       method: "POST",
-      headers: this.headers(),
-      body: JSON.stringify(result),
+      headers: this.headers("POST", path, raw),
+      body: raw,
     });
     if (!res.ok) throw new Error(`result failed: ${res.status}`);
   }
@@ -54,10 +73,12 @@ export class MtClient {
       tiers,
     };
     ListingAssert.parse(payload);
-    const res = await fetch(`${this.baseUrl}/api/agent/listing`, {
+    const path = "/api/agent/listing";
+    const raw = JSON.stringify(payload);
+    const res = await fetch(`${this.baseUrl}${path}`, {
       method: "PUT",
-      headers: this.headers(),
-      body: JSON.stringify(payload),
+      headers: this.headers("PUT", path, raw),
+      body: raw,
     });
     if (!res.ok) throw new Error(`listing failed: ${res.status}`);
   }
@@ -66,7 +87,8 @@ export class MtClient {
   async getNodes(): Promise<
     { tier: string; host: string; apiPort: number; vmName: string; nodeName: string }[]
   > {
-    const res = await fetch(`${this.baseUrl}/api/agent/nodes`, { headers: this.headers() });
+    const path = "/api/agent/nodes";
+    const res = await fetch(`${this.baseUrl}${path}`, { headers: this.headers("GET", path, "") });
     if (!res.ok) throw new Error(`nodes fetch failed: ${res.status}`);
     const body = (await res.json()) as {
       nodes?: { tier: string; host: string; apiPort: number; vmName: string; nodeName: string }[];
@@ -83,15 +105,18 @@ export class MtClient {
       nodes,
     };
     HealthReport.parse(payload);
-    const res = await fetch(`${this.baseUrl}/api/agent/health`, {
+    const path = "/api/agent/health";
+    const raw = JSON.stringify(payload);
+    const res = await fetch(`${this.baseUrl}${path}`, {
       method: "PUT",
-      headers: this.headers(),
-      body: JSON.stringify(payload),
+      headers: this.headers("PUT", path, raw),
+      body: raw,
     });
     if (!res.ok) throw new Error(`health report failed: ${res.status}`);
   }
 
-  // providerSlug is set by the caller via withProvider() so assertListing can stamp it.
+  // providerSlug is set by the caller via withProvider() so requests can stamp it
+  // (into the payload and, when signing, the request envelope + X-Agent-Slug header).
   private providerSlug = "";
   withProvider(slug: string): this {
     this.providerSlug = slug;

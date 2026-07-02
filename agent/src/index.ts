@@ -1,6 +1,7 @@
 import { SCHEMA_VERSION } from "@moltentech/protocol";
 import { loadConfig } from "./config";
-import { MtClient } from "./client";
+import { MtClient, type MtClientAuth } from "./client";
+import { loadManifestKey } from "./signing";
 import { pickExecutor } from "./executor";
 import { collectHealth } from "./health";
 
@@ -10,11 +11,15 @@ import { collectHealth } from "./health";
  */
 async function main() {
   const cfg = loadConfig();
-  const client = new MtClient(cfg.mtBaseUrl, cfg.agentKey).withProvider(cfg.providerSlug);
+  const manifestKey = loadManifestKey(cfg.manifestKey);
+  const auth: MtClientAuth = manifestKey
+    ? { kind: "signature", key: manifestKey }
+    : { kind: "bearer", agentKey: cfg.agentKey! };
+  const client = new MtClient(cfg.mtBaseUrl, auth).withProvider(cfg.providerSlug);
   const executor = pickExecutor(cfg);
 
   console.log(
-    `[agent] provider=${cfg.providerSlug} mt=${cfg.mtBaseUrl} dryRun=${cfg.dryRun} ` +
+    `[agent] provider=${cfg.providerSlug} mt=${cfg.mtBaseUrl} auth=${auth.kind} dryRun=${cfg.dryRun} ` +
       `poll=${cfg.pollIntervalMs}ms listing=${cfg.listingIntervalMs}ms`
   );
 

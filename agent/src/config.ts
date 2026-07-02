@@ -11,7 +11,10 @@ const ListingTierConfig = z.object({
 
 export type AgentConfig = {
   mtBaseUrl: string;
-  agentKey: string;
+  /** Legacy per-provider bearer (agent → MT). Optional once MANIFEST_KEY is set. */
+  agentKey?: string;
+  /** base64 PKCS#8 PEM of the manifest ed25519 key; when set the agent SIGNS instead of bearer. */
+  manifestKey?: string;
   providerSlug: string;
   pollIntervalMs: number;
   listingIntervalMs: number;
@@ -53,9 +56,18 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AgentConfig {
     listing = z.array(ListingTierConfig).parse(JSON.parse(env.AGENT_LISTING_JSON));
   }
 
+  // Auth: prefer asymmetric signing (MANIFEST_KEY) and fall back to the legacy
+  // AGENT_KEY bearer; at least one must be present.
+  const agentKey = env.AGENT_KEY || undefined;
+  const manifestKey = env.MANIFEST_KEY || undefined;
+  if (!agentKey && !manifestKey) {
+    throw new Error("Missing agent auth: set MANIFEST_KEY (preferred) or AGENT_KEY");
+  }
+
   return {
     mtBaseUrl: req(env, "MT_BASE_URL").replace(/\/$/, ""),
-    agentKey: req(env, "AGENT_KEY"),
+    agentKey,
+    manifestKey,
     providerSlug: req(env, "PROVIDER_SLUG"),
     pollIntervalMs: Number(env.AGENT_POLL_INTERVAL_MS ?? 10_000),
     listingIntervalMs: Number(env.AGENT_LISTING_INTERVAL_MS ?? 60_000),
