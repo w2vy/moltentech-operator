@@ -2,6 +2,7 @@ import { secp256k1 } from "@noble/curves/secp256k1";
 import { sha256 } from "@noble/hashes/sha256";
 import { ripemd160 } from "@noble/hashes/ripemd160";
 import { base58check } from "@scure/base";
+import { ownerAuthMessage, type OwnerAuth } from "./messages";
 
 /**
  * Flux / Bitcoin "sign message" verification (secp256k1) — the owner-authorization
@@ -104,4 +105,29 @@ export function verifyFluxSignature(
     }
   }
   return false;
+}
+
+/**
+ * Verify an owner authorization for a privileged action (Phase C). Checks the
+ * authorization is unexpired and that its signature over the canonical
+ * `ownerAuthMessage` recovers to the operator's SELF-PINNED owner address — never
+ * a value supplied by MT. Returns a reason on failure for operator logs.
+ *
+ * The caller still must (1) confirm the claim's action/provider/vm/node match the
+ * job it is about to run, and (2) reject a replayed `nonce` (a per-operator store,
+ * like the request-envelope nonce) — neither is checkable from the signature alone.
+ */
+export function verifyOwnerAuth(
+  auth: OwnerAuth,
+  pinnedOwnerAddress: string,
+  opts?: { now?: number }
+): { ok: true } | { ok: false; reason: string } {
+  const now = opts?.now ?? Date.now();
+  const exp = Date.parse(auth.expiresAt);
+  if (Number.isNaN(exp)) return { ok: false, reason: "invalid expiresAt" };
+  if (exp <= now) return { ok: false, reason: "authorization expired" };
+  if (!verifyFluxSignature(pinnedOwnerAddress, ownerAuthMessage(auth), auth.signature)) {
+    return { ok: false, reason: "signature does not match the pinned owner address" };
+  }
+  return { ok: true };
 }

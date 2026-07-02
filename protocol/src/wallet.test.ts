@@ -4,7 +4,8 @@ import { secp256k1 } from "@noble/curves/secp256k1";
 import { sha256 } from "@noble/hashes/sha256";
 import { ripemd160 } from "@noble/hashes/ripemd160";
 import { base58check } from "@scure/base";
-import { verifyFluxSignature } from "./wallet";
+import { verifyFluxSignature, verifyOwnerAuth } from "./wallet";
+import { ownerAuthMessage, type OwnerAuth, type OwnerAuthClaim } from "./messages";
 
 // ── Independent signer ──────────────────────────────────────────────────────
 // Deliberately reimplements the wire format from scratch (not importing wallet.ts)
@@ -97,6 +98,64 @@ test("rejects malformed inputs", () => {
   assert.equal(verifyFluxSignature("not-an-address", MESSAGE, "AAAA"), false);
   const { address } = makeSig(BITCOIN, V_BTC);
   assert.equal(verifyFluxSignature(address, MESSAGE, "not-base64-65-bytes"), false);
+});
+
+// ── Owner authorization (Phase C) ───────────────────────────────────────────
+// Sign a canonical owner-auth message with the same independent signer, as a Flux
+// wallet would, and check the operator-side verifier accepts/rejects correctly.
+function signOwnerAuth(claim: OwnerAuthClaim): { address: string; auth: OwnerAuth } {
+  const pub = secp256k1.getPublicKey(PRIV, true);
+  const sig = secp256k1.sign(magicHash(BITCOIN, ownerAuthMessage(claim)), PRIV);
+  const header = 27 + sig.recovery + 4;
+  const sigB64 = Buffer.from(
+    concat(Uint8Array.from([header]), sig.toCompactRawBytes())
+  ).toString("base64");
+  const address = b58c.encode(concat(V_BTC, ripemd160(sha256(pub))));
+  return { address, auth: { ...claim, signature: sigB64 } };
+}
+
+const CLAIM: OwnerAuthClaim = {
+  action: "delete",
+  providerSlug: "pve25-lab",
+  vmName: "molten-nimbus-01",
+  nodeName: "pve25",
+  nonce: "nonce-abc123",
+  expiresAt: new Date(Date.now() + 60_000).toISOString(),
+};
+
+test("verifyOwnerAuth accepts a valid, unexpired authorization", () => {
+  const { address, auth } = signOwnerAuth(CLAIM);
+  assert.deepEqual(verifyOwnerAuth(auth, address), { ok: true });
+});
+
+test("verifyOwnerAuth rejects an expired authorization", () => {
+  const { address, auth } = signOwnerAuth({
+    ...CLAIM,
+    expiresAt: new Date(Date.now() - 1_000).toISOString(),
+  });
+  const r = verifyOwnerAuth(auth, address);
+  assert.equal(r.ok, false);
+  assert.equal(r.ok === false && r.reason, "authorization expired");
+});
+
+test("verifyOwnerAuth rejects a different pinned owner address", () => {
+  const { auth } = signOwnerAuth(CLAIM);
+  const otherPub = secp256k1.getPublicKey(new Uint8Array(32).fill(0x22), true);
+  const otherAddr = b58c.encode(concat(V_BTC, ripemd160(sha256(otherPub))));
+  assert.equal(verifyOwnerAuth(auth, otherAddr).ok, false);
+});
+
+test("verifyOwnerAuth rejects a claim field tampered after signing", () => {
+  const { address, auth } = signOwnerAuth(CLAIM);
+  // Repoint the authorization at a different VM — the signature no longer matches.
+  assert.equal(verifyOwnerAuth({ ...auth, vmName: "molten-nimbus-99" }, address).ok, false);
+});
+
+test("verifyOwnerAuth rejects a tampered signature", () => {
+  const { address, auth } = signOwnerAuth(CLAIM);
+  const buf = Buffer.from(auth.signature, "base64");
+  buf[10] = buf[10]! ^ 0xff;
+  assert.equal(verifyOwnerAuth({ ...auth, signature: buf.toString("base64") }, address).ok, false);
 });
 
 // External-wallet compatibility guard. The wire format was proven against a real

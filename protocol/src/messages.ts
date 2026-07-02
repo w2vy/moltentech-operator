@@ -130,6 +130,57 @@ export const JobSlot = z.object({
 });
 export type JobSlot = z.infer<typeof JobSlot>;
 
+// ── Owner authorization (Phase C) ────────────────────────────────────────────
+//
+// Destructive/relocating actions carry the node owner's explicit consent as a
+// Flux-wallet (secp256k1) signature the OPERATOR verifies against a self-pinned
+// owner address — so even a fully compromised MT can't move or delete a node it
+// merely relays the job for. Provision (a paid, customer-initiated create) is not
+// privileged; delete / reprovision / move are.
+
+const PRIVILEGED_ACTIONS = new Set<JobAction>(["delete", "reprovision", "move"]);
+
+/** True for actions that require an owner-authorization signature to execute. */
+export function isPrivilegedAction(action: JobAction): boolean {
+  return PRIVILEGED_ACTIONS.has(action);
+}
+
+/** The owner-signed fields that bind an authorization to one action on one node. */
+export const OwnerAuthClaim = z.object({
+  action: JobAction,
+  providerSlug: ProviderSlug,
+  vmName: z.string().min(1),
+  nodeName: z.string().min(1),
+  /** Single-use token; the operator rejects a repeated nonce (replay guard). */
+  nonce: z.string().min(1),
+  /** The operator refuses the authorization at/after this instant. */
+  expiresAt: Timestamp,
+});
+export type OwnerAuthClaim = z.infer<typeof OwnerAuthClaim>;
+
+/** A signed owner authorization: the bound claim + the Flux `signmessage` signature. */
+export const OwnerAuth = OwnerAuthClaim.extend({
+  /** 65-byte compact recoverable Flux `signmessage` signature over `ownerAuthMessage`, base64. */
+  signature: z.string().min(1),
+});
+export type OwnerAuth = z.infer<typeof OwnerAuth>;
+
+/**
+ * The exact, human-readable string the owner signs in their wallet. Deterministic
+ * so the `mt-authorize` signer and the operator verifier derive identical bytes;
+ * readable so the owner can review the action in-wallet before signing.
+ */
+export function ownerAuthMessage(c: OwnerAuthClaim): string {
+  return [
+    "MoltenTech owner authorization",
+    `action: ${c.action}`,
+    `provider: ${c.providerSlug}`,
+    `vm: ${c.vmName}@${c.nodeName}`,
+    `nonce: ${c.nonce}`,
+    `expires: ${c.expiresAt}`,
+  ].join("\n");
+}
+
 export const Job = Envelope.extend({
   jobId: z.string().min(1),
   providerSlug: ProviderSlug,
@@ -154,6 +205,12 @@ export const Job = Envelope.extend({
       telegramChatId: z.string().nullable().default(null),
     })
     .optional(),
+  /**
+   * Owner (Flux-wallet) authorization. REQUIRED for privileged actions
+   * (delete / reprovision / move) — the agent refuses to execute them without a
+   * valid signature. MT only relays this; it cannot forge it. See `OwnerAuth`.
+   */
+  ownerAuth: OwnerAuth.optional(),
 });
 export type Job = z.infer<typeof Job>;
 
