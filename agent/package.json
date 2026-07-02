@@ -7,7 +7,7 @@
   "description": "Outbound-only operator agent: pulls provisioning jobs from MoltenTech, executes them on the LOCAL Proxmox, posts results, and re-asserts the listing. Holds the local Proxmox creds; opens no inbound.",
   "scripts": {
     "start": "tsx src/index.ts",
-    "test": "tsx --test src/signing.test.ts",
+    "test": "tsx --test src/signing.test.ts src/owner-auth.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
@@ -16,6 +16,9 @@
     "zod": "^3.23.8"
   },
   "devDependencies": {
+    "@noble/curves": "^1.9.7",
+    "@noble/hashes": "^1.8.0",
+    "@scure/base": "^1.2.6",
     "@types/node": "^22.10.0",
     "typescript": "^5.7.2"
   }
