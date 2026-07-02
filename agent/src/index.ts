@@ -19,7 +19,8 @@ async function main() {
   const executor = pickExecutor(cfg);
 
   console.log(
-    `[agent] provider=${cfg.providerSlug} mt=${cfg.mtBaseUrl} auth=${auth.kind} dryRun=${cfg.dryRun} ` +
+    `[agent] provider=${cfg.providerSlug} mt=${cfg.mtBaseUrl} auth=${auth.kind} ` +
+      `ownerAuth=${cfg.ownerAddress ? "enforced" : "off"} dryRun=${cfg.dryRun} ` +
       `poll=${cfg.pollIntervalMs}ms listing=${cfg.listingIntervalMs}ms`
   );
 

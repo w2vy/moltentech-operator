@@ -15,6 +15,12 @@ export type AgentConfig = {
   agentKey?: string;
   /** base64 PKCS#8 PEM of the manifest ed25519 key; when set the agent SIGNS instead of bearer. */
   manifestKey?: string;
+  /**
+   * Self-pinned owner Flux/ZelID address (`1…` ZelID or `t1…` Flux). When set, the
+   * agent refuses privileged jobs (delete/reprovision/move) without a matching owner
+   * signature. Unset = enforcement off (pre-cutover behavior). NEVER sourced from MT.
+   */
+  ownerAddress?: string;
   providerSlug: string;
   pollIntervalMs: number;
   listingIntervalMs: number;
@@ -67,6 +73,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AgentConfig {
   return {
     mtBaseUrl: req(env, "MT_BASE_URL").replace(/\/$/, ""),
     agentKey,
+    ownerAddress: env.OWNER_ADDRESS || undefined,
     manifestKey,
     providerSlug: req(env, "PROVIDER_SLUG"),
     pollIntervalMs: Number(env.AGENT_POLL_INTERVAL_MS ?? 10_000),

@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { Job } from "@moltentech/protocol";
 import type { AgentConfig } from "./config";
+import { checkOwnerAuth } from "./owner-auth";
 
 export type ExecResult = { ok: boolean; message?: string; vmId?: number };
 export type Executor = (job: Job, cfg: AgentConfig) => Promise<ExecResult>;
@@ -169,6 +170,21 @@ export const arcaneMageExecutor: Executor = async (job, cfg) => {
   }
 };
 
+/**
+ * Wrap an executor with the owner-authorization gate: privileged actions
+ * (delete/reprovision/move) are refused unless a valid owner signature accompanies
+ * the job. Applies regardless of dry-run vs real, so the policy holds everywhere.
+ */
+function withOwnerAuthGate(inner: Executor): Executor {
+  return async (job, cfg) => {
+    const decision = checkOwnerAuth(job, cfg);
+    if (!decision.ok) {
+      return { ok: false, message: `owner authorization refused: ${decision.reason}` };
+    }
+    return inner(job, cfg);
+  };
+}
+
 export function pickExecutor(cfg: AgentConfig): Executor {
-  return cfg.dryRun ? dryRunExecutor : arcaneMageExecutor;
+  return withOwnerAuthGate(cfg.dryRun ? dryRunExecutor : arcaneMageExecutor);
 }
