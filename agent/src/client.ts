@@ -5,6 +5,8 @@ import {
   JobResult,
   ListingAssert,
   type ListingTier,
+  InventoryAssert,
+  type InventoryHost,
   HealthReport,
   type NodeHealth,
 } from "@moltentech/protocol";
@@ -81,6 +83,25 @@ export class MtClient {
       body: raw,
     });
     if (!res.ok) throw new Error(`listing failed: ${res.status}`);
+  }
+
+  /** Declare the operator's agent-managed hosts + slots so MT materializes them. */
+  async assertInventory(hosts: InventoryHost[]): Promise<void> {
+    const payload: InventoryAssert = {
+      schemaVersion: SCHEMA_VERSION,
+      providerSlug: this.providerSlug,
+      assertedAt: new Date().toISOString(),
+      hosts,
+    };
+    InventoryAssert.parse(payload);
+    const path = "/api/agent/inventory";
+    const raw = JSON.stringify(payload);
+    const res = await fetch(`${this.baseUrl}${path}`, {
+      method: "PUT",
+      headers: this.headers("PUT", path, raw),
+      body: raw,
+    });
+    if (!res.ok) throw new Error(`inventory failed: ${res.status}`);
   }
 
   /** Fetch this provider's live nodes so the agent knows which local VMs to health-check. */

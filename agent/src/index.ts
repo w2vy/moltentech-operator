@@ -73,6 +73,17 @@ async function main() {
     }
   }
 
+  async function reassertInventory() {
+    if (cfg.inventory.length === 0) return;
+    try {
+      await client.assertInventory(cfg.inventory);
+      const slots = cfg.inventory.reduce((n, h) => n + h.slots.length, 0);
+      console.log(`[agent] declared inventory: ${cfg.inventory.length} host(s), ${slots} slot(s)`);
+    } catch (err) {
+      console.error("[agent] inventory assert error:", (err as Error).message);
+    }
+  }
+
   // Run both cadences; simple self-scheduling loops with their own intervals.
   async function reportHealthOnce() {
     if (cfg.dryRun) return; // no local Proxmox to query in dry-run
@@ -89,8 +100,11 @@ async function main() {
     }
   }
 
+  // Declare inventory first so the host/slot rows exist before listing + health.
+  await reassertInventory();
   await reassertListing();
   await reportHealthOnce();
+  const inventoryTimer = setInterval(reassertInventory, cfg.listingIntervalMs);
   const listingTimer = setInterval(reassertListing, cfg.listingIntervalMs);
   const healthTimer = setInterval(reportHealthOnce, cfg.healthIntervalMs);
 
@@ -98,6 +112,7 @@ async function main() {
     await pollOnce();
     await new Promise((r) => setTimeout(r, cfg.pollIntervalMs));
   }
+  clearInterval(inventoryTimer);
   clearInterval(listingTimer);
   clearInterval(healthTimer);
 }

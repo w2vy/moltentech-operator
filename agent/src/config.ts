@@ -1,5 +1,6 @@
+import { readFileSync } from "node:fs";
 import { z } from "zod";
-import { TierKey } from "@moltentech/protocol";
+import { TierKey, InventoryHost } from "@moltentech/protocol";
 
 /** One tier's desired listing state, re-asserted to MT on a heartbeat. */
 const ListingTierConfig = z.object({
@@ -39,6 +40,8 @@ export type AgentConfig = {
   };
   /** Desired listing (price/capacity per tier); empty = don't re-assert. */
   listing: z.infer<typeof ListingTierConfig>[];
+  /** Declared agent-managed hosts + slots; empty = don't re-assert inventory. */
+  inventory: InventoryHost[];
   /** When true (or Proxmox unconfigured), jobs are acknowledged without touching Proxmox. */
   dryRun: boolean;
 };
@@ -60,6 +63,17 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AgentConfig {
   let listing: AgentConfig["listing"] = [];
   if (env.AGENT_LISTING_JSON) {
     listing = z.array(ListingTierConfig).parse(JSON.parse(env.AGENT_LISTING_JSON));
+  }
+
+  // Inventory (agent-managed hosts + slots the operator declares to MT). Prefer a
+  // local file (AGENT_INVENTORY_PATH, the operator's editable source of truth),
+  // fall back to inline JSON; absent = don't re-assert.
+  let inventory: AgentConfig["inventory"] = [];
+  const inventoryRaw = env.AGENT_INVENTORY_PATH
+    ? readFileSync(env.AGENT_INVENTORY_PATH, "utf8")
+    : env.AGENT_INVENTORY_JSON;
+  if (inventoryRaw) {
+    inventory = z.array(InventoryHost).parse(JSON.parse(inventoryRaw));
   }
 
   // Auth: prefer asymmetric signing (MANIFEST_KEY) and fall back to the legacy
@@ -90,6 +104,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AgentConfig {
       consoleHash: env.CONSOLE_PASSWORD_HASH ?? "!",
     },
     listing,
+    inventory,
     dryRun,
   };
 }

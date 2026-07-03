@@ -248,6 +248,57 @@ export const ListingAssert = Envelope.extend({
 export type ListingAssert = z.infer<typeof ListingAssert>;
 
 // ───────────────────────────────────────────────────────────────────────────
+//    inventory-assert  —  operator agent → MT
+//    The operator DECLARES its agent-managed hosts + slots (the physical facts
+//    only the operator knows) so MT materializes the ProxmoxHost/Slot rows from
+//    the operator side, instead of an admin hand-inserting them. Provider-scoped
+//    by the agent signature; upsert-only (MT never hard-deletes rented slots).
+// ───────────────────────────────────────────────────────────────────────────
+/** One agent-managed slot the operator offers (maps to a Slot row). */
+export const InventorySlot = z.object({
+  tier: TierKey,
+  vmName: z.string().min(1),
+  ipAddress: z.string().min(1),
+  lanIp: z.string().default(""),
+  gateway: z.string().min(1),
+  dns1: z.string().default("8.8.8.8"),
+  dns2: z.string().default("1.1.1.1"),
+  apiPort: z.number().int().positive(),
+  vlan: z.number().int().min(1).max(4094).optional(),
+  rateLimit: z.number().int().positive().optional(),
+  storagePool: z.string().min(1).optional(),
+  vmId: z.number().int().positive().optional(),
+  startupConfig: z.string().min(1).optional(),
+  diskLimit: z.number().int().positive().optional(),
+  cpuLimit: z.number().positive().optional(),
+  networkLimit: z.number().int().positive().optional(),
+  /** Operator price for this slot's tier (>= platform floor); null = floor. */
+  priceCents: PriceCents.optional(),
+});
+export type InventorySlot = z.infer<typeof InventorySlot>;
+
+/** One agent-managed Proxmox host + the slots it carries (maps to a ProxmoxHost row). */
+export const InventoryHost = z.object({
+  /** Globally-unique host label (ProxmoxHost.name). */
+  name: z.string().min(1),
+  /** Proxmox node name the agent provisions on. */
+  nodeName: z.string().min(1),
+  /** Reference API URL (agent injects its own creds; MT never calls it for agent hosts). */
+  apiUrl: z.string().min(1).optional(),
+  storageImages: z.string().min(1).optional(),
+  storageIso: z.string().min(1).optional(),
+  slots: z.array(InventorySlot),
+});
+export type InventoryHost = z.infer<typeof InventoryHost>;
+
+export const InventoryAssert = Envelope.extend({
+  providerSlug: ProviderSlug,
+  assertedAt: Timestamp,
+  hosts: z.array(InventoryHost),
+});
+export type InventoryAssert = z.infer<typeof InventoryAssert>;
+
+// ───────────────────────────────────────────────────────────────────────────
 // 6. stats  —  published by the Coalition's external collector; MT PULLS it.
 //    Hairpin-proof (polled from outside the operator LAN). No secrets.
 // ───────────────────────────────────────────────────────────────────────────
