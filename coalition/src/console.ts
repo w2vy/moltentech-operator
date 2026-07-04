@@ -10,9 +10,13 @@
  *
  * Trust: agent⇄coalition is authenticated with the manifest keypair (the agent
  * signs, we verify against the manifest pubkey we already serve). Browser submits
- * are login-less — we verify each signature recovers to the operator's owner ZelID
- * before queuing it (the per-action gate + anti-spam). The agent re-verifies
- * authoritatively on pickup.
+ * are per-action wallet-signed — we verify each signature recovers to the operator's
+ * owner ZelID before queuing it. The agent re-verifies authoritatively on pickup.
+ *
+ * CV6 read-gate: since the coalition is a public Flux App, a wallet LOGIN (challenge
+ * → sign → HMAC session cookie, see `session.ts`) gates VIEWING the console when
+ * SESSION_SECRET is set. It is a read/convenience gate ONLY — actions are still
+ * per-action signed, so a stolen cookie can read state but cannot authorize anything.
  */
 import type { IncomingHttpHeaders } from "node:http";
 import { readFileSync } from "node:fs";
@@ -31,10 +35,17 @@ import {
 } from "@moltentech/protocol";
 import { bodyHash, checkFreshness, verifyRequest, type RequestEnvelope } from "@moltentech/protocol/signing";
 import { verifyFluxSignature } from "@moltentech/protocol/wallet";
-import { buildOwnerAuthSignLauncher, escapeHtmlAttribute } from "@moltentech/protocol/sign-launcher";
+import {
+  buildOwnerAuthSignLauncher,
+  buildSignLauncherHtml,
+  buildZelcoreSignLink,
+  escapeHtmlAttribute,
+  CONSOLE_THEME_CSS,
+} from "@moltentech/protocol/sign-launcher";
+import { mintSessionCookie, newNonce } from "./session";
 import type { CoalitionConfig } from "./config";
 
-export type ConsoleResult = { status: number; contentType: string; body: string };
+export type ConsoleResult = { status: number; contentType: string; body: string; headers?: Record<string, string> };
 const json = (status: number, obj: unknown): ConsoleResult => ({
   status,
   contentType: "application/json",
@@ -45,6 +56,45 @@ const html = (status: number, body: string): ConsoleResult => ({ status, content
 // ── In-memory courier state (single-use + short-lived; a restart just means re-sign) ──
 const pending = new Map<string, PendingAuthItem>(); // slotId -> item awaiting signature
 const authorizations: SignedAuthorization[] = []; // signed, awaiting agent pickup
+
+// Nonces of claims we've queued, so the sign page can poll for success even after
+// the item leaves `pending` (or the agent re-pushes the still-pending slot before
+// its relay lands). Keyed on the claim NONCE — the stable per-signature signal.
+const AUTH_NONCE_TTL_MS = 20 * 60_000;
+const authorizedNonces = new Map<string, number>(); // nonce -> expiry (ms epoch)
+function markAuthorized(nonce: string): void {
+  const now = Date.now();
+  for (const [n, exp] of authorizedNonces) if (exp <= now) authorizedNonces.delete(n);
+  authorizedNonces.set(nonce, now + AUTH_NONCE_TTL_MS);
+}
+function isAuthorized(nonce: string): boolean {
+  const exp = authorizedNonces.get(nonce);
+  if (exp == null) return false;
+  if (exp <= Date.now()) {
+    authorizedNonces.delete(nonce);
+    return false;
+  }
+  return true;
+}
+
+// CV6 login challenges: id -> the exact message to sign + expiry (+ authedAddr once
+// a Zelcore callback satisfies it, so the browser poll can mint the cookie).
+const CHALLENGE_TTL_MS = 10 * 60_000;
+type Challenge = { message: string; exp: number; authedAddr?: string };
+const challenges = new Map<string, Challenge>();
+function getChallenge(id: string): Challenge | null {
+  const c = challenges.get(id);
+  if (!c) return null;
+  if (c.exp <= Date.now()) {
+    challenges.delete(id);
+    return null;
+  }
+  return c;
+}
+/** The human-readable console-login message the owner signs (bound to a fresh nonce). */
+function loginMessage(slug: string, nonce: string, issuedAt: string): string {
+  return ["MoltenTech operator console login", `provider: ${slug}`, `nonce: ${nonce}`, `issued: ${issuedAt}`].join("\n");
+}
 
 // ── manifest-derived values (pubkey for agent auth; coalitionUrl for the Zelcore callback base) ──
 let cachedManifest: { pubkey?: string; coalitionUrl?: string } | null = null;
@@ -129,37 +179,45 @@ export function handleAgentAuthorizations(cfg: CoalitionConfig, rawBody: Buffer,
 }
 
 // ── operator (browser) handlers ──
+/** Action → coloured pill (delete=red, reprovision=amber, move=cyan). */
+function actionBadge(action: string): string {
+  const cls = action === "delete" ? "badge-delete" : action === "reprovision" ? "badge-reprovision" : "badge-move";
+  return `<span class="badge ${cls}">${escapeHtmlAttribute(action)}</span>`;
+}
+
 /** GET /console — the pending-authorizations list. Login-less (see module doc). */
 export function handleConsoleIndex(cfg: CoalitionConfig): ConsoleResult {
   const items = [...pending.values()];
   const rows = items.length
     ? items
         .map((it) => {
-          const label = escapeHtmlAttribute(`${it.action} ${it.vmName}@${it.nodeName}`);
-          const code = it.rentalCode ? escapeHtmlAttribute(it.rentalCode) : "—";
-          return `<tr><td>${label}</td><td>${code}</td><td><a class="btn" href="/console/sign?slotId=${encodeURIComponent(it.slotId)}">Review &amp; sign</a></td></tr>`;
+          const vm = escapeHtmlAttribute(`${it.vmName}@${it.nodeName}`);
+          const code = it.rentalCode ? `<code>${escapeHtmlAttribute(it.rentalCode)}</code>` : `<span class="muted">—</span>`;
+          return `<tr><td>${actionBadge(it.action)} <span class="mono">${vm}</span></td><td>${code}</td><td><a class="btn btn-primary" href="/console/sign?slotId=${encodeURIComponent(it.slotId)}">Review &amp; sign</a></td></tr>`;
         })
         .join("")
-    : `<tr><td colspan="3" style="color:#6b7280">No actions awaiting your signature.</td></tr>`;
+    : `<tr><td colspan="3" class="muted">No actions awaiting your signature.</td></tr>`;
   const slug = escapeHtmlAttribute(cfg.providerSlug);
   return html(
     200,
     `<!doctype html><html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
 <meta http-equiv="refresh" content="15"/>
 <title>MoltenTech Operator Console — ${slug}</title>
-<style>body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;margin:24px;color:#222}
-table{border-collapse:collapse;width:100%;max-width:820px}th,td{text-align:left;padding:10px 12px;border-bottom:1px solid #e5e7eb}
-.btn{display:inline-block;padding:8px 14px;background:#1a1a2e;color:#fff;text-decoration:none;border-radius:8px;font-size:14px}
-h1{font-size:20px}</style></head><body>
-<h1>Operator Console — ${slug}</h1>
-<p>Pending privileged actions. Each is authorized by signing it in your Flux wallet.</p>
+<style>${CONSOLE_THEME_CSS}</style></head><body>
+<div class="wrap">
+<header class="mt"><span class="mark">MoltenTech</span><span class="slug">operator console · ${slug}</span></header>
+<h1>Actions awaiting your signature</h1>
+<p class="muted">Each privileged action is authorized by signing it in your Flux owner wallet. This page refreshes every 15s.</p>
+<div class="card" style="padding:0;overflow:hidden">
 <table><thead><tr><th>Action</th><th>Rental</th><th></th></tr></thead><tbody>${rows}</tbody></table>
+</div>
+</div>
 </body></html>`
   );
 }
 
 /** GET /console/sign?slotId=… — build the claim + render the WS1 launcher + a submit form. */
-export function handleConsoleSign(cfg: CoalitionConfig, query: URLSearchParams): ConsoleResult {
+export function handleConsoleSign(cfg: CoalitionConfig, query: URLSearchParams, origin?: string): ConsoleResult {
   const slotId = query.get("slotId") ?? "";
   const item = pending.get(slotId);
   if (!item) return html(404, "<p>Unknown or already-processed action.</p>");
@@ -173,9 +231,10 @@ export function handleConsoleSign(cfg: CoalitionConfig, query: URLSearchParams):
     expiresAt: new Date(Date.now() + 15 * 60_000).toISOString(),
   };
   const claimToken = encodeClaim(claim);
-  // If we know our external URL (from the manifest), give Zelcore a callback so it
-  // posts the signature straight back — no copy-paste. Falls back to paste if unset.
-  const base = manifest(cfg).coalitionUrl?.replace(/\/$/, "");
+  // Give Zelcore a callback so it posts the signature straight back — no copy-paste.
+  // Prefer the request's own origin (works wherever the console is served — Flux
+  // ingress, Caddy, etc.); fall back to the manifest coalitionUrl.
+  const base = (origin ?? manifest(cfg).coalitionUrl)?.replace(/\/$/, "");
   const callback = base
     ? `${base}/console/zelcore-callback?slotId=${encodeURIComponent(slotId)}&claim=${encodeURIComponent(claimToken)}`
     : undefined;
@@ -184,23 +243,78 @@ export function handleConsoleSign(cfg: CoalitionConfig, query: URLSearchParams):
   // Inject a submit form before </body>: it carries the exact claim + the signature
   // (auto-filled from the SSP result box, or pasted for Zelcore) back to us.
   const submit = `
-    <div class="wallet-section" style="margin:16px 0;padding:16px;border:1px solid #e5e7eb;border-radius:8px">
-      <h2>Submit authorization</h2>
-      <p>SSP auto-fills below, and Zelcore posts back automatically — this manual paste is a fallback. After it's queued, return to the console (it refreshes on its own).</p>
-      <form method="POST" action="/console/authorize">
-        <input type="hidden" name="slotId" value="${escapeHtmlAttribute(slotId)}" />
-        <input type="hidden" name="claim" value="${escapeHtmlAttribute(claimToken)}" />
-        <textarea name="signature" id="submit-sig" placeholder="Signature (auto-filled from SSP, or paste from Zelcore)" style="font-family:monospace;font-size:13px;width:100%;min-height:56px;padding:8px;border:1px solid #d1d5db;border-radius:6px;box-sizing:border-box"></textarea>
-        <button type="submit" class="btn btn-zelcore" style="margin-top:8px">Submit authorization</button>
-      </form>
-      <p style="margin-top:8px"><a href="/console">&larr; Back to pending</a></p>
+    <div class="wrap">
+      <div class="card done" id="done-panel">
+        <div class="big">✓</div>
+        <h2>Authorized</h2>
+        <p class="muted">Your agent will execute this shortly. You can close this tab.</p>
+        <p><a href="/console">&larr; Back to console</a></p>
+      </div>
+      <div class="card" id="expiry-card">
+        <span class="muted">Sign with a wallet above — SSP submits itself, and Zelcore posts back automatically. This request expires in <span class="mono" id="countdown">—</span>.</span>
+      </div>
+      <details class="card" id="manual-paste">
+        <summary>Signature didn't post back? Paste it manually</summary>
+        <form id="submit-form" style="margin-top:10px">
+          <input type="hidden" name="slotId" value="${escapeHtmlAttribute(slotId)}" />
+          <input type="hidden" name="claim" value="${escapeHtmlAttribute(claimToken)}" />
+          <textarea name="signature" id="submit-sig" class="sig-box" placeholder="Paste the signature from your wallet"></textarea>
+          <div><button type="submit" class="btn btn-primary" style="margin-top:8px">Submit authorization</button></div>
+          <p class="muted" id="submit-err" style="color:#f87171;display:none;margin-top:8px"></p>
+        </form>
+      </details>
+      <p style="margin-top:4px"><a href="/console">&larr; Back to console</a></p>
     </div>
     <script>
-      // Mirror the SSP-produced signature into the submit box as it appears.
+      var claimToken = ${JSON.stringify(claimToken)};
+      var expiresAt = ${JSON.stringify(claim.expiresAt)};
+      var done = false, pollT = null;
+
+      function showDone(){
+        if(done) return; done = true;
+        document.querySelectorAll('.wallet-section').forEach(function(el){ el.style.display='none'; });
+        ['manual-paste','expiry-card'].forEach(function(id){ var e=document.getElementById(id); if(e) e.style.display='none'; });
+        var dp=document.getElementById('done-panel'); if(dp) dp.style.display='block';
+        if(pollT){ clearInterval(pollT); pollT=null; }
+      }
+
+      // Submit the signature to the server WITHOUT navigating away, so every path
+      // (SSP auto, Zelcore callback, manual paste) ends on the same in-page done state.
+      async function submitSig(){
+        var box=document.getElementById('submit-sig'); var sig=(box.value||'').trim();
+        if(!sig) return;
+        var err=document.getElementById('submit-err'); if(err) err.style.display='none';
+        var body=new URLSearchParams({ slotId:document.querySelector('[name=slotId]').value,
+          claim:document.querySelector('[name=claim]').value, signature:sig });
+        try{
+          var r=await fetch('/console/authorize',{ method:'POST',
+            headers:{'content-type':'application/x-www-form-urlencoded'}, body:body.toString() });
+          if(r.ok){ showDone(); }
+          else if(err){ var t=await r.text(); err.textContent=(t||'Submit failed').replace(/<[^>]*>/g,'').trim(); err.style.display='block'; }
+        }catch(e){ if(err){ err.textContent=String(e); err.style.display='block'; } }
+      }
+      document.getElementById('submit-form').addEventListener('submit', function(e){ e.preventDefault(); submitSig(); });
+
+      // SSP writes its signature into #sig-output → mirror into the box + auto-submit.
       (function(){ var src=document.getElementById('sig-output'), dst=document.getElementById('submit-sig');
         if(!src||!dst) return;
-        new MutationObserver(function(){ if(src.textContent && !dst.value) dst.value=src.textContent.trim(); })
+        new MutationObserver(function(){ var v=(src.textContent||'').trim();
+          if(v && !dst.value){ dst.value=v; submitSig(); } })
           .observe(src,{childList:true,characterData:true,subtree:true}); })();
+
+      // Poll for the Zelcore-callback path (Zelcore posts the sig server→server, not to this page).
+      pollT=setInterval(async function(){
+        try{ var r=await fetch('/console/sign-status?claim='+encodeURIComponent(claimToken));
+          if(r.ok){ var j=await r.json(); if(j.status==='authorized') showDone(); } }catch(e){}
+      }, 3000);
+
+      // Live expiry countdown.
+      (function(){ var el=document.getElementById('countdown'); if(!el) return;
+        var end=new Date(expiresAt).getTime();
+        function tick(){ var s=Math.floor((end-Date.now())/1000);
+          if(s<=0){ el.textContent='expired'; return; }
+          el.textContent=Math.floor(s/60)+':'+String(s%60).padStart(2,'0'); }
+        tick(); setInterval(tick,1000); })();
     </script>`;
   return html(200, launcher.replace("</body>", `${submit}</body>`));
 }
@@ -234,18 +348,34 @@ function verifyAndQueue(
 
   authorizations.push({ slotId, ownerAuth: authParsed.data });
   pending.delete(slotId);
+  markAuthorized(claim.nonce); // let the sign page's poll report success
   return { ok: true, claim };
+}
+
+/** GET /console/sign-status?claim=… — has this exact claim been queued yet? */
+export function handleSignStatus(query: URLSearchParams): ConsoleResult {
+  const claim = decodeClaim(query.get("claim") ?? "");
+  if (!claim) return json(400, { error: "bad claim" });
+  return json(200, { status: isAuthorized(claim.nonce) ? "authorized" : "pending" });
 }
 
 /** POST /console/authorize — browser form submit (SSP auto-fill or pasted Zelcore sig). */
 export function handleConsoleAuthorize(cfg: CoalitionConfig, form: URLSearchParams): ConsoleResult {
   const r = verifyAndQueue(cfg, form.get("slotId") ?? "", form.get("claim") ?? "", (form.get("signature") ?? "").trim());
-  if (!r.ok) return html(r.status, `<p>${escapeHtmlAttribute(r.msg)}</p>`);
-  return html(
+  const page = (status: number, title: string, bodyHtml: string) =>
+    html(
+      status,
+      `<!doctype html><html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>${title}</title><style>${CONSOLE_THEME_CSS}</style></head><body><div class="wrap">
+<header class="mt"><span class="mark">MoltenTech</span><span class="slug">operator console</span></header>
+${bodyHtml}<p style="margin-top:12px"><a href="/console">&larr; Back to console</a></p></div></body></html>`
+    );
+  if (!r.ok) return page(r.status, "Not authorized", `<div class="card"><h1>Could not queue</h1><p class="muted">${escapeHtmlAttribute(r.msg)}</p></div>`);
+  return page(
     200,
-    `<!doctype html><html><head><meta charset="utf-8"/><title>Authorized</title></head><body style="font-family:system-ui;margin:24px">
-<h1>Authorization queued ✓</h1><p>${escapeHtmlAttribute(`${r.claim.action} ${r.claim.vmName}@${r.claim.nodeName}`)} will be executed by your agent shortly.</p>
-<p><a href="/console">&larr; Back to pending</a></p></body></html>`
+    "Authorized",
+    `<div class="card done" style="display:block"><div class="big">✓</div><h1>Authorization queued</h1>
+<p class="muted">${actionBadge(r.claim.action)} <span class="mono">${escapeHtmlAttribute(`${r.claim.vmName}@${r.claim.nodeName}`)}</span> will be executed by your agent shortly.</p></div>`
   );
 }
 
@@ -275,4 +405,131 @@ export function handleZelcoreCallback(
   const r = verifyAndQueue(cfg, query.get("slotId") ?? "", query.get("claim") ?? "", signature.trim());
   // Zelcore only needs a status; the operator's console page auto-refreshes to reflect it.
   return r.ok ? json(200, { status: "success" }) : json(r.status, { status: "error", error: r.msg });
+}
+
+/** Pull a `signature` out of a wallet POST body (JSON or form-encoded). */
+function readSignatureFromBody(rawBody: Buffer, contentType: string): string {
+  const raw = rawBody.toString();
+  try {
+    if (contentType.includes("application/json")) {
+      return String((JSON.parse(raw || "{}") as { signature?: unknown }).signature ?? "").trim();
+    }
+    return (new URLSearchParams(raw).get("signature") ?? "").trim();
+  } catch {
+    return "";
+  }
+}
+
+// ── CV6 wallet-login (read-gate). Gates ONLY the browser read/submit routes; every
+// action is still per-action wallet-signed. Enabled iff SESSION_SECRET is set. ──
+
+/** GET /console/login — challenge page: sign the login message to mint a session. */
+export function handleLoginPage(cfg: CoalitionConfig, origin?: string): ConsoleResult {
+  const owner = ownerZelid(cfg);
+  if (!owner) return html(500, "<p>Console owner address not configured (set OWNER_ADDRESS).</p>");
+  const id = newNonce();
+  const message = loginMessage(cfg.providerSlug, id, new Date().toISOString());
+  challenges.set(id, { message, exp: Date.now() + CHALLENGE_TTL_MS });
+
+  const base = (origin ?? manifest(cfg).coalitionUrl)?.replace(/\/$/, "");
+  const callback = base ? `${base}/console/login-callback?challenge=${encodeURIComponent(id)}` : undefined;
+  const zelcoreLink = buildZelcoreSignLink({ message, callback });
+  const launcher = buildSignLauncherHtml({
+    message,
+    zelcoreLink,
+    title: "Operator console login",
+    intro: `Sign in to the ${cfg.providerSlug} console by signing this challenge with your Flux owner wallet. No password — your signature proves ownership.`,
+  });
+
+  const submit = `
+    <div class="wrap">
+      <div class="card done" id="done-panel"><div class="big">✓</div><h2>Signed in</h2>
+        <p class="muted">Redirecting to the console…</p></div>
+      <details class="card" id="manual-paste">
+        <summary>Signature didn't post back? Paste it manually</summary>
+        <form id="login-form" style="margin-top:10px">
+          <input type="hidden" name="challenge" value="${escapeHtmlAttribute(id)}" />
+          <textarea name="signature" id="submit-sig" class="sig-box" placeholder="Paste the signature from your wallet"></textarea>
+          <div><button type="submit" class="btn btn-primary" style="margin-top:8px">Sign in</button></div>
+          <p class="muted" id="login-err" style="color:#f87171;display:none;margin-top:8px"></p>
+        </form>
+      </details>
+    </div>
+    <script>
+      var challengeId = ${JSON.stringify(id)};
+      var done = false, pollT = null;
+      function goConsole(){ if(done) return; done=true; if(pollT){clearInterval(pollT);pollT=null;} location.href='/console'; }
+      async function loginSig(){
+        var box=document.getElementById('submit-sig'); var sig=(box.value||'').trim(); if(!sig) return;
+        var err=document.getElementById('login-err'); if(err) err.style.display='none';
+        var body=new URLSearchParams({ challenge:challengeId, signature:sig });
+        try{
+          var r=await fetch('/console/login',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:body.toString()});
+          if(r.ok){ goConsole(); } else if(err){ var t=await r.json().catch(function(){return{};}); err.textContent=(t.error||'Sign-in failed'); err.style.display='block'; }
+        }catch(e){ if(err){ err.textContent=String(e); err.style.display='block'; } }
+      }
+      document.getElementById('login-form').addEventListener('submit', function(e){ e.preventDefault(); loginSig(); });
+      // SSP writes its sig into #sig-output → auto-submit.
+      (function(){ var src=document.getElementById('sig-output'), dst=document.getElementById('submit-sig');
+        if(!src||!dst) return;
+        new MutationObserver(function(){ var v=(src.textContent||'').trim(); if(v && !dst.value){ dst.value=v; loginSig(); } })
+          .observe(src,{childList:true,characterData:true,subtree:true}); })();
+      // Poll for the Zelcore-callback path (the poll response mints the cookie once authenticated).
+      pollT=setInterval(async function(){
+        try{ var r=await fetch('/console/login-status?challenge='+encodeURIComponent(challengeId));
+          if(r.ok){ var j=await r.json(); if(j.status==='authenticated') goConsole(); } }catch(e){}
+      }, 3000);
+    </script>`;
+  return html(200, launcher.replace("</body>", `${submit}</body>`));
+}
+
+/** POST /console/login — browser submit (SSP auto / manual paste). Verifies + mints the cookie. */
+export function handleLoginSubmit(cfg: CoalitionConfig, params: URLSearchParams): ConsoleResult {
+  const secret = cfg.sessionSecret;
+  if (!secret) return json(400, { error: "login disabled" });
+  const owner = ownerZelid(cfg);
+  if (!owner) return json(500, { error: "owner not configured" });
+  const c = getChallenge(params.get("challenge") ?? "");
+  const signature = (params.get("signature") ?? "").trim();
+  if (!c) return json(400, { error: "challenge expired — reload the login page" });
+  if (!signature) return json(400, { error: "missing signature" });
+  if (!verifyFluxSignature(owner, c.message, signature)) return json(401, { error: "signature does not match the owner wallet" });
+  challenges.delete(params.get("challenge") ?? ""); // single-use
+  return {
+    status: 200,
+    contentType: "application/json",
+    body: JSON.stringify({ ok: true }),
+    headers: { "Set-Cookie": mintSessionCookie(secret, owner, cfg.sessionTtlMs) },
+  };
+}
+
+/** POST /console/login-callback?challenge=… — Zelcore posts the sig; mark the challenge authed. */
+export function handleLoginCallback(cfg: CoalitionConfig, query: URLSearchParams, rawBody: Buffer, contentType: string): ConsoleResult {
+  const owner = ownerZelid(cfg);
+  if (!owner) return json(500, { status: "error", error: "owner not configured" });
+  const c = getChallenge(query.get("challenge") ?? "");
+  if (!c) return json(400, { status: "error", error: "challenge expired" });
+  const signature = readSignatureFromBody(rawBody, contentType);
+  if (!signature) return json(400, { status: "error", error: "missing signature" });
+  if (!verifyFluxSignature(owner, c.message, signature)) return json(401, { status: "error", error: "bad signature" });
+  c.authedAddr = owner; // the browser's login-status poll will mint the cookie
+  return json(200, { status: "success" });
+}
+
+/** GET /console/login-status?challenge=… — browser poll; mints the cookie once authed (Zelcore path). */
+export function handleLoginStatus(cfg: CoalitionConfig, query: URLSearchParams): ConsoleResult {
+  const secret = cfg.sessionSecret;
+  const id = query.get("challenge") ?? "";
+  const c = getChallenge(id);
+  if (!c) return json(200, { status: "expired" });
+  if (c.authedAddr && secret) {
+    challenges.delete(id); // single-use
+    return {
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ status: "authenticated" }),
+      headers: { "Set-Cookie": mintSessionCookie(secret, c.authedAddr, cfg.sessionTtlMs) },
+    };
+  }
+  return json(200, { status: "pending" });
 }

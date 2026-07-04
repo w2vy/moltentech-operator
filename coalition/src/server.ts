@@ -12,9 +12,15 @@ import {
   handleConsoleIndex,
   handleConsoleSign,
   handleConsoleAuthorize,
+  handleSignStatus,
   handleZelcoreCallback,
+  handleLoginPage,
+  handleLoginSubmit,
+  handleLoginCallback,
+  handleLoginStatus,
   type ConsoleResult,
 } from "./console";
+import { verifySession } from "./session";
 
 function readBody(req: http.IncomingMessage): Promise<Buffer> {
   return new Promise((resolve, reject) => {
@@ -36,7 +42,7 @@ export function createServer(stripe: StripeLike, cfg: CoalitionConfig): http.Ser
       res.end(JSON.stringify(obj));
     };
     const sendResult = (r: ConsoleResult) => {
-      res.writeHead(r.status, { "content-type": r.contentType });
+      res.writeHead(r.status, { "content-type": r.contentType, ...(r.headers ?? {}) });
       res.end(r.body);
     };
     try {
@@ -44,6 +50,12 @@ export function createServer(stripe: StripeLike, cfg: CoalitionConfig): http.Ser
       const url = fullUrl.split("?")[0];
       const query = new URLSearchParams(fullUrl.split("?")[1] ?? "");
       const method = req.method ?? "GET";
+      // The public origin this request came in on (through Caddy/Flux ingress), used
+      // to build wallet callback URLs that point back to wherever the operator loaded
+      // the page — not a hard-coded manifest field.
+      const fProto = (String(req.headers["x-forwarded-proto"] ?? "http").split(",")[0] ?? "http").trim();
+      const fHost = (String(req.headers["x-forwarded-host"] ?? req.headers["host"] ?? "").split(",")[0] ?? "").trim();
+      const reqOrigin = fHost ? `${fProto}://${fHost}` : undefined;
 
       if (method === "GET" && url === "/.well-known/mt-provider.json") {
         try {
@@ -112,12 +124,49 @@ export function createServer(stripe: StripeLike, cfg: CoalitionConfig): http.Ser
       if (method === "GET" && url === "/agent/authorizations") {
         return sendResult(handleAgentAuthorizations(cfg, Buffer.alloc(0), req.headers));
       }
-      // operator (browser): login-less console (per-action signature is the gate).
+      // ── CV6 wallet-login (read-gate). Public: /console/login*. Gated (when
+      // SESSION_SECRET set): the browser read/submit routes. NOT gated: the Zelcore
+      // sign-callback (wallet-posted, no cookie — stays per-action-signature-gated)
+      // and /agent/* (manifest-signed). ──
+      if (method === "GET" && url === "/console/login") {
+        return sendResult(handleLoginPage(cfg, reqOrigin));
+      }
+      if (method === "POST" && url === "/console/login") {
+        const raw = await readBody(req);
+        return sendResult(handleLoginSubmit(cfg, new URLSearchParams(raw.toString())));
+      }
+      if (method === "POST" && url === "/console/login-callback") {
+        const raw = await readBody(req);
+        return sendResult(handleLoginCallback(cfg, query, raw, String(req.headers["content-type"] ?? "")));
+      }
+      if (method === "GET" && url === "/console/login-status") {
+        return sendResult(handleLoginStatus(cfg, query));
+      }
+
+      // Read-gate: when SESSION_SECRET is set, require a valid session for the
+      // browser read/submit routes. Unset = open console (LAN/dev).
+      const gated =
+        (method === "GET" && (url === "/console" || url === "/console/sign" || url === "/console/sign-status")) ||
+        (method === "POST" && url === "/console/authorize");
+      if (cfg.sessionSecret && gated && !verifySession(cfg.sessionSecret, req.headers)) {
+        // HTML pages → bounce to the login page; JSON/submit → 401.
+        if (method === "GET" && (url === "/console" || url === "/console/sign")) {
+          res.writeHead(302, { location: "/console/login" });
+          return res.end();
+        }
+        return send(401, { error: "login required" });
+      }
+
+      // operator (browser): the console (read-gated above when login is enabled).
       if (method === "GET" && url === "/console") {
         return sendResult(handleConsoleIndex(cfg));
       }
       if (method === "GET" && url === "/console/sign") {
-        return sendResult(handleConsoleSign(cfg, query));
+        return sendResult(handleConsoleSign(cfg, query, reqOrigin));
+      }
+      // Sign page polls this to detect the Zelcore-callback (server-side) success.
+      if (method === "GET" && url === "/console/sign-status") {
+        return sendResult(handleSignStatus(query));
       }
       if (method === "POST" && url === "/console/authorize") {
         const raw = await readBody(req);
