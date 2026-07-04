@@ -29,6 +29,14 @@ export type CoalitionConfig = {
    * the agent pins as OWNER_ADDRESS. (Future: resolve via Flux app-owner lookup.)
    */
   ownerAddress?: string;
+  /**
+   * Cookie-signing secret for the console wallet-login (CV6). When SET, the console
+   * read routes are gated behind a wallet login; when UNSET the console is open
+   * (LAN/dev). Low-value: signs only the read-gate cookie, never authorizes actions.
+   */
+  sessionSecret?: string;
+  /** Console session lifetime (ms). Read-gate only, so it can be generous. */
+  sessionTtlMs: number;
   /** Operator-declared price per tier (cents); the Coalition materializes the Stripe Price. */
   tierPrices: Record<string, number>;
   trialDays: number;
@@ -53,6 +61,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CoalitionConfi
     stripeWebhookSecret: req(env, "STRIPE_WEBHOOK_SECRET"),
     manifestPath: env.MANIFEST_PATH ?? "./manifest.json",
     ownerAddress: env.OWNER_ADDRESS || undefined,
+    sessionSecret: env.SESSION_SECRET || undefined,
+    sessionTtlMs: Number(env.SESSION_TTL_HOURS ?? 24) * 3_600_000,
     tierPrices: TierPrices.parse(JSON.parse(req(env, "TIER_PRICES_JSON"))),
     trialDays: Number(env.TRIAL_DAYS ?? 1),
     statsWindowDays: Number(env.STATS_WINDOW_DAYS ?? 90),
