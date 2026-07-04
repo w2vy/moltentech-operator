@@ -143,6 +143,7 @@ export function handleConsoleIndex(cfg: CoalitionConfig): ConsoleResult {
   return html(
     200,
     `<!doctype html><html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
+<meta http-equiv="refresh" content="15"/>
 <title>MoltenTech Operator Console — ${slug}</title>
 <style>body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;margin:24px;color:#222}
 table{border-collapse:collapse;width:100%;max-width:820px}th,td{text-align:left;padding:10px 12px;border-bottom:1px solid #e5e7eb}
