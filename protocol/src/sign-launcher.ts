@@ -104,8 +104,8 @@ export function buildSignLauncherHtml(opts: {
 
     <div class="wallet-section">
       <h2>Zelcore</h2>
-      <p>Opens the Zelcore desktop app to sign.</p>
-      <a class="btn btn-zelcore" href="${safeZelcoreLink}">Open in Zelcore</a>
+      <p>Opens the Zelcore desktop app to sign; it posts the signature back automatically.</p>
+      <a class="btn btn-zelcore" href="${safeZelcoreLink}">Sign with Zelcore</a>
     </div>
 
     <div class="wallet-section">
