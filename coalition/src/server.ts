@@ -50,6 +50,12 @@ export function createServer(stripe: StripeLike, cfg: CoalitionConfig): http.Ser
       const url = fullUrl.split("?")[0];
       const query = new URLSearchParams(fullUrl.split("?")[1] ?? "");
       const method = req.method ?? "GET";
+      // The public origin this request came in on (through Caddy/Flux ingress), used
+      // to build wallet callback URLs that point back to wherever the operator loaded
+      // the page — not a hard-coded manifest field.
+      const fProto = (String(req.headers["x-forwarded-proto"] ?? "http").split(",")[0] ?? "http").trim();
+      const fHost = (String(req.headers["x-forwarded-host"] ?? req.headers["host"] ?? "").split(",")[0] ?? "").trim();
+      const reqOrigin = fHost ? `${fProto}://${fHost}` : undefined;
 
       if (method === "GET" && url === "/.well-known/mt-provider.json") {
         try {
@@ -123,7 +129,7 @@ export function createServer(stripe: StripeLike, cfg: CoalitionConfig): http.Ser
       // sign-callback (wallet-posted, no cookie — stays per-action-signature-gated)
       // and /agent/* (manifest-signed). ──
       if (method === "GET" && url === "/console/login") {
-        return sendResult(handleLoginPage(cfg));
+        return sendResult(handleLoginPage(cfg, reqOrigin));
       }
       if (method === "POST" && url === "/console/login") {
         const raw = await readBody(req);
@@ -156,7 +162,7 @@ export function createServer(stripe: StripeLike, cfg: CoalitionConfig): http.Ser
         return sendResult(handleConsoleIndex(cfg));
       }
       if (method === "GET" && url === "/console/sign") {
-        return sendResult(handleConsoleSign(cfg, query));
+        return sendResult(handleConsoleSign(cfg, query, reqOrigin));
       }
       // Sign page polls this to detect the Zelcore-callback (server-side) success.
       if (method === "GET" && url === "/console/sign-status") {

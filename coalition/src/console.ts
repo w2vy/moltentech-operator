@@ -217,7 +217,7 @@ export function handleConsoleIndex(cfg: CoalitionConfig): ConsoleResult {
 }
 
 /** GET /console/sign?slotId=… — build the claim + render the WS1 launcher + a submit form. */
-export function handleConsoleSign(cfg: CoalitionConfig, query: URLSearchParams): ConsoleResult {
+export function handleConsoleSign(cfg: CoalitionConfig, query: URLSearchParams, origin?: string): ConsoleResult {
   const slotId = query.get("slotId") ?? "";
   const item = pending.get(slotId);
   if (!item) return html(404, "<p>Unknown or already-processed action.</p>");
@@ -231,9 +231,10 @@ export function handleConsoleSign(cfg: CoalitionConfig, query: URLSearchParams):
     expiresAt: new Date(Date.now() + 15 * 60_000).toISOString(),
   };
   const claimToken = encodeClaim(claim);
-  // If we know our external URL (from the manifest), give Zelcore a callback so it
-  // posts the signature straight back — no copy-paste. Falls back to paste if unset.
-  const base = manifest(cfg).coalitionUrl?.replace(/\/$/, "");
+  // Give Zelcore a callback so it posts the signature straight back — no copy-paste.
+  // Prefer the request's own origin (works wherever the console is served — Flux
+  // ingress, Caddy, etc.); fall back to the manifest coalitionUrl.
+  const base = (origin ?? manifest(cfg).coalitionUrl)?.replace(/\/$/, "");
   const callback = base
     ? `${base}/console/zelcore-callback?slotId=${encodeURIComponent(slotId)}&claim=${encodeURIComponent(claimToken)}`
     : undefined;
@@ -423,14 +424,14 @@ function readSignatureFromBody(rawBody: Buffer, contentType: string): string {
 // action is still per-action wallet-signed. Enabled iff SESSION_SECRET is set. ──
 
 /** GET /console/login — challenge page: sign the login message to mint a session. */
-export function handleLoginPage(cfg: CoalitionConfig): ConsoleResult {
+export function handleLoginPage(cfg: CoalitionConfig, origin?: string): ConsoleResult {
   const owner = ownerZelid(cfg);
   if (!owner) return html(500, "<p>Console owner address not configured (set OWNER_ADDRESS).</p>");
   const id = newNonce();
   const message = loginMessage(cfg.providerSlug, id, new Date().toISOString());
   challenges.set(id, { message, exp: Date.now() + CHALLENGE_TTL_MS });
 
-  const base = manifest(cfg).coalitionUrl?.replace(/\/$/, "");
+  const base = (origin ?? manifest(cfg).coalitionUrl)?.replace(/\/$/, "");
   const callback = base ? `${base}/console/login-callback?challenge=${encodeURIComponent(id)}` : undefined;
   const zelcoreLink = buildZelcoreSignLink({ message, callback });
   const launcher = buildSignLauncherHtml({
