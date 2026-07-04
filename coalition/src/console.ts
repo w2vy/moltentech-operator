@@ -25,6 +25,8 @@ import {
   PendingAuthPush,
   type PendingAuthItem,
   type SignedAuthorization,
+  NodeStateList,
+  type NodeStateItem,
   OwnerAuth,
   type OwnerAuthClaim,
   ownerAuthMessage,
@@ -56,6 +58,7 @@ const html = (status: number, body: string): ConsoleResult => ({ status, content
 // ── In-memory courier state (single-use + short-lived; a restart just means re-sign) ──
 const pending = new Map<string, PendingAuthItem>(); // slotId -> item awaiting signature
 const authorizations: SignedAuthorization[] = []; // signed, awaiting agent pickup
+let nodeState: NodeStateItem[] = []; // latest dashboard snapshot the agent pushed
 
 // Nonces of claims we've queued, so the sign page can poll for success even after
 // the item leaves `pending` (or the agent re-pushes the still-pending slot before
@@ -171,6 +174,15 @@ export function handleAgentPending(cfg: CoalitionConfig, rawBody: Buffer, header
   return json(200, { ok: true, pending: pending.size });
 }
 
+/** POST /agent/state — replace the dashboard's slot-state snapshot. */
+export function handleAgentState(cfg: CoalitionConfig, rawBody: Buffer, headers: IncomingHttpHeaders): ConsoleResult {
+  if (!verifyAgentRequest(cfg, "POST", "/agent/state", rawBody, headers)) return json(401, { error: "Unauthorized" });
+  const parsed = NodeStateList.safeParse(JSON.parse(rawBody.toString() || "{}"));
+  if (!parsed.success) return json(400, { error: "Invalid state payload" });
+  nodeState = parsed.data.items;
+  return json(200, { ok: true, nodes: nodeState.length });
+}
+
 /** GET /agent/authorizations — hand the queued signed blobs to the agent and clear them. */
 export function handleAgentAuthorizations(cfg: CoalitionConfig, rawBody: Buffer, headers: IncomingHttpHeaders): ConsoleResult {
   if (!verifyAgentRequest(cfg, "GET", "/agent/authorizations", rawBody, headers)) return json(401, { error: "Unauthorized" });
@@ -185,11 +197,39 @@ function actionBadge(action: string): string {
   return `<span class="badge ${cls}">${escapeHtmlAttribute(action)}</span>`;
 }
 
-/** GET /console — the pending-authorizations list. Login-less (see module doc). */
+/** Slot status → coloured pill. */
+function statusBadge(status: string): string {
+  const s = status.toLowerCase();
+  const cls = ["active", "bootstrap", "benchmark", "awaiting_start"].includes(s)
+    ? "badge-ok"
+    : s === "available"
+      ? "badge-info"
+      : ["provisioning", "pending_config", "maintenance"].includes(s)
+        ? "badge-warn"
+        : ["pending_delete", "deleting"].includes(s)
+          ? "badge-bad"
+          : "badge-mut";
+  return `<span class="badge ${cls}">${escapeHtmlAttribute(status)}</span>`;
+}
+
+/** GET /console — operator dashboard: node/rental state + actions awaiting signature. */
 export function handleConsoleIndex(cfg: CoalitionConfig): ConsoleResult {
-  const items = [...pending.values()];
-  const rows = items.length
-    ? items
+  const slug = escapeHtmlAttribute(cfg.providerSlug);
+
+  // Section 1 — node/rental state (from the agent's pushed snapshot).
+  const stateRows = nodeState.length
+    ? nodeState
+        .map((n) => {
+          const rental = n.rentalCode ? `<code>${escapeHtmlAttribute(n.rentalCode)}</code>` : `<span class="muted">—</span>`;
+          return `<tr><td class="mono">${escapeHtmlAttribute(n.nodeName)}</td><td class="mono">${escapeHtmlAttribute(n.vmName)}</td><td>${escapeHtmlAttribute(n.tier)}</td><td>${statusBadge(n.status)}</td><td>${rental}</td></tr>`;
+        })
+        .join("")
+    : `<tr><td colspan="5" class="muted">No node state yet — the agent pushes a snapshot each heartbeat.</td></tr>`;
+
+  // Section 2 — pending privileged actions.
+  const actions = [...pending.values()];
+  const actionRows = actions.length
+    ? actions
         .map((it) => {
           const vm = escapeHtmlAttribute(`${it.vmName}@${it.nodeName}`);
           const code = it.rentalCode ? `<code>${escapeHtmlAttribute(it.rentalCode)}</code>` : `<span class="muted">—</span>`;
@@ -197,7 +237,8 @@ export function handleConsoleIndex(cfg: CoalitionConfig): ConsoleResult {
         })
         .join("")
     : `<tr><td colspan="3" class="muted">No actions awaiting your signature.</td></tr>`;
-  const slug = escapeHtmlAttribute(cfg.providerSlug);
+
+  const count = actions.length ? ` <span class="badge badge-warn">${actions.length}</span>` : "";
   return html(
     200,
     `<!doctype html><html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
@@ -206,11 +247,16 @@ export function handleConsoleIndex(cfg: CoalitionConfig): ConsoleResult {
 <style>${CONSOLE_THEME_CSS}</style></head><body>
 <div class="wrap">
 <header class="mt"><span class="mark">MoltenTech</span><span class="slug">operator console · ${slug}</span></header>
-<h1>Actions awaiting your signature</h1>
-<p class="muted">Each privileged action is authorized by signing it in your Flux owner wallet. This page refreshes every 15s.</p>
-<div class="card" style="padding:0;overflow:hidden">
-<table><thead><tr><th>Action</th><th>Rental</th><th></th></tr></thead><tbody>${rows}</tbody></table>
-</div>
+<h1>Nodes</h1>
+<p class="muted">Your slots and their live state. Refreshes every 15s.</p>
+<div class="card" style="padding:0;overflow:hidden"><div style="overflow-x:auto">
+<table><thead><tr><th>Node</th><th>VM</th><th>Tier</th><th>Status</th><th>Rental</th></tr></thead><tbody>${stateRows}</tbody></table>
+</div></div>
+<h1 style="margin-top:26px">Actions awaiting your signature${count}</h1>
+<p class="muted">Each privileged action is authorized by signing it in your Flux owner wallet.</p>
+<div class="card" style="padding:0;overflow:hidden"><div style="overflow-x:auto">
+<table><thead><tr><th>Action</th><th>Rental</th><th></th></tr></thead><tbody>${actionRows}</tbody></table>
+</div></div>
 </div>
 </body></html>`
   );

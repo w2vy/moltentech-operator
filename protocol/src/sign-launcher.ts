@@ -68,6 +68,11 @@ text-transform:uppercase;letter-spacing:.3px}
 .badge-delete{background:#2a0a0a;color:#f87171;border:1px solid #7f1d1d}
 .badge-reprovision{background:#2a1a00;color:#fbbf24;border:1px solid #92400e}
 .badge-move{background:#04222a;color:#22d3ee;border:1px solid #155e75}
+.badge-ok{background:#04220f;color:#4ade80;border:1px solid #166534}
+.badge-warn{background:#2a1a00;color:#fbbf24;border:1px solid #92400e}
+.badge-bad{background:#2a0a0a;color:#f87171;border:1px solid #7f1d1d}
+.badge-info{background:#04222a;color:#22d3ee;border:1px solid #155e75}
+.badge-mut{background:#1a1a1a;color:#9ca3af;border:1px solid #333}
 .mono,code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
 code{background:#1a1a1a;padding:2px 6px;border-radius:6px;word-break:break-all}
 .muted{color:var(--muted)}

@@ -8,6 +8,7 @@ import { getStatsSnapshot } from "./stats";
 import { verifyMtRequest } from "./auth";
 import {
   handleAgentPending,
+  handleAgentState,
   handleAgentAuthorizations,
   handleConsoleIndex,
   handleConsoleSign,
@@ -120,6 +121,10 @@ export function createServer(stripe: StripeLike, cfg: CoalitionConfig): http.Ser
       if (method === "POST" && url === "/agent/pending") {
         const raw = await readBody(req);
         return sendResult(handleAgentPending(cfg, raw, req.headers));
+      }
+      if (method === "POST" && url === "/agent/state") {
+        const raw = await readBody(req);
+        return sendResult(handleAgentState(cfg, raw, req.headers));
       }
       if (method === "GET" && url === "/agent/authorizations") {
         return sendResult(handleAgentAuthorizations(cfg, Buffer.alloc(0), req.headers));

@@ -99,6 +99,12 @@ async function main() {
   // for the operator to sign → poll the signed blobs → verify locally → relay to MT.
   async function courierOnce() {
     if (!coalition || !cfg.ownerAddress) return;
+    // Dashboard state snapshot — isolated from the auth flow so one can't break the other.
+    try {
+      await coalition.pushState(await client.getState());
+    } catch (err) {
+      console.error("[agent] state push error:", (err as Error).message);
+    }
     try {
       await coalition.pushPending(await client.getPendingAuth());
       const signed = await coalition.pollAuthorizations();

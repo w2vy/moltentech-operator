@@ -328,6 +328,29 @@ export type SignedAuthorization = z.infer<typeof SignedAuthorization>;
 export const AuthorizationList = z.object({ items: z.array(SignedAuthorization) });
 export type AuthorizationList = z.infer<typeof AuthorizationList>;
 
+/**
+ * One slot's live state for the operator console dashboard (CV2). The agent reads
+ * it from MT (GET /api/agent/state) and PUSHES the snapshot to the coalition, which
+ * renders it. Read-only operational state; no secrets.
+ */
+export const NodeStateItem = z.object({
+  nodeName: z.string().min(1),
+  vmName: z.string().min(1),
+  tier: TierKey,
+  /** Slot lifecycle status (available/active/maintenance/pending_delete/…). */
+  status: z.string().min(1),
+  /** Present when the slot is rented (the customer's rental code); null when free. */
+  rentalCode: z.string().nullable(),
+  /** Public IP:port surface, informational. */
+  ipAddress: z.string().nullable().default(null),
+  apiPort: z.number().int().positive().nullable().default(null),
+});
+export type NodeStateItem = z.infer<typeof NodeStateItem>;
+
+/** MT → agent response AND agent → coalition push: the provider's slot state snapshot. */
+export const NodeStateList = z.object({ items: z.array(NodeStateItem) });
+export type NodeStateList = z.infer<typeof NodeStateList>;
+
 // ───────────────────────────────────────────────────────────────────────────
 // 6. stats  —  published by the Coalition's external collector; MT PULLS it.
 //    Hairpin-proof (polled from outside the operator LAN). No secrets.

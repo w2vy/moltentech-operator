@@ -9,6 +9,8 @@ import {
   type InventoryHost,
   PendingAuthItem,
   type OwnerAuth,
+  NodeStateList,
+  type NodeStateItem,
   HealthReport,
   type NodeHealth,
 } from "@moltentech/protocol";
@@ -114,6 +116,16 @@ export class MtClient {
     if (!res.ok) throw new Error(`pending-auth fetch failed: ${res.status}`);
     const parsed = z.object({ items: z.array(PendingAuthItem) }).safeParse(await res.json());
     if (!parsed.success) throw new Error("invalid pending-auth payload");
+    return parsed.data.items;
+  }
+
+  /** Fetch the provider's full slot state (status + rental) for the console dashboard. */
+  async getState(): Promise<NodeStateItem[]> {
+    const path = "/api/agent/state";
+    const res = await fetch(`${this.baseUrl}${path}`, { headers: this.headers("GET", path, "") });
+    if (!res.ok) throw new Error(`state fetch failed: ${res.status}`);
+    const parsed = NodeStateList.safeParse(await res.json());
+    if (!parsed.success) throw new Error("invalid state payload");
     return parsed.data.items;
   }
 
