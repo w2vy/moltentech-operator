@@ -12,6 +12,7 @@ import {
   handleConsoleIndex,
   handleConsoleSign,
   handleConsoleAuthorize,
+  handleSignStatus,
   handleZelcoreCallback,
   type ConsoleResult,
 } from "./console";
@@ -118,6 +119,10 @@ export function createServer(stripe: StripeLike, cfg: CoalitionConfig): http.Ser
       }
       if (method === "GET" && url === "/console/sign") {
         return sendResult(handleConsoleSign(cfg, query));
+      }
+      // Sign page polls this to detect the Zelcore-callback (server-side) success.
+      if (method === "GET" && url === "/console/sign-status") {
+        return sendResult(handleSignStatus(query));
       }
       if (method === "POST" && url === "/console/authorize") {
         const raw = await readBody(req);

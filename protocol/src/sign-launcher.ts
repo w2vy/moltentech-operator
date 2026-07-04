@@ -34,6 +34,55 @@ export function escapeHtmlAttribute(value: string): string {
 }
 
 /**
+ * Shared MoltenTech console theme (dark + ember). One source of truth for the
+ * launcher page AND the coalition console (imported there), so both surfaces match.
+ * The accent lives in a single CSS var (`--accent`/`--accent2`) — an operator can
+ * override it for white-label without touching markup.
+ */
+export const CONSOLE_THEME_CSS = `
+:root{--bg:#0a0a0a;--card:#111111;--line:#262626;--fg:#e8e8e8;--muted:#9ca3af;
+--accent:#ff4500;--accent2:#ff8c00;--glow:rgba(255,69,0,.3);--ok:#16a34a}
+*{box-sizing:border-box}
+body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,sans-serif;
+margin:0;padding:24px;line-height:1.5;color:var(--fg);background:var(--bg);
+background-image:radial-gradient(1100px 380px at 50% -12%,rgba(255,69,0,.09),transparent)}
+.wrap{max-width:860px;margin:0 auto}
+header.mt{display:flex;align-items:baseline;gap:10px;margin-bottom:16px}
+.mark{font-weight:800;letter-spacing:.3px;font-size:18px;
+background:linear-gradient(135deg,var(--accent),var(--accent2));-webkit-background-clip:text;background-clip:text;color:transparent}
+.slug{color:var(--muted);font-size:13px}
+h1{font-size:22px;margin:0 0 6px}h2{font-size:16px;margin:0 0 8px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px;margin:14px 0}
+a{color:var(--accent2);text-decoration:none}a:hover{text-decoration:underline}
+table{border-collapse:collapse;width:100%}
+th,td{text-align:left;padding:11px 12px;border-bottom:1px solid var(--line);vertical-align:middle}
+th{color:var(--muted);font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.5px}
+.btn{display:inline-block;padding:11px 18px;border:none;border-radius:10px;cursor:pointer;
+font-size:15px;font-weight:600;text-decoration:none;color:#fff;margin:4px 6px 4px 0}
+.btn:hover{text-decoration:none}
+.btn-primary{background:linear-gradient(135deg,var(--accent),var(--accent2));box-shadow:0 0 18px var(--glow)}
+.btn-ssp{background:#2563eb}.btn-zelcore{background:#1a1a2e;border:1px solid #33334d}
+.btn:disabled{opacity:.5;cursor:not-allowed}
+.badge{display:inline-block;padding:2px 9px;border-radius:999px;font-size:11px;font-weight:700;
+text-transform:uppercase;letter-spacing:.3px}
+.badge-delete{background:#2a0a0a;color:#f87171;border:1px solid #7f1d1d}
+.badge-reprovision{background:#2a1a00;color:#fbbf24;border:1px solid #92400e}
+.badge-move{background:#04222a;color:#22d3ee;border:1px solid #155e75}
+.mono,code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+code{background:#1a1a1a;padding:2px 6px;border-radius:6px;word-break:break-all}
+.muted{color:var(--muted)}
+.result{margin-top:14px;padding:12px;border-radius:10px;background:#052e16;border:1px solid #14532d;display:none;word-break:break-all}
+.result.error{background:#2a0a0a;border-color:#7f1d1d}
+.sig-box{font-family:ui-monospace,monospace;font-size:13px;width:100%;padding:10px;border:1px solid var(--line);
+border-radius:8px;background:#0d0d0d;color:var(--fg);word-break:break-all;min-height:44px}
+textarea.sig-box{min-height:60px}
+.copy-btn{margin-top:8px;padding:7px 14px;font-size:13px;background:#1a1a1a;color:#fff;border:1px solid var(--line);border-radius:8px;cursor:pointer}
+.copy-btn.copied{background:var(--ok)}
+.done{display:none}.done .big{font-size:44px;line-height:1;color:var(--ok)}
+summary{cursor:pointer;color:var(--muted)}
+`;
+
+/**
  * Build a Zelcore `zel:?action=sign…` deep link for `message`. An optional
  * `callback` URL lets the wallet POST the signature back for an automated
  * round-trip (otherwise the user copies it from the launcher page).
@@ -73,52 +122,40 @@ export function buildSignLauncherHtml(opts: {
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>${title}</title>
-    <style>
-      body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,sans-serif;margin:24px;line-height:1.4;color:#222}
-      .btn{display:inline-block;padding:12px 20px;color:#fff;text-decoration:none;border-radius:10px;border:none;cursor:pointer;font-size:16px;margin:6px 4px}
-      .btn-zelcore{background:#1a1a2e}
-      .btn-ssp{background:#2563eb}
-      .btn:disabled{opacity:.5;cursor:not-allowed}
-      code{background:#f3f3f3;padding:2px 6px;border-radius:6px;word-break:break-all}
-      .result{margin-top:16px;padding:12px;background:#f0fdf4;border:1px solid #86efac;border-radius:8px;display:none}
-      .result.error{background:#fef2f2;border-color:#fca5a5}
-      .wallet-section{margin:16px 0;padding:16px;border:1px solid #e5e7eb;border-radius:8px}
-      h2{font-size:18px;margin:0 0 8px}
-      .sig-box{font-family:monospace;font-size:13px;width:100%;padding:8px;border:1px solid #d1d5db;border-radius:6px;background:#f9fafb;word-break:break-all;min-height:40px;box-sizing:border-box}
-      .copy-btn{margin-top:8px;padding:6px 14px;font-size:13px;background:#111;color:#fff;border:none;border-radius:6px;cursor:pointer;transition:background .15s}
-      .copy-btn:hover{background:#333}
-      .copy-btn.copied{background:#16a34a}
-    </style>
+    <style>${CONSOLE_THEME_CSS}</style>
   </head>
   <body>
+    <div class="wrap">
+    <header class="mt"><span class="mark">MoltenTech</span><span class="slug">owner authorization</span></header>
     <h1>${title}</h1>
-    <p>${intro}</p>
+    <p class="muted">${intro}</p>
 
-    <div class="wallet-section">
+    <div class="card wallet-section">
       <h2>SSP Wallet</h2>
-      <p>Sign directly in your browser if SSP is installed.</p>
+      <p class="muted">Sign directly in your browser if the SSP extension is installed.</p>
       <button class="btn btn-ssp" id="ssp-btn" onclick="signWithSSP()">Sign with SSP</button>
-      <span id="ssp-status"></span>
+      <span id="ssp-status" class="muted"></span>
       <div class="result" id="ssp-result"></div>
     </div>
 
-    <div class="wallet-section">
+    <div class="card wallet-section">
       <h2>Zelcore</h2>
-      <p>Opens the Zelcore desktop app to sign; it posts the signature back automatically.</p>
+      <p class="muted">Opens the Zelcore desktop app to sign; it posts the signature back automatically.</p>
       <a class="btn btn-zelcore" href="${safeZelcoreLink}">Sign with Zelcore</a>
     </div>
 
-    <div class="wallet-section">
+    <div class="card wallet-section">
       <h2>Signature</h2>
-      <p>After signing, copy the signature below and paste it back where requested.</p>
+      <p class="muted">After signing, the signature appears here and is submitted for you. Copy it only for the manual fallback.</p>
       <div id="sig-output" class="sig-box"></div>
       <button class="copy-btn" id="copy-btn" onclick="copySig()" style="display:none">Copy</button>
     </div>
 
-    <details style="margin-top:16px">
+    <details class="card">
       <summary>Raw message being signed</summary>
-      <pre style="white-space:pre-wrap;word-break:break-all;background:#f9fafb;padding:8px;border-radius:6px;max-height:200px;overflow:auto">${safeMessage}</pre>
+      <pre style="white-space:pre-wrap;word-break:break-all;background:#0d0d0d;padding:10px;border-radius:8px;max-height:200px;overflow:auto;margin:8px 0 0">${safeMessage}</pre>
     </details>
+    </div>
 
     <script>
       var messageToSign = ${JSON.stringify(opts.message)};
