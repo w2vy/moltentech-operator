@@ -79,6 +79,9 @@ export function createServer(stripe: StripeLike, cfg: CoalitionConfig): http.Ser
         if (!authz.ok) {
           return send(authz.status, { error: authz.error });
         }
+        // Positive auth trace: the runbook's "confirm via:signature" needs a log line
+        // on the success path (previously only failures were logged).
+        console.log(`[coalition] POST ${url} authorized via=${authz.via}`);
         let json: unknown;
         try {
           json = JSON.parse(raw.toString() || "{}");

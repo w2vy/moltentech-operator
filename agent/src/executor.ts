@@ -116,6 +116,22 @@ function runArcaneMage(args: string[], cfg: AgentConfig, timeoutMs: number): Pro
 
 const TIMEOUT = { provision: 300_000, delete: 120_000, reprovision: 420_000 };
 
+/**
+ * Build the richest failure message for a failed arcane-mage run. The structured
+ * `json.error` is usually a one-liner; the real diagnostic (Python traceback,
+ * Proxmox API detail) lands on stderr. Combine both (plus any spawn/timeout error)
+ * so ProvisionLog.output carries enough to debug — the old code dropped stderr
+ * whenever json.error was present, blind-siding Phase 0 debugging.
+ */
+function amFailure(r: AmResult): string {
+  const parts: string[] = [];
+  for (const s of [r.json?.error, r.error?.message, r.stderr]) {
+    const t = s?.trim();
+    if (t && !parts.includes(t)) parts.push(t);
+  }
+  return (parts.join("\n\n") || r.stdout.trim() || "arcane-mage failed with no output").slice(0, 4000);
+}
+
 async function deprovision(job: Job, cfg: AgentConfig): Promise<ExecResult> {
   const r = await runArcaneMage(
     ["deprovision", "--json", "--force", "--vm-name", job.slot.vmName, "--node", job.slot.nodeName],
@@ -123,7 +139,7 @@ async function deprovision(job: Job, cfg: AgentConfig): Promise<ExecResult> {
     TIMEOUT.delete
   );
   const ok = r.json?.ok === true || !!r.json?.error?.includes("not found");
-  return { ok, message: (r.stdout + "\n" + r.stderr).trim().slice(0, 4000) };
+  return { ok, message: ok ? (r.stdout + "\n" + r.stderr).trim().slice(0, 4000) : amFailure(r) };
 }
 
 async function provision(job: Job, cfg: AgentConfig): Promise<ExecResult> {
@@ -133,7 +149,7 @@ async function provision(job: Job, cfg: AgentConfig): Promise<ExecResult> {
     const r = await runArcaneMage(["provision", "--json", "-c", yamlPath], cfg, TIMEOUT.provision);
     return {
       ok: r.json?.ok === true,
-      message: r.json?.ok ? undefined : (r.json?.error ?? (r.stdout + "\n" + r.stderr).trim().slice(0, 4000)),
+      message: r.json?.ok ? undefined : amFailure(r),
       vmId: typeof r.json?.vm_id === "number" ? r.json.vm_id : undefined,
     };
   } finally {
