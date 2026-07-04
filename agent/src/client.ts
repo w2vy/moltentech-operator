@@ -7,9 +7,12 @@ import {
   type ListingTier,
   InventoryAssert,
   type InventoryHost,
+  PendingAuthItem,
+  type OwnerAuth,
   HealthReport,
   type NodeHealth,
 } from "@moltentech/protocol";
+import { z } from "zod";
 import { signAgentRequest } from "./signing";
 
 /** How the client authenticates to MT: an asymmetric signature or the legacy bearer. */
@@ -102,6 +105,28 @@ export class MtClient {
       body: raw,
     });
     if (!res.ok) throw new Error(`inventory failed: ${res.status}`);
+  }
+
+  /** Fetch the provider's privileged actions awaiting the owner's signature. */
+  async getPendingAuth(): Promise<PendingAuthItem[]> {
+    const path = "/api/agent/pending-auth";
+    const res = await fetch(`${this.baseUrl}${path}`, { headers: this.headers("GET", path, "") });
+    if (!res.ok) throw new Error(`pending-auth fetch failed: ${res.status}`);
+    const parsed = z.object({ items: z.array(PendingAuthItem) }).safeParse(await res.json());
+    if (!parsed.success) throw new Error("invalid pending-auth payload");
+    return parsed.data.items;
+  }
+
+  /** Relay an operator-signed authorization to MT (queues the privileged job). */
+  async submitAuthorize(slotId: string, ownerAuth: OwnerAuth): Promise<void> {
+    const path = "/api/agent/authorize";
+    const raw = JSON.stringify({ slotId, ownerAuth });
+    const res = await fetch(`${this.baseUrl}${path}`, {
+      method: "POST",
+      headers: this.headers("POST", path, raw),
+      body: raw,
+    });
+    if (!res.ok) throw new Error(`authorize failed: ${res.status}`);
   }
 
   /** Fetch this provider's live nodes so the agent knows which local VMs to health-check. */

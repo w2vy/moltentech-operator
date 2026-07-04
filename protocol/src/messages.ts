@@ -299,6 +299,36 @@ export const InventoryAssert = Envelope.extend({
 export type InventoryAssert = z.infer<typeof InventoryAssert>;
 
 // ───────────────────────────────────────────────────────────────────────────
+//    owner-authorization courier  —  agent ⇄ operator Coalition console
+//    The agent fetches the provider's pending privileged actions from MT and
+//    PUSHES them to the coalition console (so the operator can sign them); the
+//    coalition returns the operator-signed authorizations for the agent to relay
+//    to MT. Keeps the key-holding agent outbound-only; the coalition holds no keys.
+// ───────────────────────────────────────────────────────────────────────────
+/** A privileged action awaiting the owner's signature (mirrors GET /api/agent/pending-auth). */
+export const PendingAuthItem = z.object({
+  slotId: z.string().min(1),
+  action: JobAction,
+  providerSlug: ProviderSlug,
+  vmName: z.string().min(1),
+  nodeName: z.string().min(1),
+  rentalCode: z.string().nullable(),
+});
+export type PendingAuthItem = z.infer<typeof PendingAuthItem>;
+
+/** Agent → coalition: the current pending list to present for signing. */
+export const PendingAuthPush = z.object({ items: z.array(PendingAuthItem) });
+export type PendingAuthPush = z.infer<typeof PendingAuthPush>;
+
+/** One operator-signed authorization, bound to the slot it authorizes. */
+export const SignedAuthorization = z.object({ slotId: z.string().min(1), ownerAuth: OwnerAuth });
+export type SignedAuthorization = z.infer<typeof SignedAuthorization>;
+
+/** Coalition → agent: the signed authorizations queued since the last poll. */
+export const AuthorizationList = z.object({ items: z.array(SignedAuthorization) });
+export type AuthorizationList = z.infer<typeof AuthorizationList>;
+
+// ───────────────────────────────────────────────────────────────────────────
 // 6. stats  —  published by the Coalition's external collector; MT PULLS it.
 //    Hairpin-proof (polled from outside the operator LAN). No secrets.
 // ───────────────────────────────────────────────────────────────────────────

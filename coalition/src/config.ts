@@ -23,6 +23,12 @@ export type CoalitionConfig = {
   stripeWebhookSecret: string;
   /** Path to the offline-signed manifest JSON served at /.well-known/mt-provider.json. */
   manifestPath: string;
+  /**
+   * The operator's owner ZelID — the console authorizes only signatures that
+   * recover to it (the login-less per-action gate). Defaults to the same address
+   * the agent pins as OWNER_ADDRESS. (Future: resolve via Flux app-owner lookup.)
+   */
+  ownerAddress?: string;
   /** Operator-declared price per tier (cents); the Coalition materializes the Stripe Price. */
   tierPrices: Record<string, number>;
   trialDays: number;
@@ -46,6 +52,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CoalitionConfi
     stripeSecretKey: req(env, "STRIPE_SECRET_KEY"),
     stripeWebhookSecret: req(env, "STRIPE_WEBHOOK_SECRET"),
     manifestPath: env.MANIFEST_PATH ?? "./manifest.json",
+    ownerAddress: env.OWNER_ADDRESS || undefined,
     tierPrices: TierPrices.parse(JSON.parse(req(env, "TIER_PRICES_JSON"))),
     trialDays: Number(env.TRIAL_DAYS ?? 1),
     statsWindowDays: Number(env.STATS_WINDOW_DAYS ?? 90),

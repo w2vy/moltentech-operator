@@ -42,9 +42,24 @@ export type AgentConfig = {
   listing: z.infer<typeof ListingTierConfig>[];
   /** Declared agent-managed hosts + slots; empty = don't re-assert inventory. */
   inventory: InventoryHost[];
+  /** Inventory source file, if any — re-read each heartbeat so console edits take effect. */
+  inventoryPath?: string;
+  /** The operator's own Coalition console base URL (WS3 courier); unset = no courier. */
+  coalitionUrl?: string;
   /** When true (or Proxmox unconfigured), jobs are acknowledged without touching Proxmox. */
   dryRun: boolean;
 };
+
+/** Re-read the inventory file (if configured) so console edits propagate without a restart. */
+export function reloadInventory(cfg: AgentConfig): InventoryHost[] {
+  if (!cfg.inventoryPath) return cfg.inventory;
+  try {
+    return z.array(InventoryHost).parse(JSON.parse(readFileSync(cfg.inventoryPath, "utf8")));
+  } catch (err) {
+    console.error("[agent] inventory reload failed:", (err as Error).message);
+    return cfg.inventory; // keep last-known-good on a transient read/parse error
+  }
+}
 
 function req(env: NodeJS.ProcessEnv, key: string): string {
   const v = env[key];
@@ -105,6 +120,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AgentConfig {
     },
     listing,
     inventory,
+    inventoryPath: env.AGENT_INVENTORY_PATH || undefined,
+    coalitionUrl: env.COALITION_URL?.replace(/\/$/, "") || undefined,
     dryRun,
   };
 }
