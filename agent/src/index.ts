@@ -1,6 +1,8 @@
 import { SCHEMA_VERSION } from "@moltentech/protocol";
-import { loadConfig } from "./config";
+import { verifyOwnerAuth } from "@moltentech/protocol/wallet";
+import { loadConfig, reloadInventory } from "./config";
 import { MtClient, type MtClientAuth } from "./client";
+import { CoalitionClient } from "./coalition-client";
 import { loadManifestKey } from "./signing";
 import { pickExecutor } from "./executor";
 import { collectHealth } from "./health";
@@ -18,10 +20,18 @@ async function main() {
   const client = new MtClient(cfg.mtBaseUrl, auth).withProvider(cfg.providerSlug);
   const executor = pickExecutor(cfg);
 
+  // WS3 courier: relay owner authorizations via the operator's own Coalition
+  // console. Needs the manifest key (to auth to the coalition), the coalition URL,
+  // and a pinned owner (to pre-filter signatures). Absent any → courier disabled.
+  const coalition =
+    manifestKey && cfg.coalitionUrl && cfg.ownerAddress
+      ? new CoalitionClient(cfg.coalitionUrl, manifestKey, cfg.providerSlug)
+      : undefined;
+
   console.log(
     `[agent] provider=${cfg.providerSlug} mt=${cfg.mtBaseUrl} auth=${auth.kind} ` +
-      `ownerAuth=${cfg.ownerAddress ? "enforced" : "off"} dryRun=${cfg.dryRun} ` +
-      `poll=${cfg.pollIntervalMs}ms listing=${cfg.listingIntervalMs}ms`
+      `ownerAuth=${cfg.ownerAddress ? "enforced" : "off"} courier=${coalition ? "on" : "off"} ` +
+      `dryRun=${cfg.dryRun} poll=${cfg.pollIntervalMs}ms listing=${cfg.listingIntervalMs}ms`
   );
 
   let stopping = false;
@@ -73,6 +83,39 @@ async function main() {
     }
   }
 
+  async function reassertInventory() {
+    const inventory = reloadInventory(cfg); // re-read the file so console edits propagate
+    if (inventory.length === 0) return;
+    try {
+      await client.assertInventory(inventory);
+      const slots = inventory.reduce((n, h) => n + h.slots.length, 0);
+      console.log(`[agent] declared inventory: ${inventory.length} host(s), ${slots} slot(s)`);
+    } catch (err) {
+      console.error("[agent] inventory assert error:", (err as Error).message);
+    }
+  }
+
+  // Courier: fetch pending authorizations from MT → push to the coalition console
+  // for the operator to sign → poll the signed blobs → verify locally → relay to MT.
+  async function courierOnce() {
+    if (!coalition || !cfg.ownerAddress) return;
+    try {
+      await coalition.pushPending(await client.getPendingAuth());
+      const signed = await coalition.pollAuthorizations();
+      for (const { slotId, ownerAuth } of signed) {
+        const decision = verifyOwnerAuth(ownerAuth, cfg.ownerAddress);
+        if (!decision.ok) {
+          console.error(`[agent] rejected authorization for ${ownerAuth.vmName}: ${decision.reason}`);
+          continue;
+        }
+        await client.submitAuthorize(slotId, ownerAuth);
+        console.log(`[agent] relayed authorization: ${ownerAuth.action} ${ownerAuth.vmName}`);
+      }
+    } catch (err) {
+      console.error("[agent] courier error:", (err as Error).message);
+    }
+  }
+
   // Run both cadences; simple self-scheduling loops with their own intervals.
   async function reportHealthOnce() {
     if (cfg.dryRun) return; // no local Proxmox to query in dry-run
@@ -89,17 +132,24 @@ async function main() {
     }
   }
 
+  // Declare inventory first so the host/slot rows exist before listing + health.
+  await reassertInventory();
   await reassertListing();
   await reportHealthOnce();
+  await courierOnce();
+  const inventoryTimer = setInterval(reassertInventory, cfg.listingIntervalMs);
   const listingTimer = setInterval(reassertListing, cfg.listingIntervalMs);
   const healthTimer = setInterval(reportHealthOnce, cfg.healthIntervalMs);
+  const courierTimer = setInterval(courierOnce, cfg.listingIntervalMs);
 
   while (!stopping) {
     await pollOnce();
     await new Promise((r) => setTimeout(r, cfg.pollIntervalMs));
   }
+  clearInterval(inventoryTimer);
   clearInterval(listingTimer);
   clearInterval(healthTimer);
+  clearInterval(courierTimer);
 }
 
 main().catch((err) => {

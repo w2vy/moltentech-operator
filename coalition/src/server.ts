@@ -6,6 +6,15 @@ import type { StripeLike } from "./stripe";
 import { handleCheckout, handleManage, handleWebhook } from "./payments";
 import { getStatsSnapshot } from "./stats";
 import { verifyMtRequest } from "./auth";
+import {
+  handleAgentPending,
+  handleAgentAuthorizations,
+  handleConsoleIndex,
+  handleConsoleSign,
+  handleConsoleAuthorize,
+  handleZelcoreCallback,
+  type ConsoleResult,
+} from "./console";
 
 function readBody(req: http.IncomingMessage): Promise<Buffer> {
   return new Promise((resolve, reject) => {
@@ -26,8 +35,14 @@ export function createServer(stripe: StripeLike, cfg: CoalitionConfig): http.Ser
       res.writeHead(status, { "content-type": "application/json" });
       res.end(JSON.stringify(obj));
     };
+    const sendResult = (r: ConsoleResult) => {
+      res.writeHead(r.status, { "content-type": r.contentType });
+      res.end(r.body);
+    };
     try {
-      const url = (req.url ?? "/").split("?")[0];
+      const fullUrl = req.url ?? "/";
+      const url = fullUrl.split("?")[0];
+      const query = new URLSearchParams(fullUrl.split("?")[1] ?? "");
       const method = req.method ?? "GET";
 
       if (method === "GET" && url === "/.well-known/mt-provider.json") {
@@ -83,6 +98,32 @@ export function createServer(stripe: StripeLike, cfg: CoalitionConfig): http.Ser
         } catch (err) {
           return send(502, { error: (err as Error).message });
         }
+      }
+
+      // ── Owner-authorization courier (agent ⇄ console). ──
+      // agent → coalition (manifest-signed): push pending / pull signed blobs.
+      if (method === "POST" && url === "/agent/pending") {
+        const raw = await readBody(req);
+        return sendResult(handleAgentPending(cfg, raw, req.headers));
+      }
+      if (method === "GET" && url === "/agent/authorizations") {
+        return sendResult(handleAgentAuthorizations(cfg, Buffer.alloc(0), req.headers));
+      }
+      // operator (browser): login-less console (per-action signature is the gate).
+      if (method === "GET" && url === "/console") {
+        return sendResult(handleConsoleIndex(cfg));
+      }
+      if (method === "GET" && url === "/console/sign") {
+        return sendResult(handleConsoleSign(cfg, query));
+      }
+      if (method === "POST" && url === "/console/authorize") {
+        const raw = await readBody(req);
+        return sendResult(handleConsoleAuthorize(cfg, new URLSearchParams(raw.toString())));
+      }
+      // Zelcore posts the signature back here automatically (deep-link callback).
+      if (method === "POST" && url === "/console/zelcore-callback") {
+        const raw = await readBody(req);
+        return sendResult(handleZelcoreCallback(cfg, query, raw, String(req.headers["content-type"] ?? "")));
       }
 
       send(404, { error: "not found" });
