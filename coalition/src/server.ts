@@ -12,6 +12,7 @@ import {
   handleConsoleIndex,
   handleConsoleSign,
   handleConsoleAuthorize,
+  handleZelcoreCallback,
   type ConsoleResult,
 } from "./console";
 
@@ -118,6 +119,11 @@ export function createServer(stripe: StripeLike, cfg: CoalitionConfig): http.Ser
       if (method === "POST" && url === "/console/authorize") {
         const raw = await readBody(req);
         return sendResult(handleConsoleAuthorize(cfg, new URLSearchParams(raw.toString())));
+      }
+      // Zelcore posts the signature back here automatically (deep-link callback).
+      if (method === "POST" && url === "/console/zelcore-callback") {
+        const raw = await readBody(req);
+        return sendResult(handleZelcoreCallback(cfg, query, raw, String(req.headers["content-type"] ?? "")));
       }
 
       send(404, { error: "not found" });

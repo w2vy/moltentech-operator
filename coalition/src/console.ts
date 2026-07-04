@@ -46,17 +46,19 @@ const html = (status: number, body: string): ConsoleResult => ({ status, content
 const pending = new Map<string, PendingAuthItem>(); // slotId -> item awaiting signature
 const authorizations: SignedAuthorization[] = []; // signed, awaiting agent pickup
 
-// ── agent⇄coalition auth: verify the agent's manifest-key signature ──
-let cachedPubkey: string | null = null;
-function manifestPubkey(cfg: CoalitionConfig): string | null {
-  if (cachedPubkey) return cachedPubkey;
+// ── manifest-derived values (pubkey for agent auth; coalitionUrl for the Zelcore callback base) ──
+let cachedManifest: { pubkey?: string; coalitionUrl?: string } | null = null;
+function manifest(cfg: CoalitionConfig): { pubkey?: string; coalitionUrl?: string } {
+  if (cachedManifest) return cachedManifest;
   try {
-    const m = JSON.parse(readFileSync(cfg.manifestPath, "utf8")) as { pubkey?: string };
-    cachedPubkey = m.pubkey ?? null;
+    cachedManifest = JSON.parse(readFileSync(cfg.manifestPath, "utf8"));
   } catch {
-    cachedPubkey = null;
+    cachedManifest = {};
   }
-  return cachedPubkey;
+  return cachedManifest!;
+}
+function manifestPubkey(cfg: CoalitionConfig): string | null {
+  return manifest(cfg).pubkey ?? null;
 }
 
 const NONCE_TTL_MS = 5 * 60_000;
@@ -171,14 +173,20 @@ export function handleConsoleSign(cfg: CoalitionConfig, query: URLSearchParams):
     expiresAt: new Date(Date.now() + 15 * 60_000).toISOString(),
   };
   const claimToken = encodeClaim(claim);
-  const { html: launcher } = buildOwnerAuthSignLauncher(claim);
+  // If we know our external URL (from the manifest), give Zelcore a callback so it
+  // posts the signature straight back — no copy-paste. Falls back to paste if unset.
+  const base = manifest(cfg).coalitionUrl?.replace(/\/$/, "");
+  const callback = base
+    ? `${base}/console/zelcore-callback?slotId=${encodeURIComponent(slotId)}&claim=${encodeURIComponent(claimToken)}`
+    : undefined;
+  const { html: launcher } = buildOwnerAuthSignLauncher(claim, { callback });
 
   // Inject a submit form before </body>: it carries the exact claim + the signature
   // (auto-filled from the SSP result box, or pasted for Zelcore) back to us.
   const submit = `
     <div class="wallet-section" style="margin:16px 0;padding:16px;border:1px solid #e5e7eb;border-radius:8px">
       <h2>Submit authorization</h2>
-      <p>After signing above, submit the signature to queue this authorization.</p>
+      <p>SSP auto-fills below, and Zelcore posts back automatically — this manual paste is a fallback. After it's queued, return to the console (it refreshes on its own).</p>
       <form method="POST" action="/console/authorize">
         <input type="hidden" name="slotId" value="${escapeHtmlAttribute(slotId)}" />
         <input type="hidden" name="claim" value="${escapeHtmlAttribute(claimToken)}" />
@@ -197,36 +205,74 @@ export function handleConsoleSign(cfg: CoalitionConfig, query: URLSearchParams):
   return html(200, launcher.replace("</body>", `${submit}</body>`));
 }
 
-/** POST /console/authorize — verify the owner signature, then queue for the agent. */
-export function handleConsoleAuthorize(cfg: CoalitionConfig, form: URLSearchParams): ConsoleResult {
+/**
+ * Shared per-action gate + queue for a submitted signature (used by both the
+ * browser form and the Zelcore callback). Verifies the signature recovers to the
+ * operator's owner ZelID over the exact claim, that the claim still matches a
+ * pending item, then queues the authorization. Login-less: the signature IS the auth.
+ */
+function verifyAndQueue(
+  cfg: CoalitionConfig,
+  slotId: string,
+  claimToken: string,
+  signature: string
+): { ok: true; claim: OwnerAuthClaim } | { ok: false; status: number; msg: string } {
   const owner = ownerZelid(cfg);
-  if (!owner) return html(500, "<p>Console owner address not configured (set OWNER_ADDRESS).</p>");
-
-  const slotId = form.get("slotId") ?? "";
-  const claimToken = form.get("claim") ?? "";
-  const signature = (form.get("signature") ?? "").trim();
+  if (!owner) return { ok: false, status: 500, msg: "Console owner address not configured (set OWNER_ADDRESS)." };
   const claim = decodeClaim(claimToken);
-  if (!claim || !signature) return html(400, "<p>Missing claim or signature.</p>");
+  if (!claim || !signature) return { ok: false, status: 400, msg: "Missing claim or signature." };
 
-  // The claim must still match a pending item (no arbitrary/forged claims).
   const item = pending.get(slotId);
   if (!item || item.action !== claim.action || item.vmName !== claim.vmName || item.nodeName !== claim.nodeName || item.providerSlug !== claim.providerSlug) {
-    return html(409, "<p>Action no longer pending, or claim does not match.</p>");
+    return { ok: false, status: 409, msg: "Action no longer pending, or claim does not match." };
   }
-  // Per-action gate: the signature must recover to the operator's owner ZelID.
   if (!verifyFluxSignature(owner, ownerAuthMessage(claim), signature)) {
-    return html(401, "<p>Signature does not match the owner wallet for this operator.</p>");
+    return { ok: false, status: 401, msg: "Signature does not match the owner wallet for this operator." };
   }
-
   const authParsed = OwnerAuth.safeParse({ ...claim, signature });
-  if (!authParsed.success) return html(400, "<p>Malformed authorization.</p>");
+  if (!authParsed.success) return { ok: false, status: 400, msg: "Malformed authorization." };
 
   authorizations.push({ slotId, ownerAuth: authParsed.data });
   pending.delete(slotId);
+  return { ok: true, claim };
+}
+
+/** POST /console/authorize — browser form submit (SSP auto-fill or pasted Zelcore sig). */
+export function handleConsoleAuthorize(cfg: CoalitionConfig, form: URLSearchParams): ConsoleResult {
+  const r = verifyAndQueue(cfg, form.get("slotId") ?? "", form.get("claim") ?? "", (form.get("signature") ?? "").trim());
+  if (!r.ok) return html(r.status, `<p>${escapeHtmlAttribute(r.msg)}</p>`);
   return html(
     200,
     `<!doctype html><html><head><meta charset="utf-8"/><title>Authorized</title></head><body style="font-family:system-ui;margin:24px">
-<h1>Authorization queued ✓</h1><p>${escapeHtmlAttribute(`${claim.action} ${claim.vmName}@${claim.nodeName}`)} will be executed by your agent shortly.</p>
+<h1>Authorization queued ✓</h1><p>${escapeHtmlAttribute(`${r.claim.action} ${r.claim.vmName}@${r.claim.nodeName}`)} will be executed by your agent shortly.</p>
 <p><a href="/console">&larr; Back to pending</a></p></body></html>`
   );
+}
+
+/**
+ * POST /console/zelcore-callback?slotId=…&claim=… — Zelcore posts the signature
+ * here automatically (the `callback` on the sign deep link), so the operator never
+ * copy-pastes. Zelcore sends `{ zelid, signature }` (JSON or form); we already hold
+ * the message via the claim in the query. Same gate as the browser submit.
+ */
+export function handleZelcoreCallback(
+  cfg: CoalitionConfig,
+  query: URLSearchParams,
+  rawBody: Buffer,
+  contentType: string
+): ConsoleResult {
+  let signature = "";
+  const raw = rawBody.toString();
+  try {
+    if (contentType.includes("application/json")) {
+      signature = String((JSON.parse(raw || "{}") as { signature?: unknown }).signature ?? "");
+    } else {
+      signature = new URLSearchParams(raw).get("signature") ?? "";
+    }
+  } catch {
+    signature = "";
+  }
+  const r = verifyAndQueue(cfg, query.get("slotId") ?? "", query.get("claim") ?? "", signature.trim());
+  // Zelcore only needs a status; the operator's console page auto-refreshes to reflect it.
+  return r.ok ? json(200, { status: "success" }) : json(r.status, { status: "error", error: r.msg });
 }
