@@ -36,7 +36,7 @@
   "scripts": {
     "build": "tsc",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test src/signing.test.ts src/wallet.test.ts src/sign-launcher.test.ts",
+    "test": "tsx --test src/signing.test.ts src/wallet.test.ts src/sign-launcher.test.ts src/manifest-config.test.ts",
     "manifest": "tsx src/cli.ts"
   },
   "dependencies": {
