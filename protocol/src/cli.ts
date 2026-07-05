@@ -6,13 +6,15 @@
  *
  *   keygen [--out <dir>]                generate manifest-key.pem (KEEP SECRET) + print pubkey
  *   init   [--out <file>]               write a manifest body template to edit
- *   sign   --key <pem> --in <body.json> [--out <manifest.json>]
+ *   sign   --key <pem> (--from-config <config.env> | --in <body.json>) [--out <manifest.json>]
+ *                                       render body (from config.env) or read body.json,
  *                                       fill pubkey + publishedAt, sign, emit full manifest
  *   verify --in <manifest.json>         re-verify a signed manifest
  */
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { ProviderManifestBody } from "./manifest";
+import { renderManifestBodyFromConfig } from "./manifest-config";
 import {
   generateEd25519,
   exportPrivateKeyPem,
@@ -79,11 +81,22 @@ function main() {
     }
     case "sign": {
       const keyPath = flag(args, "--key") ?? die("--key <manifest-key.pem> required");
-      const inPath = flag(args, "--in") ?? die("--in <body.json> required");
+      const fromConfig = flag(args, "--from-config");
+      const inPath = flag(args, "--in");
+      if (!fromConfig && !inPath) die("provide --from-config <config.env> or --in <body.json>");
       const outPath = flag(args, "--out");
 
       const priv = importPrivateKeyPem(readFileSync(keyPath, "utf8"));
-      const body: Record<string, unknown> = JSON.parse(readFileSync(inPath, "utf8"));
+      let body: Record<string, unknown>;
+      if (fromConfig) {
+        try {
+          body = renderManifestBodyFromConfig(readFileSync(fromConfig, "utf8"));
+        } catch (e) {
+          die((e as Error).message);
+        }
+      } else {
+        body = JSON.parse(readFileSync(inPath!, "utf8"));
+      }
       // The key is the source of truth for pubkey; stamp a fresh publishedAt.
       body.pubkey = publicKeyBase64FromPrivate(priv);
       body.publishedAt = new Date().toISOString();
@@ -115,7 +128,7 @@ function main() {
       console.log("usage: mt-manifest <keygen|init|sign|verify> [options]\n");
       console.log("  keygen [--out <dir>]");
       console.log("  init   [--out <body.json>]");
-      console.log("  sign   --key <pem> --in <body.json> [--out <manifest.json>]");
+      console.log("  sign   --key <pem> (--from-config <config.env> | --in <body.json>) [--out <manifest.json>]");
       console.log("  verify --in <manifest.json>");
       process.exit(cmd ? 1 : 0);
   }
