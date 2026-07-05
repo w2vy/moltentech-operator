@@ -21,6 +21,7 @@ import {
   type ConsoleResult,
 } from "./console";
 import { verifySession } from "./session";
+import { COALITION_VERSION } from "./version";
 
 function readBody(req: http.IncomingMessage): Promise<Buffer> {
   return new Promise((resolve, reject) => {
@@ -37,6 +38,10 @@ function readBody(req: http.IncomingMessage): Promise<Buffer> {
  */
 export function createServer(stripe: StripeLike, cfg: CoalitionConfig): http.Server {
   return http.createServer(async (req, res) => {
+    // Stamp every response with the running code version so MT (which pulls the
+    // manifest + stats) can detect providers on an outdated coalition. setHeader
+    // persists across whichever writeHead runs below.
+    res.setHeader("X-Coalition-Version", COALITION_VERSION);
     const send = (status: number, obj: unknown) => {
       res.writeHead(status, { "content-type": "application/json" });
       res.end(JSON.stringify(obj));
@@ -72,7 +77,7 @@ export function createServer(stripe: StripeLike, cfg: CoalitionConfig): http.Ser
         return snap ? send(200, snap) : send(503, { error: "stats not ready" });
       }
       if (method === "GET" && (url === "/health" || url === "/")) {
-        return send(200, { ok: true, provider: cfg.providerSlug });
+        return send(200, { ok: true, provider: cfg.providerSlug, coalitionVersion: COALITION_VERSION });
       }
 
       // Stripe webhook — verify on the RAW body (no JSON parse before signature check).
