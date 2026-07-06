@@ -27,8 +27,9 @@ customer ─buy──▶ │ storefront → calls your Coalition /checkout → S
 
 - **Proxmox** host(s) with the `arcane-mage` CLI available to the agent, an API
   **token** (not root password), and the ArcaneOS ISO present in your ISO storage.
-- A trusted, always-on host with **Docker + Node** and LAN line-of-sight to Proxmox
-  `:8006` and outbound 443 (a sidecar VM/LXC is the clean default).
+- A trusted, always-on host with **Docker** and LAN line-of-sight to Proxmox `:8006`
+  and outbound 443 (a sidecar VM/LXC is the clean default). The agent image bundles
+  Node + Python + `arcane-mage`, so nothing else is needed on the host.
 - A **Flux** deployment target for the Coalition (a small container; stateless).
 - A **Stripe** account (you are merchant of record).
 - Public reachability for your **Coalition URL** (Flux gives you a stable HTTPS URL)
@@ -140,29 +141,51 @@ re-import** of a fresh `env.json` — regenerate it and paste it in; no redeploy
 
 ---
 
-## Step 4 — Configure the Agent
+## Step 4 — Run the Agent
 
-Deploy the agent on/beside Proxmox. Environment:
+The agent is the published image **`w2vy/mt-agent`**. It runs on a trusted, always-on host
+**beside your Proxmox** (a sidecar VM/LXC with Docker + LAN reach to `:8006`) — **not** on
+Flux. It is outbound-only (no ports) and holds your Proxmox token + manifest key, so it must
+live on infrastructure you control. (Image bundles Python + `arcane-mage`, so there is
+nothing to build.)
+
+Put your config in a private **`.env.operator`** (never commit):
 
 ```sh
 MT_BASE_URL=https://www.moltentech.us
 PROVIDER_SLUG=your-slug
 AGENT_KEY=placeholder            # real value in Step 5
-PROXMOX_URL=https://127.0.0.1:8006
+# Local Proxmox — creds NEVER leave your host. Use an address the CONTAINER can reach:
+# your Proxmox LAN IP (not 127.0.0.1, which is the container's own loopback), or run with
+# `--network host` if the agent runs on the Proxmox host itself.
+PROXMOX_URL=https://<proxmox-lan-ip>:8006
 PROXMOX_TOKEN_ID='root@pam!moltentech'
 PROXMOX_TOKEN_SECRET=<secret>
-# local YAML defaults (your Proxmox):
 PROXMOX_NETWORK=vmbr0
 PROXMOX_STORAGE_IMAGES=local-lvm
 PROXMOX_STORAGE_ISO=local
 ARCANE_ISO=<your ArcaneOS ISO name>
-# your offered price/capacity (re-asserted to MT on a heartbeat):
+# Offered price/capacity (re-asserted to MT each heartbeat):
 AGENT_LISTING_JSON='[{"tier":"nimbus","priceCents":2200,"capacity":8,"availableSlots":8}]'
 ```
 
-Run with `AGENT_DRY_RUN=1` first to validate connectivity/auth to MT without
-touching Proxmox. (`priceCents` must be ≥ the MT platform floor and should match
-`TIER_PRICES_JSON` in the Coalition.)
+Validate connectivity/auth to MT first, **without touching Proxmox**:
+
+```sh
+docker run --rm --env-file .env.operator -e AGENT_DRY_RUN=1 w2vy/mt-agent:latest
+# expect: "provider=… mt=… dryRun=true …" then a poll to MT (a 401 until your Step 5 keys)
+```
+
+Then run it for real (long-running, auto-restart):
+
+```sh
+docker run -d --name mt-agent --restart unless-stopped --env-file .env.operator w2vy/mt-agent:latest
+```
+
+(Or use `docker-compose.operator.yml` with `image: w2vy/mt-agent` instead of `build:`.)
+`priceCents` must be ≥ the MT platform floor and should match `TIER_PRICES_JSON` in the
+Coalition. For the manifest-signed courier + owner authorization, also set `MANIFEST_KEY`,
+`OWNER_ADDRESS`, and `COALITION_URL` — see **Step 7**.
 
 ---
 
