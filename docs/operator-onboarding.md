@@ -36,33 +36,42 @@ customer ─buy──▶ │ storefront → calls your Coalition /checkout → S
 
 ---
 
-## Step 1 — Generate your signing key + manifest
+## Step 1 — Generate your signing key + config
 
 From the `protocol/` package:
 
 ```sh
 npm install
 npm run manifest keygen        # writes manifest-key.pem (KEEP SECRET, 0600) + prints your pubkey
-npm run manifest init          # writes manifest.body.json — edit it (see below)
 ```
 
-Edit `manifest.body.json`:
-- `provider.slug` — your desired identifier (lowercase-kebab; MT confirms it).
-- `provider.name` / `location` / `description` / `contact`.
-- `coalitionUrl` — the stable HTTPS base URL your Coalition will serve at (Step 3).
-- `tiers` — the tiers you offer with `capacity` (max nodes) and `storagePool`.
-- `trialDays` (1–7), `serviceFlags` (delegation/whiteLabel/SLA/languages/…).
-
-Then sign it:
+Create a **`config.env`** — your single **non-secret** source of truth. It drives *both*
+the signed manifest and the Coalition's runtime config, so the two can never drift:
 
 ```sh
-npm run manifest sign --key manifest-key.pem --in manifest.body.json --out manifest.json
+PROVIDER_SLUG=your-slug
+PROVIDER_NAME=Your Operator Name
+PROVIDER_LOCATION=City, Country
+PROVIDER_CONTACT=ops@example.com
+MT_BASE_URL=https://www.moltentech.us
+COALITION_URL=https://<your-coalition>          # the stable HTTPS URL from Step 3
+OWNER_ADDRESS=<your owner ZelID>                 # who the console authorizes actions for
+MT_PUBKEY=<MT ed25519 pubkey, from MT /api/mt-pubkey>
+TIERS_JSON=[{"tier":"nimbus","capacity":8,"storagePool":"local-lvm","priceCents":2200}]
+TRIAL_DAYS=1
+MANUAL_APPROVAL=false
+```
+
+Sign the manifest from it:
+
+```sh
+npm run manifest sign --key manifest-key.pem --from-config config.env --out manifest.json
 npm run manifest verify --in manifest.json     # sanity: "OK — signature valid"
 ```
 
 `manifest.json` is what your Coalition publishes. **Price is NOT in the manifest** —
-you declare it in the agent's listing (Step 4), where you can change it without
-re-signing.
+`priceCents` in `TIERS_JSON` feeds runtime pricing only (Step 3) and the agent listing
+(Step 4), so you change price without re-signing.
 
 ---
 
@@ -88,30 +97,46 @@ re-signing.
 
 ---
 
-## Step 3 — Deploy the Coalition (publish the manifest)
+## Step 3 — Deploy the Coalition on Flux (publish the manifest)
 
-The Coalition needs the MT-issued keys (Step 5) to do payments, but it can serve your
-manifest before then. Deploy it now with placeholder values for the keys you don't
-have yet, so MT can fetch your manifest; you'll set the real keys and redeploy in
-Step 5.
+The Coalition runs as a **published Docker image** (`w2vy/coalition:0.1.0`) deployed as a
+Flux App. Config, secrets, and your signed manifest are all supplied as **Flux environment
+variables** — nothing to mount. It can serve your manifest before you have the MT-issued
+keys (Step 5): deploy now with placeholder `AGENT_KEY`/`COALITION_KEY`; set the real values
+in Step 5 (a **free** env re-import).
 
-Place `manifest.json` where `MANIFEST_PATH` points. Environment:
+**1. Assemble the env.** Alongside `config.env` keep a private **`secrets.env`** (never
+commit) — your Stripe key + webhook secret + a session secret, and the MT keys
+(placeholder until Step 5):
 
 ```sh
-PROVIDER_SLUG=your-slug
-MT_BASE_URL=https://www.moltentech.us
-MANIFEST_PATH=./manifest.json
-TIER_PRICES_JSON='{"nimbus":2200,"cumulus":700}'   # cents/mo, per tier (>= MT floor)
-TRIAL_DAYS=1
+# secrets.env
 STRIPE_SECRET_KEY=rk_live_<restricted>
 STRIPE_WEBHOOK_SECRET=whsec_<from step 2>
-AGENT_KEY=placeholder            # real value in Step 5
-COALITION_KEY=placeholder          # real value in Step 5
-# npm start
+SESSION_SECRET=<openssl rand -hex 32>            # signs the console login cookie
+AGENT_KEY=placeholder                            # real value in Step 5
+COALITION_KEY=placeholder                        # real value in Step 5
 ```
 
-Confirm `https://<your-coalition>/.well-known/mt-provider.json` returns your signed
-manifest and `/stats` responds.
+Then build the Flux import blob from config + secrets + your signed manifest:
+
+```sh
+npm run manifest env --from-config config.env --secrets secrets.env \
+  --manifest manifest.json --out env.json
+```
+
+`env.json` is a JSON array of `"KEY=value"`. It derives `TIER_PRICES_JSON` from your tiers
+and embeds the signed manifest as `MANIFEST_JSON` (verifying the signature first). **It
+contains secrets — do not commit it.**
+
+**2. Register the Flux App:** Docker image `w2vy/coalition:0.1.0`, container port **8088**,
+then paste `env.json` into the app's **Environment Variables → Import** (JSON array).
+
+**3. Verify:** `https://<your-coalition>/health` → `{"ok":true,"provider":"…","coalitionVersion":"…"}`
+and `/.well-known/mt-provider.json` returns your signed manifest.
+
+Changing env later (rotate a secret, change tiers, re-sign the manifest) is just a **free
+re-import** of a fresh `env.json` — regenerate it and paste it in; no redeploy transaction.
 
 ---
 
@@ -148,8 +173,10 @@ touching Proxmox. (`priceCents` must be ≥ the MT platform floor and should mat
    `pending`) and **issues two keys**, shown once:
    - **`agentKey`** — your agent + Coalition use it to talk *to* MT.
    - **`coalitionKey`** — MT uses it to call *your* Coalition (`/checkout`, `/manage`).
-3. Set the real keys and **redeploy**:
-   - **Coalition**: `AGENT_KEY=<agentKey>`, `COALITION_KEY=<coalitionKey>`.
+3. Set the real keys:
+   - **Coalition**: put `AGENT_KEY=<agentKey>` + `COALITION_KEY=<coalitionKey>` in
+     `secrets.env`, re-run `npm run manifest env …`, and **re-import `env.json`** into the
+     Flux App (free — no redeploy tx).
    - **Agent**: `AGENT_KEY=<agentKey>` (remove `AGENT_DRY_RUN` once Proxmox is ready).
 4. MT admin **activates** your provider → your cards go live on `/providers`.
 
@@ -248,10 +275,11 @@ It stores **none** of your Stripe or Proxmox credentials.
 
 ## Ongoing operations
 
-- **Change price/capacity**: update `AGENT_LISTING_JSON` (and `TIER_PRICES_JSON` to
-  match) and restart the agent — it re-asserts; MT converges. No re-signing.
-- **Change identity/tiers offered**: edit + re-`sign` the manifest, redeploy the Flux
-  App; MT re-pulls.
+- **Change price/capacity**: update the agent's `AGENT_LISTING_JSON` and restart it, and
+  update `priceCents` in `config.env`'s `TIERS_JSON` → re-run `manifest env` → re-import
+  `env.json` (free) so the Coalition's `TIER_PRICES_JSON` matches. No re-signing.
+- **Change identity/tiers offered**: edit `config.env`, re-`sign` the manifest, re-run
+  `manifest env`, and re-import `env.json` (free); MT re-pulls.
 - **Staleness**: if MT stops seeing fresh stats *and* listing past the TTL, your
   provider auto-hides from the marketplace (data retained) and auto-re-lists on the
   next fresh update — so keep the agent and Coalition running.
