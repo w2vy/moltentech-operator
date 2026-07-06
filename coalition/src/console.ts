@@ -19,7 +19,6 @@
  * per-action signed, so a stolen cookie can read state but cannot authorize anything.
  */
 import type { IncomingHttpHeaders } from "node:http";
-import { readFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import {
   PendingAuthPush,
@@ -43,7 +42,7 @@ import {
   CONSOLE_THEME_CSS,
 } from "@moltentech/protocol/sign-launcher";
 import { mintSessionCookie, newNonce } from "./session";
-import type { CoalitionConfig } from "./config";
+import { readManifest, type CoalitionConfig } from "./config";
 
 export type ConsoleResult = { status: number; contentType: string; body: string; headers?: Record<string, string> };
 const json = (status: number, obj: unknown): ConsoleResult => ({
@@ -101,7 +100,7 @@ let cachedManifest: { pubkey?: string; coalitionUrl?: string } | null = null;
 function manifest(cfg: CoalitionConfig): { pubkey?: string; coalitionUrl?: string } {
   if (cachedManifest) return cachedManifest;
   try {
-    cachedManifest = JSON.parse(readFileSync(cfg.manifestPath, "utf8"));
+    cachedManifest = JSON.parse(readManifest(cfg));
   } catch {
     cachedManifest = {};
   }

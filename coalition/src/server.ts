@@ -1,7 +1,6 @@
 import http from "node:http";
-import { readFileSync } from "node:fs";
 import { CheckoutInitRequest, ManageRequest } from "@moltentech/protocol";
-import type { CoalitionConfig } from "./config";
+import { readManifest, type CoalitionConfig } from "./config";
 import type { StripeLike } from "./stripe";
 import { handleCheckout, handleManage, handleWebhook } from "./payments";
 import { getStatsSnapshot } from "./stats";
@@ -64,7 +63,7 @@ export function createServer(stripe: StripeLike, cfg: CoalitionConfig): http.Ser
 
       if (method === "GET" && url === "/.well-known/mt-provider.json") {
         try {
-          const body = readFileSync(cfg.manifestPath, "utf8");
+          const body = readManifest(cfg);
           res.writeHead(200, { "content-type": "application/json" });
           res.end(body);
         } catch {
