@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { z } from "zod";
 import { TierKey } from "@moltentech/protocol";
 
@@ -24,6 +25,12 @@ export type CoalitionConfig = {
   /** Path to the offline-signed manifest JSON served at /.well-known/mt-provider.json. */
   manifestPath: string;
   /**
+   * Signed manifest JSON supplied directly via the MANIFEST_JSON env var (Flux
+   * published-image deploy, where there is no file to mount). When set it wins
+   * over manifestPath; unset falls back to the file (compose/dev mount it).
+   */
+  manifestJson?: string;
+  /**
    * The operator's owner ZelID — the console authorizes only signatures that
    * recover to it (the login-less per-action gate). Defaults to the same address
    * the agent pins as OWNER_ADDRESS. (Future: resolve via Flux app-owner lookup.)
@@ -49,6 +56,16 @@ function req(env: NodeJS.ProcessEnv, k: string): string {
   return v;
 }
 
+/**
+ * The signed manifest body served at /.well-known/mt-provider.json (and read by the
+ * console for the agent-auth pubkey). Prefers MANIFEST_JSON env (Flux published-image
+ * deploy); falls back to the file at manifestPath (compose/dev mounts it). Throws when
+ * neither source is available — callers handle that (503 / empty).
+ */
+export function readManifest(cfg: CoalitionConfig): string {
+  return cfg.manifestJson ?? readFileSync(cfg.manifestPath, "utf8");
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): CoalitionConfig {
   return {
     port: Number(env.PORT ?? 8088),
@@ -60,6 +77,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CoalitionConfi
     stripeSecretKey: req(env, "STRIPE_SECRET_KEY"),
     stripeWebhookSecret: req(env, "STRIPE_WEBHOOK_SECRET"),
     manifestPath: env.MANIFEST_PATH ?? "./manifest.json",
+    manifestJson: env.MANIFEST_JSON || undefined,
     ownerAddress: env.OWNER_ADDRESS || undefined,
     sessionSecret: env.SESSION_SECRET || undefined,
     sessionTtlMs: Number(env.SESSION_TTL_HOURS ?? 24) * 3_600_000,
