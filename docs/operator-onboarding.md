@@ -39,11 +39,15 @@ customer ─buy──▶ │ storefront → calls your Coalition /checkout → S
 
 ## Step 1 — Generate your signing key + config
 
-From the `protocol/` package:
+The signing tool is the published image **`ghcr.io/w2vy/mt-manifest`** — no source
+checkout, no Node install. It's secret-free: your key is generated into the mounted
+working directory, never baked into the image. Define a shorthand for it (persists for
+this shell session; every `mt-manifest` command below reads/writes the **current
+directory**, so run them all from the same folder):
 
 ```sh
-npm install
-npm run manifest keygen        # writes manifest-key.pem (KEEP SECRET, 0600) + prints your pubkey
+alias mt-manifest='docker run --rm -v "$PWD:/work" -u "$(id -u):$(id -g)" ghcr.io/w2vy/mt-manifest'
+mt-manifest keygen             # writes manifest-key.pem (KEEP SECRET, 0600) + prints your pubkey
 ```
 
 Create a **`config.env`** — your single **non-secret** source of truth. It drives *both*
@@ -57,7 +61,7 @@ PROVIDER_CONTACT=ops@example.com
 MT_BASE_URL=https://www.moltentech.us
 COALITION_URL=https://<your-coalition>          # the stable HTTPS URL from Step 3
 OWNER_ADDRESS=<your owner ZelID>                 # who the console authorizes actions for
-MT_PUBKEY=<MT ed25519 pubkey, from MT /api/mt-pubkey>
+MT_PUBKEY=                                       # optional; pin later from {MT_BASE_URL}/api/mt-pubkey once MT enables signing (503 until then). Only the Coalition uses it.
 TIERS_JSON=[{"tier":"nimbus","capacity":8,"storagePool":"local-lvm","priceCents":2200}]
 TRIAL_DAYS=1
 MANUAL_APPROVAL=false
@@ -66,8 +70,8 @@ MANUAL_APPROVAL=false
 Sign the manifest from it:
 
 ```sh
-npm run manifest sign --key manifest-key.pem --from-config config.env --out manifest.json
-npm run manifest verify --in manifest.json     # sanity: "OK — signature valid"
+mt-manifest sign --key manifest-key.pem --from-config config.env --out manifest.json
+mt-manifest verify --in manifest.json          # sanity: "OK — signature valid"
 ```
 
 `manifest.json` is what your Coalition publishes. **Price is NOT in the manifest** —
@@ -119,10 +123,11 @@ AGENT_KEY=placeholder                            # real value in Step 5
 COALITION_KEY=placeholder                        # real value in Step 5
 ```
 
-Then build the Flux import blob from config + secrets + your signed manifest:
+Then build the Flux import blob from config + secrets + your signed manifest, reusing
+the same `mt-manifest` shorthand from Step 1 (same shell / same directory):
 
 ```sh
-npm run manifest env --from-config config.env --secrets secrets.env \
+mt-manifest env --from-config config.env --secrets secrets.env \
   --manifest manifest.json --out env.json
 ```
 

@@ -42,19 +42,28 @@ non-TS consumer.
 ## Signing CLI (`mt-manifest`)
 
 Operator tooling to produce a signed Provider Manifest (shares this package's
-ed25519 + canonicalization, so it always verifies on MT's side):
+ed25519 + canonicalization, so it always verifies on MT's side). Ships as the
+published image **`ghcr.io/w2vy/mt-manifest`** so operators need no source checkout
+or Node — it's secret-free (your key is generated into the mounted workdir, never
+baked in):
 
 ```sh
-npm install
-npm run manifest keygen            # -> manifest-key.pem (KEEP SECRET) + prints pubkey
-npm run manifest init              # -> manifest.body.json template (edit it)
-npm run manifest sign --key manifest-key.pem --in manifest.body.json --out manifest.json
-npm run manifest verify --in manifest.json
+alias mt-manifest='docker run --rm -v "$PWD:/work" -u "$(id -u):$(id -g)" ghcr.io/w2vy/mt-manifest'
+mt-manifest keygen                                                       # -> manifest-key.pem (KEEP SECRET) + pubkey
+mt-manifest sign --key manifest-key.pem --from-config config.env --out manifest.json
+mt-manifest verify --in manifest.json
+mt-manifest env  --from-config config.env --secrets secrets.env --manifest manifest.json --out env.json
 ```
 
-`sign` stamps `pubkey` (from the key) + a fresh `publishedAt`, schema-validates the
-body, signs the canonical bytes, and self-verifies. Publish `manifest.json` at the
-Coalition's `/.well-known/mt-provider.json`; the MT admin ingests that URL.
+Commands: `keygen` (ed25519 keypair); `sign` (canonical-sign the manifest —
+`--from-config config.env` is the current flow; legacy `init` + `--in
+manifest.body.json` still work); `verify`; and `env` (assemble the Coalition's Flux
+`env.json` = config + secrets + embedded signed manifest). `sign` stamps `pubkey`
+(from the key) + a fresh `publishedAt`, schema-validates, signs the canonical bytes,
+and self-verifies. Publish `manifest.json` at the Coalition's
+`/.well-known/mt-provider.json`; the MT admin ingests that URL.
+
+From source instead (dev): `npm install`, then `npm run manifest <cmd>` in this package.
 
 ## Status
 
