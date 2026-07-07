@@ -53,15 +53,23 @@ mt-manifest keygen             # writes manifest-key.pem (KEEP SECRET, 0600) + p
 Create a **`config.env`** — your single **non-secret** source of truth. It drives *both*
 the signed manifest and the Coalition's runtime config, so the two can never drift:
 
+> ⚠️ **Comments must be on their own line.** The parser only strips *full-line* `#`
+> comments; a trailing `KEY=value   # note` keeps `value   # note` as the value. A
+> stray inline comment on `COALITION_URL` breaks MT's ability to reach your Coalition.
+
 ```sh
 PROVIDER_SLUG=your-slug
 PROVIDER_NAME=Your Operator Name
 PROVIDER_LOCATION=City, Country
 PROVIDER_CONTACT=ops@example.com
 MT_BASE_URL=https://www.moltentech.us
-COALITION_URL=https://<your-coalition>          # the stable HTTPS URL from Step 3
-OWNER_ADDRESS=<your owner ZelID>                 # who the console authorizes actions for
-MT_PUBKEY=                                       # optional; pin later from {MT_BASE_URL}/api/mt-pubkey once MT enables signing (503 until then). Only the Coalition uses it.
+# COALITION_URL — the stable HTTPS URL your Coalition serves at (Step 3)
+COALITION_URL=https://<your-coalition>
+# OWNER_ADDRESS — the ZelID the console authorizes actions for
+OWNER_ADDRESS=<your owner ZelID>
+# MT_PUBKEY — optional; leave blank for now. Pin later from {MT_BASE_URL}/api/mt-pubkey
+# once MT enables signing (503 until then). Only the Coalition consumes it.
+MT_PUBKEY=
 TIERS_JSON=[{"tier":"nimbus","capacity":8,"storagePool":"local-lvm","priceCents":2200}]
 TRIAL_DAYS=1
 MANUAL_APPROVAL=false
@@ -118,13 +126,19 @@ in Step 5 (a **free** env re-import).
 commit) — your Stripe key + webhook secret + a session secret, and the MT keys
 (placeholder until Step 5):
 
+Same rule as `config.env`: **comments on their own line only** — a trailing comment
+after `AGENT_KEY`/`COALITION_KEY` becomes part of the key and MT will reject it (401).
+
 ```sh
 # secrets.env
 STRIPE_SECRET_KEY=rk_live_<restricted>
 STRIPE_WEBHOOK_SECRET=whsec_<from step 2>
-SESSION_SECRET=<openssl rand -hex 32>            # optional; local-only. Set = console view-gate on (wallet-login to view); blank = reads ungated. Node ACTIONS are wallet-signed either way.
-AGENT_KEY=placeholder                            # real value in Step 5
-COALITION_KEY=placeholder                        # real value in Step 5
+# SESSION_SECRET — optional, local-only. Set = console view-gate on (wallet-login to
+# view); blank = reads ungated. Node ACTIONS are wallet-signed either way.
+SESSION_SECRET=<openssl rand -hex 32>
+# AGENT_KEY / COALITION_KEY — set to "placeholder" now; paste the real values in Step 5.
+AGENT_KEY=placeholder
+COALITION_KEY=placeholder
 ```
 
 Then build the Flux import blob from config + secrets + your signed manifest, reusing
