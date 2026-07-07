@@ -83,7 +83,11 @@ mt-manifest verify --in manifest.json          # sanity: "OK — signature valid
 ## Step 2 — Stripe setup
 
 1. Create a **restricted API key** (Stripe Dashboard → Developers → API keys →
-   Create restricted key). Grant **only**:
+   **Create restricted key**). This must be a *restricted* key (`rk_…`), **not** a
+   standard secret key (`sk_…`) — a standard key can move money and read your whole
+   account, which is exactly what the Coalition must never hold. To sandbox first,
+   flip the dashboard to **Test mode** and mint an `rk_test_…`; the live `rk_live_…`
+   is a separate key you create the same way once you go live. Grant **only**:
    - Checkout Sessions: **Write**
    - Products: **Write**, Prices: **Read + Write** (the Coalition materializes your
      per-tier Price from the price you declare)
@@ -118,7 +122,7 @@ commit) — your Stripe key + webhook secret + a session secret, and the MT keys
 # secrets.env
 STRIPE_SECRET_KEY=rk_live_<restricted>
 STRIPE_WEBHOOK_SECRET=whsec_<from step 2>
-SESSION_SECRET=<openssl rand -hex 32>            # signs the console login cookie
+SESSION_SECRET=<openssl rand -hex 32>            # optional; local-only. Set = console view-gate on (wallet-login to view); blank = reads ungated. Node ACTIONS are wallet-signed either way.
 AGENT_KEY=placeholder                            # real value in Step 5
 COALITION_KEY=placeholder                        # real value in Step 5
 ```
