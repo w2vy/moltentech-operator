@@ -21,10 +21,25 @@ export const dryRunExecutor: Executor = async (job) => ({
 });
 
 /**
+ * Emit a value as a YAML double-quoted scalar. A JSON string literal is a valid YAML
+ * 1.x double-quoted scalar (`\n`, `\"`, `\\`, `\uXXXX` all decode identically under
+ * PyYAML `safe_load`), so the parsed value is byte-identical to the input while newlines
+ * / quotes / indentation can no longer break out and inject YAML structure. Numeric and
+ * boolean fields are emitted bare (they must keep their YAML type and aren't injectable).
+ */
+function yamlStr(v: string | number): string {
+  return JSON.stringify(String(v));
+}
+
+/**
  * Build the arcane-mage provision YAML from a Job + the agent's LOCAL host config.
  * Mirrors apps/web/src/lib/yaml-generator.ts, but every hypervisor/host value comes
  * from the operator's own config (MT never sends Proxmox creds or storage IDs) and
  * the identity key arrives already decrypted in the Job. Pure + unit-testable.
+ *
+ * All string values go through `yamlStr()` — customer-controlled fields (flux_id,
+ * identity_key, tx_id, discord/telegram) MUST NOT be interpolated raw, or a crafted
+ * value with newlines could inject sibling YAML keys (e.g. override `hypervisor`).
  */
 export function buildProvisionYaml(job: Job, cfg: AgentConfig): string {
   const { slot, nodeConfig } = job;
@@ -34,46 +49,46 @@ export function buildProvisionYaml(job: Job, cfg: AgentConfig): string {
 
   L.push("nodes:");
   L.push("  - hypervisor:");
-  L.push(`      node: ${slot.nodeName}`);
-  L.push(`      vm_name: ${slot.vmName}`);
-  L.push(`      node_tier: ${slot.tier}`);
-  L.push(`      network: ${h.network}`);
-  L.push(`      iso_name: ${h.arcaneIso}`);
-  L.push(`      storage_images: ${slot.storagePool ?? h.storageImages}`);
-  L.push(`      storage_iso: ${h.storageIso}`);
-  L.push(`      storage_import: ${h.storageImport}`);
+  L.push(`      node: ${yamlStr(slot.nodeName)}`);
+  L.push(`      vm_name: ${yamlStr(slot.vmName)}`);
+  L.push(`      node_tier: ${yamlStr(slot.tier)}`);
+  L.push(`      network: ${yamlStr(h.network)}`);
+  L.push(`      iso_name: ${yamlStr(h.arcaneIso)}`);
+  L.push(`      storage_images: ${yamlStr(slot.storagePool ?? h.storageImages)}`);
+  L.push(`      storage_iso: ${yamlStr(h.storageIso)}`);
+  L.push(`      storage_import: ${yamlStr(h.storageImport)}`);
   L.push("      start_on_creation: true");
   if (slot.vmId != null) L.push(`      vm_id: ${slot.vmId}`);
-  if (slot.startupConfig) L.push(`      startup_config: "${slot.startupConfig}"`);
+  if (slot.startupConfig) L.push(`      startup_config: ${yamlStr(slot.startupConfig)}`);
   if (slot.diskLimit != null) L.push(`      disk_limit: ${slot.diskLimit}`);
   if (slot.cpuLimit != null) L.push(`      cpu_limit: ${slot.cpuLimit}`);
   if (slot.networkLimit != null) L.push(`      network_limit: ${slot.networkLimit}`);
 
   L.push("    system:");
-  L.push(`      hostname: ${slot.vmName}`);
-  L.push(`      hashed_console: "${h.consoleHash}"`);
-  if (h.sshPubkey) L.push(`      ssh_pubkey: ${h.sshPubkey}`);
+  L.push(`      hostname: ${yamlStr(slot.vmName)}`);
+  L.push(`      hashed_console: ${yamlStr(h.consoleHash)}`);
+  if (h.sshPubkey) L.push(`      ssh_pubkey: ${yamlStr(h.sshPubkey)}`);
 
   L.push("    network:");
   L.push("      ip_allocation: static");
   L.push("      address_config:");
-  L.push(`        address: ${slot.lanIp}`);
-  L.push(`        gateway: ${slot.gateway}`);
+  L.push(`        address: ${yamlStr(slot.lanIp)}`);
+  L.push(`        gateway: ${yamlStr(slot.gateway)}`);
   L.push("        dns:");
-  L.push(`          - ${slot.dns1}`);
-  L.push(`          - ${slot.dns2}`);
+  L.push(`          - ${yamlStr(slot.dns1)}`);
+  L.push(`          - ${yamlStr(slot.dns2)}`);
   if (slot.vlan != null) L.push(`      vlan: ${slot.vlan}`);
   if (slot.rateLimit != null) L.push(`      rate_limit: ${slot.rateLimit}`);
 
   L.push("    fluxnode:");
   L.push("      identity:");
-  L.push(`        flux_id: ${nodeConfig.fluxId}`);
-  L.push(`        identity_key: ${nodeConfig.fluxIdentityKey}`);
+  L.push(`        flux_id: ${yamlStr(nodeConfig.fluxId)}`);
+  L.push(`        identity_key: ${yamlStr(nodeConfig.fluxIdentityKey)}`);
   L.push(`        output_id: ${nodeConfig.collateralVout}`);
-  L.push(`        tx_id: ${nodeConfig.collateralTxid}`);
+  L.push(`        tx_id: ${yamlStr(nodeConfig.collateralTxid)}`);
   L.push("      network:");
   L.push(`        upnp_port: ${slot.apiPort}`);
-  L.push(`        router_address: ${slot.gateway}`);
+  L.push(`        router_address: ${yamlStr(slot.gateway)}`);
 
   const hasDiscord = nodeConfig.discordUserId && nodeConfig.discordWebhook;
   const hasTelegram = nodeConfig.telegramBotToken && nodeConfig.telegramChatId;
@@ -81,13 +96,13 @@ export function buildProvisionYaml(job: Job, cfg: AgentConfig): string {
     L.push("      notifications:");
     if (hasDiscord) {
       L.push("        discord:");
-      L.push(`          user_id: "${nodeConfig.discordUserId}"`);
-      L.push(`          webhook_url: ${nodeConfig.discordWebhook}`);
+      L.push(`          user_id: ${yamlStr(nodeConfig.discordUserId!)}`);
+      L.push(`          webhook_url: ${yamlStr(nodeConfig.discordWebhook!)}`);
     }
     if (hasTelegram) {
       L.push("        telegram:");
-      L.push(`          bot_token: "${nodeConfig.telegramBotToken}"`);
-      L.push(`          chat_id: "${nodeConfig.telegramChatId}"`);
+      L.push(`          bot_token: ${yamlStr(nodeConfig.telegramBotToken!)}`);
+      L.push(`          chat_id: ${yamlStr(nodeConfig.telegramChatId!)}`);
     }
   }
 

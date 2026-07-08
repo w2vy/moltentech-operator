@@ -20,6 +20,14 @@ export const ProviderSlug = z
   .max(40)
   .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, "lowercase kebab-case");
 
+/**
+ * A single-line string with no control characters (newlines, CR, tabs, NUL, etc.).
+ * Use for any value that gets written into a structured document (e.g. the provision
+ * YAML) where an embedded newline could inject syntax. Rejects C0 controls + DEL.
+ */
+// eslint-disable-next-line no-control-regex
+export const NoCtrl = z.string().regex(/^[^\u0000-\u001f\u007f]*$/, "control characters not allowed");
+
 /** Money is always integer cents. v1 is USD-only; currency is explicit for forward-compat. */
 export const PriceCents = z.number().int().positive();
 export const Currency = z.enum(["usd"]); // multi-currency = later manifest field
