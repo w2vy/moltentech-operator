@@ -2,6 +2,7 @@ import { z } from "zod";
 import {
   Currency,
   Envelope,
+  NoCtrl,
   PriceCents,
   ProviderSlug,
   TierKey,
@@ -194,15 +195,19 @@ export const Job = Envelope.extend({
    */
   nodeConfig: z
     .object({
-      fluxId: z.string().min(1),
-      fluxIdentityKey: z.string().min(1),
-      collateralTxid: z.string().min(1),
+      // No control chars (newlines/CR/etc.): these values are written into the
+      // provision YAML, so a newline would let a crafted value inject sibling keys.
+      // Defense in depth — MT validates format at ingestion; the agent refuses
+      // anything malformed at its own trust boundary too.
+      fluxId: NoCtrl.min(1),
+      fluxIdentityKey: NoCtrl.min(1),
+      collateralTxid: NoCtrl.min(1),
       collateralVout: z.number().int().nonnegative(),
       // Optional customer node-level alerts (passed through to the node's config).
-      discordUserId: z.string().nullable().default(null),
-      discordWebhook: z.string().nullable().default(null),
-      telegramBotToken: z.string().nullable().default(null),
-      telegramChatId: z.string().nullable().default(null),
+      discordUserId: NoCtrl.nullable().default(null),
+      discordWebhook: NoCtrl.nullable().default(null),
+      telegramBotToken: NoCtrl.nullable().default(null),
+      telegramChatId: NoCtrl.nullable().default(null),
     })
     .optional(),
   /**
