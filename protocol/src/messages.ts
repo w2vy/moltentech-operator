@@ -349,15 +349,52 @@ export const StatsTier = z.object({
 });
 export type StatsTier = z.infer<typeof StatsTier>;
 
+/** Slot lifecycle status MT tracks for a provisioned-but-not-yet-active node. */
+export const SlotLifecycleStatus = z.enum(["bootstrap", "benchmark", "awaiting_start", "active"]);
+export type SlotLifecycleStatus = z.infer<typeof SlotLifecycleStatus>;
+
 // A live node the Coalition's collector should poll (public host:apiPort). MT is
 // the authoritative source (it knows the provider's slots); the Coalition fetches
 // this list via GET /api/agent/nodes, then polls each node's Flux API externally.
+// `status`/`collateralTxid`/`collateralVout` are present for non-active slots only
+// (bootstrap/benchmark/awaiting_start) — the fields the Coalition's collateral
+// lifecycle collector needs; absent once a slot is `active`.
 export const AgentNode = z.object({
   tier: TierKey,
   host: z.string().min(1),
   apiPort: z.number().int().positive(),
+  status: SlotLifecycleStatus.optional(),
+  collateralTxid: z.string().min(1).optional(),
+  collateralVout: z.number().int().nonnegative().optional(),
 });
 export type AgentNode = z.infer<typeof AgentNode>;
+
+// ───────────────────────────────────────────────────────────────────────────
+// 8. lifecycle  —  operator Coalition → MT  (agent-managed collateral guard)
+//    The Coalition polls each non-active node's benchmark endpoint + the public
+//    Flux blockchain API (collateral confirmations, deterministic-list membership)
+//    and reports the raw measurements here; MT alone decides Slot transitions and
+//    fires customer notifications, mirroring apps/provisioner/index.js's
+//    checkBenchmarks() but for agent-managed slots. Coalition makes no decisions —
+//    same relay-raw-facts pattern as PaymentEvent. Auth: per-provider agent key.
+// ───────────────────────────────────────────────────────────────────────────
+export const LifecycleNodeStatus = z.object({
+  vmName: z.string().min(1),
+  /** Node self-reported a supported tier via its benchmark API this poll. */
+  benchmarkPassed: z.boolean(),
+  /** Collateral UTXO confirmations (getblockcount - tx.height + 1); null = unreadable (fail-closed upstream). */
+  collateralConfs: z.number().int().nonnegative().nullable(),
+  /** True once the node's collateral appears on the Flux deterministic node list. */
+  onDeterministicList: z.boolean(),
+});
+export type LifecycleNodeStatus = z.infer<typeof LifecycleNodeStatus>;
+
+export const LifecycleReport = Envelope.extend({
+  providerSlug: ProviderSlug,
+  reportedAt: Timestamp,
+  nodes: z.array(LifecycleNodeStatus),
+});
+export type LifecycleReport = z.infer<typeof LifecycleReport>;
 
 export const StatsSnapshot = Envelope.extend({
   providerSlug: ProviderSlug,
