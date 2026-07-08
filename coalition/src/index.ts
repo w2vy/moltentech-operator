@@ -2,8 +2,12 @@ import { loadConfig } from "./config";
 import { createStripe } from "./stripe";
 import { createServer } from "./server";
 import { collectStats } from "./stats";
+import { checkCollateralOnce } from "./collateral";
 
 const STATS_INTERVAL_MS = 5 * 60_000;
+// Gates a customer-visible action (the Start cue), so poll faster than stats —
+// matches the first-party central poller's retry cadence.
+const COLLATERAL_INTERVAL_MS = 2 * 60_000;
 
 async function main() {
   const cfg = loadConfig();
@@ -13,6 +17,11 @@ async function main() {
   setInterval(() => {
     collectStats(cfg).catch((e) => console.error("[coalition] stats error:", e.message));
   }, STATS_INTERVAL_MS);
+
+  await checkCollateralOnce(cfg).catch((e) => console.error("[coalition] initial collateral check error:", e.message));
+  setInterval(() => {
+    checkCollateralOnce(cfg).catch((e) => console.error("[coalition] collateral check error:", e.message));
+  }, COLLATERAL_INTERVAL_MS);
 
   const server = createServer(stripe, cfg);
   server.listen(cfg.port, () => {

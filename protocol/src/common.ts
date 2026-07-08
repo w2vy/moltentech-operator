@@ -36,6 +36,16 @@ export const Currency = z.enum(["usd"]); // multi-currency = later manifest fiel
 export const Timestamp = z.string().datetime();
 
 /**
+ * Flux rejects a fluxnode START whose collateral UTXO has under this many
+ * confirmations and applies a DoS-score cooldown, so the customer's "go start
+ * your node" cue is withheld until collateral matures. Shared by MT's
+ * lifecycle-guard decision logic and the Coalition's console display; MT's
+ * first-party central provisioner (`apps/provisioner/index.js`, plain JS, no
+ * import boundary crosses the runtime split) keeps its own copy in sync by hand.
+ */
+export const COLLATERAL_MIN_CONFIRMATIONS = 100;
+
+/**
  * Auth conventions (carried in HTTP headers, not the JSON body):
  * - Coalition → MT and agent → MT: `Authorization: Bearer <per-provider key>`;
  *   MT stores only `sha256(key)` as `Provider.agentKeyHash` and scopes every

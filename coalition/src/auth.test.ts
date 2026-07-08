@@ -28,6 +28,7 @@ function cfg(over: Partial<CoalitionConfig> = {}): CoalitionConfig {
     tierPrices: {},
     trialDays: 1,
     statsWindowDays: 90,
+    fluxApiUrl: "https://api.runonflux.io",
     sessionTtlMs: 86_400_000,
     mtPubkey: mt.publicKeyBase64,
     ...over,

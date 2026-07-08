@@ -48,6 +48,8 @@ export type CoalitionConfig = {
   tierPrices: Record<string, number>;
   trialDays: number;
   statsWindowDays: number;
+  /** Flux public API base for the collateral-guard collector (confs + deterministic-list). */
+  fluxApiUrl: string;
 };
 
 function req(env: NodeJS.ProcessEnv, k: string): string {
@@ -84,5 +86,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CoalitionConfi
     tierPrices: TierPrices.parse(JSON.parse(req(env, "TIER_PRICES_JSON"))),
     trialDays: Number(env.TRIAL_DAYS ?? 1),
     statsWindowDays: Number(env.STATS_WINDOW_DAYS ?? 90),
+    fluxApiUrl: (env.FLUX_API ?? "https://api.runonflux.io").replace(/\/$/, ""),
   };
 }

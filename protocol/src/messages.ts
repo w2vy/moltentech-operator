@@ -358,8 +358,10 @@ export type SlotLifecycleStatus = z.infer<typeof SlotLifecycleStatus>;
 // this list via GET /api/agent/nodes, then polls each node's Flux API externally.
 // `status`/`collateralTxid`/`collateralVout` are present for non-active slots only
 // (bootstrap/benchmark/awaiting_start) — the fields the Coalition's collateral
-// lifecycle collector needs; absent once a slot is `active`.
+// lifecycle collector needs to measure + key its LifecycleNodeStatus reports by
+// `vmName`; absent (other than vmName/tier/host/apiPort) once a slot is `active`.
 export const AgentNode = z.object({
+  vmName: z.string().min(1),
   tier: TierKey,
   host: z.string().min(1),
   apiPort: z.number().int().positive(),
