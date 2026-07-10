@@ -435,15 +435,6 @@ export function handleZelcoreCallback(
     signature = "";
   }
   const r = verifyAndQueue(cfg, query.get("slotId") ?? "", query.get("claim") ?? "", signature.trim());
-  // TEMP DEBUG (remove once the Zelcore-callback issue is diagnosed): log the raw
-  // body Zelcore actually posted + the outcome, since "Failed to send signed
-  // message" could mean it never reached us, reached us malformed, or reached us
-  // fine but verifyAndQueue rejected it for a reason not visible client-side.
-  console.error(
-    `[debug/zelcore-callback] contentType=${JSON.stringify(contentType)} ` +
-      `rawBody=${JSON.stringify(raw.slice(0, 500))} parsedSignature=${JSON.stringify(signature)} ` +
-      `outcome=${r.ok ? "ok" : `FAILED status=${r.status} msg=${r.msg}`}`
-  );
   // Zelcore only needs a status; the operator's console page auto-refreshes to reflect it.
   return r.ok ? json(200, { status: "success" }) : json(r.status, { status: "error", error: r.msg });
 }
