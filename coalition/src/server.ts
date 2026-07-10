@@ -37,6 +37,18 @@ function readBody(req: http.IncomingMessage): Promise<Buffer> {
  */
 export function createServer(stripe: StripeLike, cfg: CoalitionConfig): http.Server {
   return http.createServer(async (req, res) => {
+    // TEMP DEBUG (remove once the Zelcore-callback header mismatch is diagnosed):
+    // log every inbound request so we can see exactly what Flux's ingress forwards
+    // and whether Zelcore's callback attempt reaches us at all, on what path.
+    console.error(
+      `[debug/request] ${req.method} ${req.url} ` +
+        `host=${JSON.stringify(req.headers["host"])} ` +
+        `x-forwarded-host=${JSON.stringify(req.headers["x-forwarded-host"])} ` +
+        `x-forwarded-proto=${JSON.stringify(req.headers["x-forwarded-proto"])} ` +
+        `x-forwarded-for=${JSON.stringify(req.headers["x-forwarded-for"])} ` +
+        `content-type=${JSON.stringify(req.headers["content-type"])} ` +
+        `user-agent=${JSON.stringify(req.headers["user-agent"])}`
+    );
     // Stamp every response with the running code version so MT (which pulls the
     // manifest + stats) can detect providers on an outdated coalition. setHeader
     // persists across whichever writeHead runs below.
@@ -166,6 +178,15 @@ export function createServer(stripe: StripeLike, cfg: CoalitionConfig): http.Ser
         return sendResult(handleConsoleIndex(cfg));
       }
       if (method === "GET" && url === "/console/sign") {
+        // TEMP DEBUG (remove once the Zelcore-callback header mismatch is diagnosed):
+        // print exactly what the Flux/Caddy ingress forwarded, since the Zelcore
+        // callback URL is built from reqOrigin below.
+        console.error(
+          `[debug/console-sign] host=${JSON.stringify(req.headers["host"])} ` +
+            `x-forwarded-host=${JSON.stringify(req.headers["x-forwarded-host"])} ` +
+            `x-forwarded-proto=${JSON.stringify(req.headers["x-forwarded-proto"])} ` +
+            `reqOrigin=${JSON.stringify(reqOrigin)}`
+        );
         return sendResult(handleConsoleSign(cfg, query, reqOrigin));
       }
       // Sign page polls this to detect the Zelcore-callback (server-side) success.
