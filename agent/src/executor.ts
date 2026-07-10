@@ -109,7 +109,22 @@ export function buildProvisionYaml(job: Job, cfg: AgentConfig): string {
   return L.join("\n") + "\n";
 }
 
-type AmResult = { error: Error | null; stdout: string; stderr: string; json: { ok?: boolean; error?: string; vm_id?: number } | null };
+type AmResult = {
+  error: Error | null;
+  stdout: string;
+  stderr: string;
+  json: {
+    ok?: boolean;
+    error?: string;
+    vm_id?: number;
+    changed?: boolean;
+    iso?: string;
+    previous?: string;
+    build?: string;
+    severity?: string;
+    release?: string;
+  } | null;
+};
 
 /** Invoke the arcane-mage CLI with the LOCAL Proxmox creds as subcommand options. */
 function runArcaneMage(args: string[], cfg: AgentConfig, timeoutMs: number): Promise<AmResult> {
@@ -129,7 +144,7 @@ function runArcaneMage(args: string[], cfg: AgentConfig, timeoutMs: number): Pro
   });
 }
 
-const TIMEOUT = { provision: 300_000, delete: 120_000, reprovision: 420_000 };
+const TIMEOUT = { provision: 300_000, delete: 120_000, reprovision: 420_000, refreshIso: 1_200_000 };
 
 /**
  * Build the richest failure message for a failed arcane-mage run. The structured
@@ -175,6 +190,34 @@ async function provision(job: Job, cfg: AgentConfig): Promise<ExecResult> {
       /* already gone */
     }
   }
+}
+
+export type IsoRefreshResult = {
+  ok: boolean;
+  changed?: boolean;
+  iso?: string;
+  previous?: string;
+  build?: string;
+  severity?: string;
+  release?: string;
+  error?: string;
+};
+
+/** Check the RunOnFlux release feed and stage a newer ArcaneOS/FluxLive ISO on `node`
+ * if one isn't already staged. Thin wrapper over `arcane-mage refresh-iso`. */
+export async function refreshIso(
+  node: string,
+  storageIso: string,
+  currentIso: string | undefined,
+  cfg: AgentConfig
+): Promise<IsoRefreshResult> {
+  const args = ["refresh-iso", "--json", "--node", node, "--storage-iso", storageIso];
+  if (currentIso) args.push("--current-iso", currentIso);
+  const r = await runArcaneMage(args, cfg, TIMEOUT.refreshIso);
+  if (r.json && typeof r.json.ok === "boolean") {
+    return { ...r.json, ok: r.json.ok };
+  }
+  return { ok: false, error: amFailure(r) };
 }
 
 /**
