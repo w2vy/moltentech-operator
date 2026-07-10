@@ -6,6 +6,7 @@ import { CoalitionClient } from "./coalition-client";
 import { loadManifestKey } from "./signing";
 import { pickExecutor } from "./executor";
 import { collectHealth } from "./health";
+import { refreshIsoOnce } from "./iso-refresh";
 
 /**
  * Operator agent main loop. Outbound-only: it pulls jobs and pushes results +
@@ -137,10 +138,12 @@ async function main() {
   await reassertListing();
   await reportHealthOnce();
   await courierOnce();
+  await refreshIsoOnce(cfg);
   const inventoryTimer = setInterval(reassertInventory, cfg.listingIntervalMs);
   const listingTimer = setInterval(reassertListing, cfg.listingIntervalMs);
   const healthTimer = setInterval(reportHealthOnce, cfg.healthIntervalMs);
   const courierTimer = setInterval(courierOnce, cfg.listingIntervalMs);
+  const refreshIsoTimer = setInterval(() => refreshIsoOnce(cfg), cfg.refreshIsoIntervalMs);
 
   while (!stopping) {
     await pollOnce();
@@ -150,6 +153,7 @@ async function main() {
   clearInterval(listingTimer);
   clearInterval(healthTimer);
   clearInterval(courierTimer);
+  clearInterval(refreshIsoTimer);
 }
 
 main().catch((err) => {

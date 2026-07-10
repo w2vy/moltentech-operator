@@ -187,7 +187,7 @@ PROXMOX_TOKEN_SECRET=<secret>
 PROXMOX_NETWORK=vmbr0
 PROXMOX_STORAGE_IMAGES=local-lvm
 PROXMOX_STORAGE_ISO=local
-ARCANE_ISO=<your ArcaneOS ISO name>
+ARCANE_ISO=<your ArcaneOS ISO name>   # auto-kept-current once you declare inventory (Step 6)
 # Offered price/capacity (re-asserted to MT each heartbeat):
 AGENT_LISTING_JSON='[{"tier":"nimbus","priceCents":2200,"capacity":8,"availableSlots":8}]'
 ```
@@ -261,6 +261,16 @@ heartbeat, **provider-scoped**: MT upserts your `ProxmoxHost`/`Slot` rows and ne
 touches another operator's inventory, never hard-deletes a rented slot. Because the
 agent **re-reads the file every heartbeat**, edits apply without a restart. (Alt:
 inline `AGENT_INVENTORY_JSON`; absent = don't declare.)
+
+**ISO auto-refresh:** declaring inventory here also turns on automatic ArcaneOS/FluxLive
+ISO staging — every `nodeName` above (with its `storageIso`, or `PROXMOX_STORAGE_ISO` if
+omitted) gets checked against the RunOnFlux release feed every 6h (`AGENT_REFRESH_ISO_INTERVAL_MS`
+to change it), downloaded + checksum-verified + uploaded automatically when a newer build
+ships, and `ARCANE_ISO` is adopted in-process for the next provision — no more hand-refreshing
+the ISO or hitting "Unable to find ISO image on hypervisor" on a stale build. This is *why*
+Step 6 is worth doing even for a single-host operator, not just for multi-slot bookkeeping.
+Without declared inventory, the agent has no local record of your Proxmox node name and
+falls back to today's static behavior (`ARCANE_ISO` never auto-updates).
 
 ## Step 7 — The operator console (authorize deletes/reprovisions)
 
