@@ -319,6 +319,24 @@ It stores **none** of your Stripe or Proxmox credentials.
   `/providers` → you get a Stripe Checkout (your account) with a trial → MT records a
   rental → your agent provisions the node → result flows back.
 
+## After provisioning: the collateral guard
+
+A freshly-provisioned node doesn't go live immediately. Flux rejects a fluxnode
+START whose collateral UTXO has under ~100 confirmations and applies a DoS-score
+cooldown, so MT withholds the customer's "go start your node" email until the
+node's benchmarks pass **and** its collateral clears 100 confirmations
+(typically ~50 minutes after the collateral funding tx is mined).
+
+**Your Coalition owns this check, not the agent.** Every ~2 minutes it polls
+each of your still-maturing nodes' benchmark endpoint plus the public Flux
+blockchain API and reports the measurements to MT, which decides when to flip
+the node's status and email the customer. You can see the live state — which
+nodes are still held, and why — on your own `/console` page (a read-only
+section appears whenever a node is maturing). This is why the Coalition must
+stay running after a node provisions, not just during checkout — it's already a
+hard requirement (checkout depends on it too), so this adds no new operational
+burden, just an expanded role for a component you're already running.
+
 ## Ongoing operations
 
 - **Change price/capacity**: update the agent's `AGENT_LISTING_JSON` and restart it, and

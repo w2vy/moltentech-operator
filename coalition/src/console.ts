@@ -31,7 +31,9 @@ import {
   HEADER_AGENT_TIMESTAMP,
   HEADER_AGENT_NONCE,
   HEADER_AGENT_SLUG,
+  COLLATERAL_MIN_CONFIRMATIONS,
 } from "@moltentech/protocol";
+import { getCollateralSnapshot } from "./collateral";
 import { bodyHash, checkFreshness, verifyRequest, type RequestEnvelope } from "@moltentech/protocol/signing";
 import { verifyFluxSignature } from "@moltentech/protocol/wallet";
 import {
@@ -184,6 +186,36 @@ function actionBadge(action: string): string {
   return `<span class="badge ${cls}">${escapeHtmlAttribute(action)}</span>`;
 }
 
+/**
+ * Read-only section listing nodes still held for benchmark-pass / collateral
+ * maturity (see `collateral.ts`) — so the operator can see WHY a customer's
+ * node hasn't gone live yet, without needing MT dashboard/admin access.
+ */
+function maturingNodesSection(): string {
+  const snapshot = getCollateralSnapshot().filter((n) => !(n.benchmarkPassed && n.onDeterministicList));
+  if (snapshot.length === 0) return "";
+  const rows = snapshot
+    .map((n) => {
+      const vm = escapeHtmlAttribute(n.vmName);
+      const bench = n.benchmarkPassed
+        ? `<span class="badge badge-move">benchmark ✓</span>`
+        : `<span class="badge">benchmark pending</span>`;
+      const confsText =
+        n.collateralConfs == null
+          ? "—"
+          : `${n.collateralConfs}/${COLLATERAL_MIN_CONFIRMATIONS} confs${n.collateralConfs >= COLLATERAL_MIN_CONFIRMATIONS ? " ✓" : ""}`;
+      const started = n.onDeterministicList ? `<span class="badge badge-move">started ✓</span>` : `<span class="muted">not started</span>`;
+      return `<tr><td class="mono">${vm}</td><td>${bench}</td><td>${escapeHtmlAttribute(confsText)}</td><td>${started}</td></tr>`;
+    })
+    .join("");
+  return `
+<h1>Nodes maturing (collateral / benchmark guard)</h1>
+<p class="muted">MoltenTech withholds the customer's "Start your node" prompt until benchmarks pass and the collateral clears ${COLLATERAL_MIN_CONFIRMATIONS} confirmations — Starting earlier is rejected by Flux with a DoS cooldown. This is informational only.</p>
+<div class="card" style="padding:0;overflow:hidden">
+<table><thead><tr><th>Node</th><th>Benchmark</th><th>Collateral</th><th>Started</th></tr></thead><tbody>${rows}</tbody></table>
+</div>`;
+}
+
 /** GET /console — the pending-authorizations list. Login-less (see module doc). */
 export function handleConsoleIndex(cfg: CoalitionConfig): ConsoleResult {
   const items = [...pending.values()];
@@ -210,6 +242,7 @@ export function handleConsoleIndex(cfg: CoalitionConfig): ConsoleResult {
 <div class="card" style="padding:0;overflow:hidden">
 <table><thead><tr><th>Action</th><th>Rental</th><th></th></tr></thead><tbody>${rows}</tbody></table>
 </div>
+${maturingNodesSection()}
 </div>
 </body></html>`
   );
