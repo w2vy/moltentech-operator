@@ -161,7 +161,8 @@ then paste `env.json` into the app's **Environment Variables → Import** (JSON 
 and `/.well-known/mt-provider.json` returns your signed manifest.
 
 Changing env later (rotate a secret, change tiers, re-sign the manifest) is just a **free
-re-import** of a fresh `env.json` — regenerate it and paste it in; no redeploy transaction.
+re-import** of a fresh `env.json` — regenerate it and paste it in, then use Flux's **Free
+Deploy**.
 
 ---
 
@@ -230,7 +231,7 @@ Coalition. For the manifest-signed courier + owner authorization, also set `MANI
 3. Set the real keys:
    - **Coalition**: put `AGENT_KEY=<agentKey>` + `COALITION_KEY=<coalitionKey>` in
      `secrets.env`, re-run `npm run manifest env …`, and **re-import `env.json`** into the
-     Flux App (free — no redeploy tx).
+     Flux App via **Free Deploy**.
    - **Agent**: `AGENT_KEY=<agentKey>` (remove `AGENT_DRY_RUN` once Proxmox is ready).
 4. MT admin **activates** your provider → your cards go live on `/providers`.
 
