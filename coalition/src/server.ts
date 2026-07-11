@@ -123,6 +123,7 @@ export function createServer(stripe: StripeLike, cfg: CoalitionConfig): http.Ser
             return send(200, await handleManage(stripe, p.data));
           }
         } catch (err) {
+          console.error(`[coalition] POST ${url} failed:`, (err as Error).message);
           return send(502, { error: (err as Error).message });
         }
       }
