@@ -194,24 +194,36 @@ ARCANE_ISO=<your ArcaneOS ISO name>   # auto-kept-current once you declare inven
 AGENT_LISTING_JSON='[{"tier":"nimbus","priceCents":2200,"capacity":8,"availableSlots":8}]'
 ```
 
-Mount `inventory.json` (Step 6) read-only to `/data/inventory.json` — that's where
+Create a small **dedicated subdirectory** for `inventory.json` (Step 6) — `./agent-data/` —
+and mount that *directory* (not the single file) read-only to `/data`, which is where
 `AGENT_INVENTORY_PATH` resolves inside the container; without it, the agent fails at
-startup with `ENOENT: inventory.json` the moment `AGENT_INVENTORY_PATH` is set. Mount
-only that one file, not the whole directory — `.env.operator` and anything else you
-keep alongside it (e.g. `manifest-key.pem`, if you sign manifests on this same host)
-have no business being readable inside the container:
+startup with `ENOENT: inventory.json` the moment `AGENT_INVENTORY_PATH` is set.
+
+```sh
+mkdir -p agent-data && mv inventory.json agent-data/inventory.json   # once inventory.json exists (Step 6)
+```
+
+Mount the directory, not the file: a single-file bind mount pins the container to
+that file's *inode*, and most editors save atomically via write-new-then-rename,
+which detaches the mount from the file — edits on the host silently stop reaching the
+container (no error, it just keeps serving stale content) until the container is
+recreated. A directory mount doesn't have this problem — edits inside it, however
+they're saved, are always visible on the next read. Keep `data/` scoped to only
+`inventory.json` — `.env.operator` and anything else you keep alongside it (e.g.
+`manifest-key.pem`, if you sign manifests on this same host) have no business being
+readable inside the container:
 
 Validate connectivity/auth to MT first, **without touching Proxmox**:
 
 ```sh
-docker run --rm --env-file .env.operator -v "$PWD/inventory.json:/data/inventory.json:ro" -e AGENT_DRY_RUN=1 w2vy/mt-agent:latest
+docker run --rm --env-file .env.operator -v "$PWD/agent-data:/data:ro" -e AGENT_DRY_RUN=1 w2vy/mt-agent:latest
 # expect: "provider=… mt=… dryRun=true …" then a poll to MT (a 401 until your Step 5 keys)
 ```
 
 Then run it for real (long-running, auto-restart):
 
 ```sh
-docker run -d --name mt-agent --restart unless-stopped --env-file .env.operator -v "$PWD/inventory.json:/data/inventory.json:ro" w2vy/mt-agent:latest
+docker run -d --name mt-agent --restart unless-stopped --env-file .env.operator -v "$PWD/agent-data:/data:ro" w2vy/mt-agent:latest
 ```
 
 (Or use `docker-compose.operator.yml` with `image: w2vy/mt-agent` instead of `build:`.)
@@ -268,8 +280,10 @@ AGENT_INVENTORY_PATH=/data/inventory.json
 The agent asserts this to MT (`PUT /api/agent/inventory`) on startup and each
 heartbeat, **provider-scoped**: MT upserts your `ProxmoxHost`/`Slot` rows and never
 touches another operator's inventory, never hard-deletes a rented slot. Because the
-agent **re-reads the file every heartbeat**, edits apply without a restart. (Alt:
-inline `AGENT_INVENTORY_JSON`; absent = don't declare.)
+agent **re-reads the file every heartbeat**, edits apply without a restart — **only
+if you mounted `./agent-data` as a directory** (Step 4); a single-file mount silently stops
+seeing edits (see the mount note in Step 4). (Alt: inline `AGENT_INVENTORY_JSON`;
+absent = don't declare.)
 
 **ISO auto-refresh:** declaring inventory here also turns on automatic ArcaneOS/FluxLive
 ISO staging — every `nodeName` above (with its `storageIso`, or `PROXMOX_STORAGE_ISO` if
