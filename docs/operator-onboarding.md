@@ -100,7 +100,8 @@ mt-manifest verify --in manifest.json          # sanity: "OK — signature valid
    - Products: **Write**, Prices: **Read + Write** (the Coalition materializes your
      per-tier Price from the price you declare)
    - Subscriptions: **Write**
-   - Billing Portal: **Write**
+   - Customer Portal: **Write** (Stripe renamed this from "Billing Portal" in the
+     restricted-key permission list)
 
    Do **not** grant Refunds, Balance, or Payouts. The free-trial model means every
    failure path is a *cancel*, never a refund — the key never needs to move money.
@@ -192,17 +193,24 @@ ARCANE_ISO=<your ArcaneOS ISO name>   # auto-kept-current once you declare inven
 AGENT_LISTING_JSON='[{"tier":"nimbus","priceCents":2200,"capacity":8,"availableSlots":8}]'
 ```
 
+Mount `inventory.json` (Step 6) read-only to `/data/inventory.json` — that's where
+`AGENT_INVENTORY_PATH` resolves inside the container; without it, the agent fails at
+startup with `ENOENT: inventory.json` the moment `AGENT_INVENTORY_PATH` is set. Mount
+only that one file, not the whole directory — `.env.operator` and anything else you
+keep alongside it (e.g. `manifest-key.pem`, if you sign manifests on this same host)
+have no business being readable inside the container:
+
 Validate connectivity/auth to MT first, **without touching Proxmox**:
 
 ```sh
-docker run --rm --env-file .env.operator -e AGENT_DRY_RUN=1 w2vy/mt-agent:latest
+docker run --rm --env-file .env.operator -v "$PWD/inventory.json:/data/inventory.json:ro" -e AGENT_DRY_RUN=1 w2vy/mt-agent:latest
 # expect: "provider=… mt=… dryRun=true …" then a poll to MT (a 401 until your Step 5 keys)
 ```
 
 Then run it for real (long-running, auto-restart):
 
 ```sh
-docker run -d --name mt-agent --restart unless-stopped --env-file .env.operator w2vy/mt-agent:latest
+docker run -d --name mt-agent --restart unless-stopped --env-file .env.operator -v "$PWD/inventory.json:/data/inventory.json:ro" w2vy/mt-agent:latest
 ```
 
 (Or use `docker-compose.operator.yml` with `image: w2vy/mt-agent` instead of `build:`.)
