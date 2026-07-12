@@ -4,6 +4,7 @@ import { ripemd160 } from "@noble/hashes/ripemd160";
 import { hexToBytes } from "@noble/hashes/utils";
 import { base58check } from "@scure/base";
 import { ownerAuthMessage, type OwnerAuth } from "./messages";
+import { manifestOwnerMessage, type ProviderManifest } from "./manifest";
 
 /**
  * Flux / Bitcoin "sign message" verification (secp256k1) — the owner-authorization
@@ -131,6 +132,25 @@ export function verifyOwnerAuth(
     return { ok: false, reason: "signature does not match the pinned owner address" };
   }
   return { ok: true };
+}
+
+/**
+ * Verify that an owner wallet authorized a manifest's identity (proven, not blind,
+ * TOFU). Checks the `ownerSignature` over the canonical `manifestOwnerMessage`
+ * recovers to the manifest's own `ownerAddress`. Reuses `verifyFluxSignature`
+ * exactly as `verifyOwnerAuth` does for the sibling privileged-job concept — no new
+ * crypto. Returns false for a manifest with no `ownerAddress` (nothing to authorize).
+ *
+ * The caller must still verify the manifest's ed25519 self-signature separately
+ * (`verifyManifestObject` in ./signing) — this only proves *who* authorized the
+ * pubkey, not that the body is internally consistent.
+ */
+export function verifyManifestOwnerSignature(
+  manifest: ProviderManifest,
+  ownerSignatureB64: string
+): boolean {
+  if (!manifest.ownerAddress) return false;
+  return verifyFluxSignature(manifest.ownerAddress, manifestOwnerMessage(manifest), ownerSignatureB64);
 }
 
 const SIGN_MAGIC = { zelid: "Bitcoin Signed Message:\n", flux: "Zelcash Signed Message:\n" } as const;

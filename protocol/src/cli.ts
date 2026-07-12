@@ -15,11 +15,18 @@
  *                                       MANIFEST_JSON; derives TIER_PRICES_JSON from TIERS_JSON. Verifies the
  *                                       manifest signature first. Output contains SECRETS — never commit it.
  *   verify --in <manifest.json>         re-verify a signed manifest
+ *   authorize --in <manifest.json>      print the owner-authorization message + a Zelcore
+ *                                        deep link to sign (proves you control ownerAddress)
+ *   authorize --in <manifest.json> --signature <b64> --out <signed-manifest.json>
+ *                                        wrap the manifest + your wallet signature into the
+ *                                        SignedProviderManifest MT ingests (proven identity)
  */
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { ProviderManifestBody } from "./manifest";
+import { ProviderManifest, ProviderManifestBody, manifestOwnerMessage } from "./manifest";
 import { renderManifestBodyFromConfig, parseConfigEnv } from "./manifest-config";
+import { verifyManifestOwnerSignature } from "./wallet";
+import { buildZelcoreSignLink } from "./sign-launcher";
 import {
   generateEd25519,
   exportPrivateKeyPem,
@@ -195,13 +202,71 @@ function main() {
       console.log(ok ? "OK — signature valid" : "FAILED — signature invalid");
       process.exit(ok ? 0 : 1);
     }
+    case "authorize": {
+      // Prove you control the manifest's ownerAddress by wallet-signing it, turning
+      // MT's blind-TOFU pubkey pin into proven ownership. Two-step (no browser in a
+      // one-shot container): print message + Zelcore deep link, then re-run with the
+      // resulting --signature to emit the SignedProviderManifest MT ingests.
+      const inPath = flag(args, "--in") ?? die("--in <manifest.json> required");
+      const signature = flag(args, "--signature");
+      const outPath = flag(args, "--out");
+
+      const raw = JSON.parse(readFileSync(inPath, "utf8"));
+      if (!verifyManifestObject(raw)) die(`${inPath}: manifest signature invalid — run 'sign' first`);
+      const parsed = ProviderManifest.safeParse(raw);
+      if (!parsed.success) die(`${inPath}: not a valid signed manifest:\n${parsed.error.message}`);
+      const manifest = parsed.data;
+      if (!manifest.ownerAddress) {
+        die(
+          "manifest has no ownerAddress — add your Flux/ZelID wallet address as \"ownerAddress\" " +
+            "in the body, re-run 'sign', then 'authorize'."
+        );
+      }
+      const message = manifestOwnerMessage(manifest);
+
+      if (!signature) {
+        // Step 1: show what to sign.
+        console.log("Sign this EXACT message with the wallet that owns the address below,");
+        console.log(`then re-run with --signature <base64> --out signed-manifest.json:\n`);
+        console.log(`owner address: ${manifest.ownerAddress}\n`);
+        console.log("─── message ───");
+        console.log(message);
+        console.log("───────────────\n");
+        console.log("Zelcore deep link (or paste the message into ZelID/SSP 'Sign Message'):");
+        console.log(buildZelcoreSignLink({ message }));
+        break;
+      }
+
+      // Step 2: validate the signature and emit the SignedProviderManifest.
+      if (!verifyManifestOwnerSignature(manifest, signature)) {
+        die(
+          "signature does not verify against the manifest's ownerAddress — check you signed the " +
+            "exact message with the right wallet (and that ownerAddress matches)."
+        );
+      }
+      // Embed the RAW manifest (not `manifest`, the zod-parsed copy) — zod defaults
+      // would add fields and break the detached ed25519 signature MT re-derives.
+      const signed = { manifest: raw, ownerSignature: signature };
+      const out = JSON.stringify(signed, null, 2) + "\n";
+      if (outPath) {
+        writeFileSync(outPath, out);
+        console.log(
+          `Wrote signed manifest to ${outPath}. Publish it at your Coalition's ` +
+            `/.well-known/mt-provider.json (or hand it to the MT admin to ingest).`
+        );
+      } else {
+        process.stdout.write(out);
+      }
+      break;
+    }
     default:
-      console.log("usage: mt-manifest <keygen|init|sign|env|verify> [options]\n");
-      console.log("  keygen [--out <dir>]");
-      console.log("  init   [--out <body.json>]");
-      console.log("  sign   --key <pem> (--from-config <config.env> | --in <body.json>) [--out <manifest.json>]");
-      console.log("  env    --from-config <config.env> --secrets <secrets.env> --manifest <manifest.json> [--out <env.json>]");
-      console.log("  verify --in <manifest.json>");
+      console.log("usage: mt-manifest <keygen|init|sign|env|verify|authorize> [options]\n");
+      console.log("  keygen    [--out <dir>]");
+      console.log("  init      [--out <body.json>]");
+      console.log("  sign      --key <pem> (--from-config <config.env> | --in <body.json>) [--out <manifest.json>]");
+      console.log("  env       --from-config <config.env> --secrets <secrets.env> --manifest <manifest.json> [--out <env.json>]");
+      console.log("  verify    --in <manifest.json>");
+      console.log("  authorize --in <manifest.json> [--signature <b64> --out <signed-manifest.json>]");
       process.exit(cmd ? 1 : 0);
   }
 }

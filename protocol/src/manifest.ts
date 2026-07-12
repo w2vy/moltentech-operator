@@ -36,6 +36,20 @@ export const ProviderManifestBody = Envelope.extend({
   coalitionUrl: z.string().url(),
   /** ed25519 public key (base64) used to verify `signature`. */
   pubkey: z.string().min(1),
+  /**
+   * Flux/ZelID wallet address that authorizes this manifest's `pubkey` (proven, not
+   * blind, TOFU). When present + accompanied by a matching `ownerSignature`
+   * (see `SignedProviderManifest`), MT pins it as the provider's proven identity and
+   * can safely auto-accept a later pubkey rotation from the same owner.
+   *
+   * Optional for backward compatibility: a legacy manifest without it still ingests
+   * via the original blind-TOFU path. Same real wallet as the agent's
+   * `OWNER_ADDRESS` in most cases, but a DISTINCT trust chain — this authorizes
+   * manifest *ingestion/identity*, whereas the `OwnerAuth` flow in `messages.ts`
+   * authorizes privileged *jobs* (delete/move/reprovision). See
+   * project_moltentech_wallet_manifest_auth.
+   */
+  ownerAddress: z.string().min(1).optional(),
   /** Tiers the operator offers (price is NOT here — see listing assert). */
   tiers: z.array(ProviderManifestTier).min(1),
   /** Operator-selectable free-trial window in days (1–7); MT defaults missing to 1. */
@@ -66,3 +80,40 @@ export const ProviderManifest = ProviderManifestBody.extend({
   signature: z.string().min(1),
 });
 export type ProviderManifest = z.infer<typeof ProviderManifest>;
+
+/**
+ * A manifest whose `pubkey` is authorized by an owner wallet signature — the
+ * onboarding payload that turns MT's blind-TOFU pubkey pin into *proven* ownership.
+ * Ingest of this variant unlocks auto-accepted pubkey rotation (same owner) and
+ * zero-click key issuance; a bare `ProviderManifest` still ingests via the legacy
+ * path. Produced by `mt-manifest authorize`; verified by `verifyManifestOwnerSignature`.
+ */
+export const SignedProviderManifest = z.object({
+  manifest: ProviderManifest,
+  /** 65-byte compact recoverable Flux `signmessage` signature over `manifestOwnerMessage`, base64. */
+  ownerSignature: z.string().min(1),
+});
+export type SignedProviderManifest = z.infer<typeof SignedProviderManifest>;
+
+/**
+ * The exact, human-readable string the operator's wallet signs to authorize a
+ * manifest's identity. Deterministic (the `mt-manifest authorize` signer and MT's
+ * verifier derive identical bytes) and readable (the owner reviews slug/pubkey/owner
+ * in-wallet before signing). Mirrors the `ownerAuthMessage` pattern in `messages.ts`.
+ *
+ * Includes the manifest's own ed25519 `signature`, so the wallet signature is CHAINED
+ * to that exact signed body — a party can't swap in a different ed25519 signature over
+ * the same fields without invalidating the wallet signature too. Requires
+ * `ownerAddress` to be present on the manifest.
+ */
+export function manifestOwnerMessage(m: ProviderManifest): string {
+  if (!m.ownerAddress) throw new Error("manifest has no ownerAddress to authorize");
+  return [
+    "MoltenTech provider manifest authorization",
+    `provider: ${m.provider.slug}`,
+    `pubkey: ${m.pubkey}`,
+    `owner: ${m.ownerAddress}`,
+    `published: ${m.publishedAt}`,
+    `manifest-sig: ${m.signature}`,
+  ].join("\n");
+}
