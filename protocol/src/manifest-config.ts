@@ -14,8 +14,18 @@ import { SCHEMA_VERSION } from "./common";
  *                                                      it feeds runtime prices only)
  *   TRIAL_DAYS                                      -> trialDays
  *   MANUAL_APPROVAL ("true"/"false")                -> manualApproval
+ *   OWNER_ADDRESS                                   -> ownerAddress (optional; the
+ *                                                      wallet that authorizes this
+ *                                                      manifest's pubkey — see below)
  *   (fixed)                                         -> serviceFlags defaults,
  *                                                      schemaVersion, trustedSelfClaim
+ *
+ * `OWNER_ADDRESS` may be a ZelID (`1…`) or a Flux (`t1…`) address — `verifyFluxSignature`
+ * is address-form agnostic (tries both message magics), so either works as long as the
+ * operator later `authorize`s the manifest with the matching wallet surface. It is the
+ * SAME key already read by the `env` command (agent OWNER_ADDRESS) and the Coalition
+ * console, so config.env stays the one source of truth. Omitting it renders a bare
+ * (legacy, blind-TOFU) body exactly as before.
  *
  * Throws `Error` (never exits) on malformed input, so callers/tests can react.
  */
@@ -65,7 +75,7 @@ export function renderManifestBodyFromConfig(configText: string): Record<string,
     return { tier: t.tier, capacity: t.capacity, storagePool: String(t.storagePool) };
   });
 
-  return {
+  const body: Record<string, unknown> = {
     schemaVersion: SCHEMA_VERSION,
     provider,
     coalitionUrl,
@@ -75,4 +85,8 @@ export function renderManifestBodyFromConfig(configText: string): Record<string,
     serviceFlags: { delegationAvailable: false, autoRenew: true, whiteLabel: false, languages: ["en"] },
     trustedSelfClaim: false,
   };
+  // Optional owner wallet that authorizes this manifest's pubkey (proven, not blind,
+  // TOFU). Included only when set, so a legacy config still renders a bare body.
+  if (env.OWNER_ADDRESS) body.ownerAddress = env.OWNER_ADDRESS;
+  return body;
 }

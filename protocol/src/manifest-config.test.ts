@@ -48,6 +48,18 @@ test("renders a schema-valid manifest body from config.env", () => {
   assert.equal(ProviderManifestBody.safeParse(stamped).success, true);
 });
 
+test("OWNER_ADDRESS maps to an optional ownerAddress (absent when unset)", () => {
+  // Unset (the SAMPLE above) → bare body, no ownerAddress (backward compat).
+  assert.equal(renderManifestBodyFromConfig(SAMPLE).ownerAddress, undefined);
+
+  // Set → passed through verbatim, and the stamped body still validates.
+  const withOwner = SAMPLE + "\nOWNER_ADDRESS=t1abcOwnerWalletAddress";
+  const body = renderManifestBodyFromConfig(withOwner);
+  assert.equal(body.ownerAddress, "t1abcOwnerWalletAddress");
+  const stamped = { ...body, pubkey: "x", publishedAt: new Date().toISOString() };
+  assert.equal(ProviderManifestBody.safeParse(stamped).success, true);
+});
+
 test("rendered body signs to a manifest the real verifier accepts", () => {
   const { privateKey } = generateEd25519();
   const body = renderManifestBodyFromConfig(SAMPLE);

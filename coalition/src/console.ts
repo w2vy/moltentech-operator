@@ -32,6 +32,7 @@ import {
   HEADER_AGENT_NONCE,
   HEADER_AGENT_SLUG,
   COLLATERAL_MIN_CONFIRMATIONS,
+  unwrapManifest,
 } from "@moltentech/protocol";
 import { getCollateralSnapshot } from "./collateral";
 import { bodyHash, checkFreshness, verifyRequest, type RequestEnvelope } from "@moltentech/protocol/signing";
@@ -102,7 +103,13 @@ let cachedManifest: { pubkey?: string; coalitionUrl?: string } | null = null;
 function manifest(cfg: CoalitionConfig): { pubkey?: string; coalitionUrl?: string } {
   if (cachedManifest) return cachedManifest;
   try {
-    cachedManifest = JSON.parse(readManifest(cfg));
+    // The served blob may be a bare manifest OR a SignedProviderManifest wrapper
+    // (when the operator published an 'authorize'-owned manifest); unwrap so pubkey
+    // and coalitionUrl resolve identically either way.
+    cachedManifest = unwrapManifest(JSON.parse(readManifest(cfg))).manifest as {
+      pubkey?: string;
+      coalitionUrl?: string;
+    };
   } catch {
     cachedManifest = {};
   }
