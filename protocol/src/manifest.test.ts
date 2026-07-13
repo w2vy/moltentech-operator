@@ -8,6 +8,7 @@ import {
   ProviderManifest,
   SignedProviderManifest,
   manifestOwnerMessage,
+  unwrapManifest,
   type ProviderManifest as ProviderManifestT,
 } from "./manifest";
 import { verifyManifestOwnerSignature } from "./wallet";
@@ -103,4 +104,19 @@ test("returns false (not throw) for a manifest with no ownerAddress", () => {
   const legacy = { ...manifest, ownerAddress: undefined } as ProviderManifestT;
   assert.equal(verifyManifestOwnerSignature(legacy, "AAAA"), false);
   assert.throws(() => manifestOwnerMessage(legacy), /no ownerAddress/);
+});
+
+test("unwrapManifest splits a wrapper and passes a bare manifest through", () => {
+  const manifest = buildManifest(ownerAddress(OWNER_PRIV));
+
+  // Bare manifest → returned as-is, no ownerSignature.
+  const bare = unwrapManifest(manifest);
+  assert.equal(bare.manifest, manifest);
+  assert.equal(bare.ownerSignature, undefined);
+
+  // SignedProviderManifest wrapper → both parts split out.
+  const ownerSignature = walletSign(OWNER_PRIV, manifestOwnerMessage(manifest));
+  const wrapped = unwrapManifest({ manifest, ownerSignature });
+  assert.equal(wrapped.manifest, manifest);
+  assert.equal(wrapped.ownerSignature, ownerSignature);
 });

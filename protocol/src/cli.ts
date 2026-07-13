@@ -12,8 +12,10 @@
  *   env    --from-config <config.env> --secrets <secrets.env> --manifest <manifest.json> [--out <env.json>]
  *                                       assemble the Flux "Import Environment Variables" blob (JSON array of
  *                                       "KEY=value"): non-secret config + secrets + the signed manifest as
- *                                       MANIFEST_JSON; derives TIER_PRICES_JSON from TIERS_JSON. Verifies the
- *                                       manifest signature first. Output contains SECRETS — never commit it.
+ *                                       MANIFEST_JSON; derives TIER_PRICES_JSON from TIERS_JSON. --manifest may
+ *                                       be a bare manifest OR an 'authorize' wrapper (owner-signed, shipped
+ *                                       whole so MT ingests it owner-verified). Verifies the manifest (and any
+ *                                       owner) signature first. Output contains SECRETS — never commit it.
  *   verify --in <manifest.json>         re-verify a signed manifest
  *   authorize --in <manifest.json>      print the owner-authorization message + a Zelcore
  *                                        deep link to sign (proves you control ownerAddress)
@@ -23,7 +25,7 @@
  */
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { ProviderManifest, ProviderManifestBody, manifestOwnerMessage } from "./manifest";
+import { ProviderManifest, ProviderManifestBody, manifestOwnerMessage, unwrapManifest } from "./manifest";
 import { renderManifestBodyFromConfig, parseConfigEnv } from "./manifest-config";
 import { verifyManifestOwnerSignature } from "./wallet";
 import { buildZelcoreSignLink } from "./sign-launcher";
@@ -139,9 +141,29 @@ function main() {
       const secrets = parseConfigEnv(readFileSync(secretsPath, "utf8"));
 
       // Verify the manifest is validly signed BEFORE shipping it as env — refuse a
-      // placeholder or a tampered/unsigned manifest.
+      // placeholder or a tampered/unsigned manifest. Accepts either a bare
+      // ProviderManifest OR a SignedProviderManifest wrapper (from 'authorize'); the
+      // whole object is shipped verbatim so the owner signature reaches MT via the
+      // /.well-known publish path.
       const manifestObj = JSON.parse(readFileSync(manifestPath, "utf8"));
-      if (!verifyManifestObject(manifestObj)) die(`${manifestPath}: manifest signature invalid — run 'sign' first`);
+      const { manifest: innerManifest, ownerSignature: manifestOwnerSig } = unwrapManifest(manifestObj);
+      if (!verifyManifestObject(innerManifest)) die(`${manifestPath}: manifest signature invalid — run 'sign' first`);
+      if (manifestOwnerSig != null) {
+        // A wrapper MUST carry a valid owner signature or we refuse it — never ship a
+        // wrapper whose owner authorization doesn't verify.
+        const parsed = ProviderManifest.safeParse(innerManifest);
+        if (!parsed.success) die(`${manifestPath}: signed wrapper's manifest is invalid:\n${parsed.error.message}`);
+        if (!parsed.data.ownerAddress) die(`${manifestPath}: signed manifest is missing ownerAddress`);
+        if (!verifyManifestOwnerSignature(parsed.data, manifestOwnerSig)) {
+          die(`${manifestPath}: owner wallet signature does not verify against ownerAddress — re-run 'authorize'`);
+        }
+        if (config.OWNER_ADDRESS && config.OWNER_ADDRESS !== parsed.data.ownerAddress) {
+          console.error(
+            `warning: config.env OWNER_ADDRESS (${config.OWNER_ADDRESS}) differs from the signed ` +
+              `manifest's ownerAddress (${parsed.data.ownerAddress}) — shipping the signed manifest's owner.`
+          );
+        }
+      }
 
       const pairs: string[] = [];
       const put = (k: string, v: string | undefined): void => {
@@ -180,7 +202,8 @@ function main() {
       put("STRIPE_WEBHOOK_SECRET", needSecret("STRIPE_WEBHOOK_SECRET"));
       put("SESSION_SECRET", secrets.SESSION_SECRET);
 
-      // The signed manifest, minified to one line, served at /.well-known/mt-provider.json.
+      // The signed manifest (bare, or the whole SignedProviderManifest wrapper),
+      // minified to one line, served verbatim at /.well-known/mt-provider.json.
       put("MANIFEST_JSON", JSON.stringify(manifestObj));
 
       const out = JSON.stringify(pairs, null, 2) + "\n";
@@ -264,7 +287,7 @@ function main() {
       console.log("  keygen    [--out <dir>]");
       console.log("  init      [--out <body.json>]");
       console.log("  sign      --key <pem> (--from-config <config.env> | --in <body.json>) [--out <manifest.json>]");
-      console.log("  env       --from-config <config.env> --secrets <secrets.env> --manifest <manifest.json> [--out <env.json>]");
+      console.log("  env       --from-config <config.env> --secrets <secrets.env> --manifest <manifest|signed-manifest.json> [--out <env.json>]");
       console.log("  verify    --in <manifest.json>");
       console.log("  authorize --in <manifest.json> [--signature <b64> --out <signed-manifest.json>]");
       process.exit(cmd ? 1 : 0);

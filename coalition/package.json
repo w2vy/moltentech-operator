@@ -8,7 +8,7 @@
   "scripts": {
     "start": "tsx src/index.ts",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test src/auth.test.ts"
+    "test": "tsx --test src/auth.test.ts src/console-manifest.test.ts"
   },
   "dependencies": {
     "@moltentech/protocol": "file:../protocol",

@@ -117,3 +117,23 @@ export function manifestOwnerMessage(m: ProviderManifest): string {
     `manifest-sig: ${m.signature}`,
   ].join("\n");
 }
+
+/**
+ * Split a manifest payload into its parts, whether it is a bare `ProviderManifest`
+ * (legacy) or a `SignedProviderManifest` wrapper. Pure shape probe — does NOT verify
+ * either signature; callers still run `verifyManifestObject` (ed25519) and, when an
+ * `ownerSignature` is present, `verifyManifestOwnerSignature` (owner wallet).
+ *
+ * The single source of the on-the-wire wrapper shape, reused by every consumer of a
+ * published manifest (MT ingest, the `mt-manifest env` bundler, the Coalition console)
+ * so the detection lives in exactly one place.
+ */
+export function unwrapManifest(raw: unknown): { manifest: unknown; ownerSignature?: string } {
+  if (raw && typeof raw === "object" && "manifest" in raw && "ownerSignature" in raw) {
+    return {
+      manifest: (raw as { manifest: unknown }).manifest,
+      ownerSignature: (raw as { ownerSignature: unknown }).ownerSignature as string,
+    };
+  }
+  return { manifest: raw };
+}
