@@ -1,0 +1,29 @@
+# gitleaks configuration.
+#
+# Extends the default ruleset - every built-in rule stays active. This file only
+# allowlists two SYNTHETIC test fixtures that trip the high-entropy `generic-api-key`
+# rule. Both were verified by hand before being listed here:
+#
+#  - `fluxIdentityKey` in agent/src/executor.test.ts - has the shape of an uncompressed
+#    WIF private key (51 chars, base58 charset, leading K), which is why it scores 5.55
+#    entropy. It is NOT a real key: it fails base58check checksum validation, so it
+#    cannot be a usable WIF, and it appears in no config on any host. Its neighbouring
+#    fixtures are transparently fake (fluxId "t1abcdefghij...", collateralTxid "a"*64).
+#
+#  - the second owner address in protocol/src/sign-launcher.test.ts - a wallet ADDRESS
+#    used in a negative assertion ("refused for any other pinned owner"). Addresses are
+#    public by design.
+#
+# Allowlisted by exact value, not by file path: a genuine secret added to these same
+# test files is still caught. If either fixture is ever changed, the allowlist stops
+# matching and gitleaks flags it - the safe direction to fail.
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Verified-synthetic test fixtures (see header)"
+regexes = [
+  '''Kx1abcdefghijkmnopqrstuvwxyz0123456789ABCDEFGHJKLMN''',
+  '''1BoatSLRHtKNngkdXEeobR76b53LETtpyT''',
+]
