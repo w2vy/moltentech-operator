@@ -11,6 +11,23 @@ on:
   pull_request:
 
 jobs:
+  secrets:
+    name: gitleaks (full history)
+    runs-on: ubuntu-latest
+    steps:
+      # Full history, not just the diff: a secret committed once stays exposed even if a
+      # later commit removes it, and this repo is a candidate to be made public (its
+      # audience is third-party operators). Config + rationale in .gitleaks.toml.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Scan
+        run: |
+          docker run --rm -v "$PWD:/repo" zricethezav/gitleaks:latest \
+            detect --source /repo --config /repo/.gitleaks.toml \
+            --no-banner --redact --verbose
+
   package:
     name: ${{ matrix.package }}
     runs-on: ubuntu-latest
