@@ -236,14 +236,24 @@ export type JobResult = z.infer<typeof JobResult>;
 
 // ───────────────────────────────────────────────────────────────────────────
 // 5. listing  —  agent → MT  (desired-state re-assert, on heartbeat + on change)
-//    Authoritative mutable price/capacity. MT enforces priceCents >= floor and
-//    retains last-known-good if a re-assert is missed (never resets to zero).
+//    The operator's SELLING intent: price, and how much of the tier to offer. MT
+//    enforces priceCents >= floor and retains last-known-good if a re-assert is
+//    missed (never resets to zero).
+//
+//    How much hardware EXISTS is not declared here — it comes from the inventory
+//    assert below, which is the source of truth for hosts and slots. MT derives
+//    capacity and in-service node counts from those Slot rows, so the listing only
+//    says what the operator is willing to sell, not what they own.
 // ───────────────────────────────────────────────────────────────────────────
 export const ListingTier = z.object({
   tier: TierKey,
   /** Operator's declared price (>= platform floor). MT materializes/mirrors this. */
   priceCents: PriceCents,
-  capacity: z.number().int().nonnegative(),
+  /**
+   * How many slots of this tier to offer for sale. A deliberate throttle, not a
+   * capacity claim — MT clamps it to the live count of `available` Slot rows, so an
+   * operator can offer fewer than they have but never more.
+   */
   availableSlots: z.number().int().nonnegative(),
 });
 export type ListingTier = z.infer<typeof ListingTier>;

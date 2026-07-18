@@ -69,7 +69,7 @@ export class MtClient {
     if (!res.ok) throw new Error(`result failed: ${res.status}`);
   }
 
-  /** Re-assert the operator's desired price/capacity (heartbeat + on change). */
+  /** Re-assert the operator's desired price + slots offered (heartbeat + on change). */
   async assertListing(tiers: ListingTier[]): Promise<void> {
     const payload: ListingAssert = {
       schemaVersion: SCHEMA_VERSION,

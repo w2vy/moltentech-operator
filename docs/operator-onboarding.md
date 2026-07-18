@@ -198,8 +198,9 @@ PROXMOX_NETWORK=vmbr0
 PROXMOX_STORAGE_IMAGES=local-lvm
 PROXMOX_STORAGE_ISO=local
 ARCANE_ISO=<your ArcaneOS ISO name>   # auto-kept-current once you declare inventory (Step 6)
-# Offered price/capacity (re-asserted to MT each heartbeat):
-AGENT_LISTING_JSON='[{"tier":"nimbus","priceCents":2200,"capacity":8,"availableSlots":8}]'
+# Price + how many slots to offer for sale (re-asserted to MT each heartbeat).
+# How much hardware you HAVE comes from your inventory, not from here.
+AGENT_LISTING_JSON='[{"tier":"nimbus","priceCents":2200,"availableSlots":8}]'
 ```
 
 Create a small **dedicated subdirectory** for `inventory.json` (Step 6) — `./agent-data/` —
@@ -353,7 +354,7 @@ It stores **none** of your Stripe or Proxmox credentials.
 
 - **Manifest**: MT admin shows your provider with the right tiers, `Coalition URL`,
   and freshness once it pulls stats/listing.
-- **Listing**: within a minute the agent's heartbeat sets your price/capacity at MT
+- **Listing**: within a minute the agent's heartbeat sets your price + slots offered at MT
   (admin → Providers shows `lastAsserted`).
 - **Stats**: MT pulls `/stats`; benchmarks/uptime appear on your card.
 - **Checkout (test)**: with Stripe in test mode, rent one of your tiers from
@@ -380,7 +381,8 @@ burden, just an expanded role for a component you're already running.
 
 ## Ongoing operations
 
-- **Change price/capacity**: update the agent's `AGENT_LISTING_JSON` and restart it, and
+- **Change price / slots offered**: update the agent's `AGENT_LISTING_JSON` and recreate the
+  container (`docker restart` does NOT reload `--env-file` changes), and
   update `TIER_PRICES_JSON` in `config.env` → re-run `manifest env` → re-import
   `env.json` (free) so the Coalition's prices match. No re-signing.
 - **Add or remove a host**: add its `ProxmoxHost.name` to `HOSTS` in `config.env`, then

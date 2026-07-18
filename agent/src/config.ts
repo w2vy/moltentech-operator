@@ -6,7 +6,6 @@ import { TierKey, InventoryHost } from "@moltentech/protocol";
 const ListingTierConfig = z.object({
   tier: TierKey,
   priceCents: z.number().int().positive(),
-  capacity: z.number().int().nonnegative(),
   availableSlots: z.number().int().nonnegative(),
 });
 
@@ -39,7 +38,7 @@ export type AgentConfig = {
     sshPubkey: string;
     consoleHash: string;
   };
-  /** Desired listing (price/capacity per tier); empty = don't re-assert. */
+  /** Desired listing (price + slots offered per tier); empty = don't re-assert. */
   listing: z.infer<typeof ListingTierConfig>[];
   /** Declared agent-managed hosts + slots; empty = don't re-assert inventory. */
   inventory: InventoryHost[];
