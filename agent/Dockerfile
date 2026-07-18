@@ -18,8 +18,13 @@ RUN pip install --no-cache-dir "/opt/arcane-mage/[cli]"
 # Stage 2: Node.js runtime + Python from stage 1
 FROM node:22-bookworm-slim
 
-# libssl3 needed by Python's _ssl module for HTTPS connections to Proxmox
-RUN apt-get update && apt-get install -y --no-install-recommends libssl3 libgomp1 && \
+# libssl3 needed by Python's _ssl module for HTTPS connections to Proxmox.
+# ca-certificates is REQUIRED too: node ships its own CA store, but the Python we
+# copy in from stage 1 reads the OS trust store, and node:*-slim has none. Without
+# it every VERIFIED Python HTTPS call fails with "self-signed certificate in
+# certificate chain" — which silently broke `refresh-iso` (the ArcaneOS release
+# feed) while Proxmox calls kept working, since those skip verification.
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates libssl3 libgomp1 && \
     rm -rf /var/lib/apt/lists/*
 
 # Copy Python installation + the arcane-mage CLI from stage 1
