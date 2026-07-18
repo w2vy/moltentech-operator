@@ -1,0 +1,78 @@
+name: Publish mt-manifest
+
+# `ghcr.io/w2vy/mt-manifest` is what operators actually run — they pull the image, they
+# do not build from source. Before this workflow it was pushed by hand, so a merged
+# protocol change could leave every operator on a stale CLI that rejects the current
+# config.env format. That happened once, mid-signing-ceremony. Now any protocol change
+# that lands on main republishes the image.
+#
+# Tags: `latest` (what the documented alias pulls) and the commit SHA (so a bad publish
+# can be rolled back to a known-good image without rebuilding).
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "protocol/**"
+      - ".github/workflows/publish-mt-manifest.yml"
+  workflow_dispatch: # manual re-publish, e.g. after a rollback
+
+concurrency:
+  group: publish-mt-manifest
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: protocol
+          file: protocol/Dockerfile
+          push: true
+          tags: |
+            ghcr.io/w2vy/mt-manifest:latest
+            ghcr.io/w2vy/mt-manifest:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # Pull the tag we just published (not the local build cache) and confirm it can
+      # actually sign — a published-but-broken CLI is the failure this whole workflow
+      # exists to prevent.
+      - name: Smoke-test the published image
+        run: |
+          set -euo pipefail
+          docker rmi ghcr.io/w2vy/mt-manifest:latest 2>/dev/null || true
+          docker pull ghcr.io/w2vy/mt-manifest:latest
+          work="$(mktemp -d)"
+          cat > "$work/config.env" <<'EOF'
+          PROVIDER_SLUG=ci-operator
+          PROVIDER_NAME=CI Operator
+          COALITION_URL=https://coalition.example
+          HOSTS=pve-01,pve-02
+          TIER_PRICES_JSON={"cumulus":700,"nimbus":20000}
+          TRIAL_DAYS=1
+          EOF
+          run() { docker run --rm -v "$work:/work" -u "$(id -u):$(id -g)" ghcr.io/w2vy/mt-manifest:latest "$@"; }
+          run keygen
+          run sign --key manifest-key.pem --from-config config.env --out manifest.json
+          run verify --in manifest.json
+          python3 - "$work/manifest.json" <<'PY'
+          import json, sys
+          m = json.load(open(sys.argv[1]))
+          assert "tiers" not in m and [h["name"] for h in m["hardware"]] == ["pve-01", "pve-02"]
+          print("published image signs correctly")
+          PY

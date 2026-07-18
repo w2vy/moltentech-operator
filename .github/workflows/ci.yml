@@ -1,0 +1,147 @@
+name: CI
+
+# Typecheck + test every package, and smoke-test the mt-manifest CLI the way an
+# operator actually invokes it. The smoke test exists because the CLI is shipped as a
+# published image (see publish-mt-manifest.yml): a change that breaks the documented
+# config.env contract is invisible to unit tests but breaks a signing ceremony.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  package:
+    name: ${{ matrix.package }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        package: [protocol, agent, coalition]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ${{ matrix.package }}/package-lock.json
+
+      # agent + coalition depend on protocol via `file:../protocol`, which npm resolves
+      # from this same checkout — no build step, protocol's exports point at src/*.ts.
+      - name: Install
+        working-directory: ${{ matrix.package }}
+        run: npm ci --no-audit --no-fund
+
+      - name: Typecheck
+        working-directory: ${{ matrix.package }}
+        run: npm run typecheck
+
+      - name: Test
+        working-directory: ${{ matrix.package }}
+        run: npm test
+
+  mt-manifest-smoke:
+    name: mt-manifest CLI smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the operator-facing image
+        run: docker build -f protocol/Dockerfile -t mt-manifest:ci protocol
+
+      # Exercise the documented operator flow end-to-end against a sample config.env.
+      # Keep this config in sync with docs/operator-onboarding.md — if the contract
+      # changes, this fails here rather than mid-ceremony on someone's signing machine.
+      - name: Sign + verify from a sample config.env
+        run: |
+          set -euo pipefail
+          work="$(mktemp -d)"
+          cat > "$work/config.env" <<'EOF'
+          PROVIDER_SLUG=ci-operator
+          PROVIDER_NAME=CI Operator
+          MT_BASE_URL=https://www.moltentech.us
+          COALITION_URL=https://coalition.example
+          OWNER_ADDRESS=t1exampleOwnerWalletAddress
+          HOSTS=pve-01,pve-02
+          TIER_PRICES_JSON={"cumulus":700,"nimbus":20000}
+          TRIAL_DAYS=1
+          MANUAL_APPROVAL=false
+          EOF
+          cat > "$work/secrets.env" <<'EOF'
+          AGENT_KEY=ci-dummy-agent-key
+          COALITION_KEY=ci-dummy-coalition-key
+          STRIPE_SECRET_KEY=rk_test_ci_dummy
+          STRIPE_WEBHOOK_SECRET=whsec_ci_dummy
+          EOF
+          run() { docker run --rm -v "$work:/work" -u "$(id -u):$(id -g)" mt-manifest:ci "$@"; }
+
+          run keygen
+          run sign --key manifest-key.pem --from-config config.env --out manifest.json
+          run verify --in manifest.json
+
+          # The manifest must carry the owner-attested hardware list and NOT the
+          # retired `tiers` field.
+          python3 - "$work/manifest.json" <<'PY'
+          import json, sys
+          m = json.load(open(sys.argv[1]))
+          assert "tiers" not in m, "retired `tiers` field is back in the manifest"
+          names = [h["name"] for h in m["hardware"]]
+          assert names == ["pve-01", "pve-02"], f"unexpected hardware: {names}"
+          assert m["schemaVersion"] == 2, f"unexpected schemaVersion: {m['schemaVersion']}"
+          print("manifest OK:", names)
+          PY
+
+          # `env` must pass TIER_PRICES_JSON through verbatim (it is no longer derived).
+          run env --from-config config.env --secrets secrets.env \
+                  --manifest manifest.json --out env.json
+          python3 - "$work/env.json" <<'PY'
+          import json, sys
+          pairs = dict(p.split("=", 1) for p in json.load(open(sys.argv[1])))
+          got = json.loads(pairs["TIER_PRICES_JSON"])
+          assert got == {"cumulus": 700, "nimbus": 20000}, f"price passthrough wrong: {got}"
+          print("TIER_PRICES_JSON OK:", got)
+          PY
+
+      - name: Reject a malformed config.env
+        run: |
+          set -euo pipefail
+          work="$(mktemp -d)"
+          # A trailing `;` (or any stray text) must fail loudly — the config parser takes
+          # everything after `=` verbatim, so this class of typo has bitten a real ceremony.
+          cat > "$work/config.env" <<'EOF'
+          PROVIDER_SLUG=ci-operator
+          PROVIDER_NAME=CI Operator
+          MT_BASE_URL=https://www.moltentech.us
+          COALITION_URL=https://coalition.example
+          HOSTS=pve-01
+          TIER_PRICES_JSON={"cumulus":700};
+          TRIAL_DAYS=1
+          EOF
+          cat > "$work/secrets.env" <<'EOF'
+          AGENT_KEY=d
+          COALITION_KEY=d
+          STRIPE_SECRET_KEY=d
+          STRIPE_WEBHOOK_SECRET=d
+          EOF
+          run() { docker run --rm -v "$work:/work" -u "$(id -u):$(id -g)" mt-manifest:ci "$@"; }
+          run keygen
+          run sign --key manifest-key.pem --from-config config.env --out manifest.json
+
+          if run env --from-config config.env --secrets secrets.env \
+                     --manifest manifest.json --out env.json 2>"$work/err"; then
+            echo "FAIL: malformed TIER_PRICES_JSON was accepted"; exit 1
+          fi
+          grep -q "TIER_PRICES_JSON is not valid JSON" "$work/err" \
+            || { echo "FAIL: wrong error:"; cat "$work/err"; exit 1; }
+          echo "malformed config rejected as expected"
+
+          # A missing HOSTS must also fail at sign time, not silently produce an
+          # unconstrained manifest.
+          grep -v '^HOSTS=' "$work/config.env" > "$work/nohosts.env"
+          if run sign --key manifest-key.pem --from-config nohosts.env --out x.json 2>"$work/err2"; then
+            echo "FAIL: manifest signed with no HOSTS"; exit 1
+          fi
+          grep -q "HOSTS is required" "$work/err2" \
+            || { echo "FAIL: wrong error:"; cat "$work/err2"; exit 1; }
+          echo "missing HOSTS rejected as expected"
