@@ -37,12 +37,22 @@ touching Proxmox — useful to validate connectivity/auth against MoltenTech.
 | Var | Required | Notes |
 |---|---|---|
 | `MT_BASE_URL` | yes | MoltenTech base URL |
-| `AGENT_KEY` | yes | per-provider key (MT admin → Providers → Issue keys) |
 | `PROVIDER_SLUG` | yes | your provider slug |
+| `MANIFEST_KEY` | **one of** | base64 PKCS#8 PEM of your manifest ed25519 key — the agent SIGNS its requests. Preferred. |
+| `AGENT_KEY` | **one of** | legacy per-provider bearer (MT admin → Providers → Issue keys). Startup fails only if BOTH are unset; if both are set, signing wins. |
+| `OWNER_ADDRESS` | recommended | your Flux/ZelID address. Set = the agent REFUSES privileged jobs (delete/reprovision/move) without a matching owner signature. Unset = enforcement off. Never sourced from MT. |
+| `COALITION_URL` | for the courier | your Coalition's base URL. **Unset silently means `courier=off`** — check the startup banner. |
+| `AGENT_INVENTORY_PATH` / `AGENT_INVENTORY_JSON` | to declare hardware | the hosts + slots you declare to MT (path is re-read each heartbeat, so edits apply without a restart). MT materializes ProxmoxHost/Slot rows from this — it is the source of truth for what hardware exists, and MT rejects any host not in your owner-signed manifest. |
 | `PROXMOX_URL` / `PROXMOX_TOKEN_ID` / `PROXMOX_TOKEN_SECRET` | for real provisioning | local only; never sent to MT |
-| `AGENT_LISTING_JSON` | optional | price + slots offered per tier (heartbeat) |
-| `AGENT_POLL_INTERVAL_MS` / `AGENT_LISTING_INTERVAL_MS` | optional | default 10s / 60s |
+| `PROXMOX_NETWORK` / `PROXMOX_STORAGE_IMAGES` / `PROXMOX_STORAGE_ISO` / `PROXMOX_STORAGE_IMPORT` | optional | per-host defaults stamped into the provision YAML (`vmbr0` / `local-lvm` / `local` / `local`) |
+| `ARCANE_ISO` | optional | ArcaneOS ISO filename to stage (default `FluxLive.iso`) |
+| `OPERATOR_SSH_PUBKEY` / `CONSOLE_PASSWORD_HASH` | optional | stamped into provisioned nodes |
+| `AGENT_LISTING_JSON` | optional | price + slots offered per tier (heartbeat). This is SELLING intent — how much hardware you HAVE comes from the inventory above. |
+| `AGENT_POLL_INTERVAL_MS` / `AGENT_LISTING_INTERVAL_MS` / `AGENT_HEALTH_INTERVAL_MS` / `AGENT_REFRESH_ISO_INTERVAL_MS` | optional | default 10s / 60s / 60s / 6h |
 | `AGENT_DRY_RUN` | optional | `1` to skip Proxmox |
+
+> **Changing any of these needs the container RECREATED, not restarted** — `docker restart`
+> does not reload `--env-file`.
 
 ## Status
 
