@@ -42,10 +42,20 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: ${{ matrix.package }}/package-lock.json
+          cache-dependency-path: |
+            protocol/package-lock.json
+            ${{ matrix.package }}/package-lock.json
 
-      # agent + coalition depend on protocol via `file:../protocol`, which npm resolves
-      # from this same checkout — no build step, protocol's exports point at src/*.ts.
+      # agent + coalition depend on protocol via `file:../protocol`, and protocol's
+      # exports point at src/*.ts — so tsc typechecks protocol's SOURCES through the
+      # symlink and needs protocol's OWN dependencies (zod, @noble/*) on disk. Each
+      # matrix job is a fresh runner, so install them explicitly; without this,
+      # agent/coalition fail with "Cannot find module 'zod'" from ../protocol.
+      - name: Install protocol deps
+        if: matrix.package != 'protocol'
+        working-directory: protocol
+        run: npm ci --no-audit --no-fund
+
       - name: Install
         working-directory: ${{ matrix.package }}
         run: npm ci --no-audit --no-fund
