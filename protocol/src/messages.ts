@@ -274,6 +274,9 @@ export const InventorySlot = z.object({
   apiPort: z.number().int().positive(),
   vlan: z.number().int().min(1).max(4094).optional(),
   rateLimit: z.number().int().positive().optional(),
+  /** Proxmox bridge for THIS slot's NIC; null/absent → the host's default network.
+   *  Per-slot (like storagePool) so one machine can host slots on multiple bridges. */
+  network: z.string().min(1).optional(),
   storagePool: z.string().min(1).optional(),
   vmId: z.number().int().positive().optional(),
   startupConfig: z.string().min(1).optional(),
