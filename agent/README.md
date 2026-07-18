@@ -9,7 +9,7 @@ per-provider agent key; it opens **no inbound** path.
 MoltenTech  ──(agent pulls)──▶  POST /api/agent/jobs/claim   ─┐
                                                               │ execute on local Proxmox (arcane-mage)
 MoltenTech  ◀──(agent pushes)─  POST /api/agent/jobs/{id}/result
-MoltenTech  ◀──(heartbeat)────  PUT  /api/agent/listing  (price/capacity)
+MoltenTech  ◀──(heartbeat)────  PUT  /api/agent/listing  (price/slots offered)
 ```
 
 Stats and payments are NOT here — those live on the operator's **Coalition** (the
@@ -25,7 +25,7 @@ PROVIDER_SLUG=<your-slug> \
 PROXMOX_URL=https://127.0.0.1:8006 \
 PROXMOX_TOKEN_ID='root@pam!agent' \
 PROXMOX_TOKEN_SECRET=<secret> \
-AGENT_LISTING_JSON='[{"tier":"nimbus","priceCents":2200,"capacity":8,"availableSlots":3}]' \
+AGENT_LISTING_JSON='[{"tier":"nimbus","priceCents":2200,"availableSlots":3}]' \
 npm start
 ```
 
@@ -40,7 +40,7 @@ touching Proxmox — useful to validate connectivity/auth against MoltenTech.
 | `AGENT_KEY` | yes | per-provider key (MT admin → Providers → Issue keys) |
 | `PROVIDER_SLUG` | yes | your provider slug |
 | `PROXMOX_URL` / `PROXMOX_TOKEN_ID` / `PROXMOX_TOKEN_SECRET` | for real provisioning | local only; never sent to MT |
-| `AGENT_LISTING_JSON` | optional | desired price/capacity per tier (heartbeat) |
+| `AGENT_LISTING_JSON` | optional | price + slots offered per tier (heartbeat) |
 | `AGENT_POLL_INTERVAL_MS` / `AGENT_LISTING_INTERVAL_MS` | optional | default 10s / 60s |
 | `AGENT_DRY_RUN` | optional | `1` to skip Proxmox |
 
