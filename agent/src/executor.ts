@@ -52,7 +52,7 @@ export function buildProvisionYaml(job: Job, cfg: AgentConfig): string {
   L.push(`      node: ${yamlStr(slot.nodeName)}`);
   L.push(`      vm_name: ${yamlStr(slot.vmName)}`);
   L.push(`      node_tier: ${yamlStr(slot.tier)}`);
-  L.push(`      network: ${yamlStr(h.network)}`);
+  L.push(`      network: ${yamlStr(slot.network ?? h.network)}`);
   L.push(`      iso_name: ${yamlStr(h.arcaneIso)}`);
   L.push(`      storage_images: ${yamlStr(slot.storagePool ?? h.storageImages)}`);
   L.push(`      storage_iso: ${yamlStr(h.storageIso)}`);

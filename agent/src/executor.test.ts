@@ -46,6 +46,7 @@ function jobWith(nodeConfig: Record<string, unknown>): Job {
       dns2: "1.1.1.1",
       vlan: 186,
       apiPort: 16127,
+      network: null,
       storagePool: null,
       vmId: null,
       diskLimit: null,
@@ -126,6 +127,33 @@ test("hostile flux_id cannot inject structure either", () => {
   const doc = safeLoad(yaml) as { nodes: Array<{ hypervisor: Record<string, unknown>; fluxnode: any }> };
   assert.equal(doc.nodes[0]!.hypervisor.node, "pve20");
   assert.equal(doc.nodes[0]!.fluxnode.identity.flux_id, payload);
+});
+
+// Per-host network: the slot carries its host's bridge (pve40 = vmbr184, not the agent's
+// global vmbr0). A non-null slot.network overrides the host default; null falls back to it.
+test("slot.network overrides the agent's global host network", () => {
+  const base = jobWith({
+    fluxId: "t1abcdefghijkmnopqrstuvwx",
+    fluxIdentityKey: "Kx1abcdefghijkmnopqrstuvwxyz0123456789ABCDEFGHJKLMN",
+    collateralTxid: "a".repeat(64),
+    collateralVout: 0,
+    discordUserId: null,
+    discordWebhook: null,
+    telegramBotToken: null,
+    telegramChatId: null,
+  });
+
+  const override = { ...base, slot: { ...base.slot, network: "vmbr184" } } as Job;
+  const overrideDoc = safeLoad(buildProvisionYaml(override, cfg)) as {
+    nodes: Array<{ hypervisor: Record<string, unknown> }>;
+  };
+  assert.equal(overrideDoc.nodes[0]!.hypervisor.network, "vmbr184");
+
+  // null slot.network → falls back to the agent's configured host.network (vmbr0).
+  const fallbackDoc = safeLoad(buildProvisionYaml(base, cfg)) as {
+    nodes: Array<{ hypervisor: Record<string, unknown> }>;
+  };
+  assert.equal(fallbackDoc.nodes[0]!.hypervisor.network, "vmbr0");
 });
 
 // Defense in depth: the protocol schema refuses a control char before it ever reaches
