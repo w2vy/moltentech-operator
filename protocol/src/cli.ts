@@ -12,7 +12,7 @@
  *   env    --from-config <config.env> --secrets <secrets.env> --manifest <manifest.json> [--out <env.json>]
  *                                       assemble the Flux "Import Environment Variables" blob (JSON array of
  *                                       "KEY=value"): non-secret config + secrets + the signed manifest as
- *                                       MANIFEST_JSON; derives TIER_PRICES_JSON from TIERS_JSON. --manifest may
+ *                                       MANIFEST_JSON; passes TIER_PRICES_JSON through from config.env. --manifest may
  *                                       be a bare manifest OR an 'authorize' wrapper (owner-signed, shipped
  *                                       whole so MT ingests it owner-verified). Verifies the manifest (and any
  *                                       owner) signature first. Output contains SECRETS — never commit it.
@@ -58,7 +58,7 @@ const BODY_TEMPLATE = {
     contact: "ops@example.com",
   },
   coalitionUrl: "https://your-coalition.example",
-  tiers: [{ tier: "nimbus", capacity: 8, storagePool: "local-lvm" }],
+  hardware: [{ name: "pve-01" }],
   trialDays: 1,
   manualApproval: false,
   serviceFlags: {
@@ -179,19 +179,21 @@ function main() {
         put(k, config[k]);
       }
 
-      // TIER_PRICES_JSON (runtime pricing) derived from TIERS_JSON's per-tier priceCents.
-      let tiers: unknown;
+      // TIER_PRICES_JSON is set explicitly in config.env ({tier: cents}); pass it through,
+      // validating it is a JSON object of integer cents. Price is runtime-only and never
+      // enters the signed manifest, so it changes without a re-sign.
+      const pricesStr = needCfg("TIER_PRICES_JSON");
+      let prices: unknown;
       try {
-        tiers = JSON.parse(needCfg("TIERS_JSON"));
+        prices = JSON.parse(pricesStr);
       } catch {
-        die("config.env: TIERS_JSON is not valid JSON");
+        die("config.env: TIER_PRICES_JSON is not valid JSON");
       }
-      if (!Array.isArray(tiers) || tiers.length === 0) die("config.env: TIERS_JSON must be a non-empty array");
-      const prices: Record<string, number> = {};
-      for (const t of tiers as Array<{ tier?: unknown; priceCents?: unknown }>) {
-        if (!t || typeof t.tier !== "string") die('config.env: each TIERS_JSON entry needs a "tier"');
-        if (!Number.isInteger(t.priceCents)) die(`config.env: TIERS_JSON (${String(t.tier)}): integer "priceCents" is required`);
-        prices[t.tier as string] = t.priceCents as number;
+      if (!prices || typeof prices !== "object" || Array.isArray(prices)) {
+        die('config.env: TIER_PRICES_JSON must be an object like {"cumulus":700,"nimbus":20000}');
+      }
+      for (const [tier, cents] of Object.entries(prices as Record<string, unknown>)) {
+        if (!Number.isInteger(cents)) die(`config.env: TIER_PRICES_JSON (${tier}): integer cents required`);
       }
       put("TIER_PRICES_JSON", JSON.stringify(prices));
 

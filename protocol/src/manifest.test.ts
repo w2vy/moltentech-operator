@@ -61,7 +61,7 @@ function buildManifest(owner: string): ProviderManifestT {
     coalitionUrl: "https://coalition.example",
     pubkey: publicKeyBase64,
     ownerAddress: owner,
-    tiers: [{ tier: "nimbus", capacity: 1, storagePool: "local-lvm" }],
+    hardware: [{ name: "pve-01" }],
     trialDays: 1,
     manualApproval: false,
     serviceFlags: {},

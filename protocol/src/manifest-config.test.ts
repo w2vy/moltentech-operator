@@ -16,7 +16,7 @@ PROVIDER_NAME=Acme Ops
 PROVIDER_LOCATION=Berlin, DE
 PROVIDER_CONTACT=ops@acme.example
 COALITION_URL=https://acme.app.runonflux.io
-TIERS_JSON=[{"tier":"nimbus","capacity":8,"storagePool":"local-lvm","priceCents":2200}]
+HOSTS=pve20,pve40
 TRIAL_DAYS=2
 MANUAL_APPROVAL=true
 SESSION_TTL_HOURS=24
@@ -25,7 +25,7 @@ SESSION_TTL_HOURS=24
 test("parseConfigEnv skips comments/blanks and keeps JSON values intact", () => {
   const env = parseConfigEnv(SAMPLE);
   assert.equal(env.PROVIDER_SLUG, "acme");
-  assert.equal(env.TIERS_JSON, '[{"tier":"nimbus","capacity":8,"storagePool":"local-lvm","priceCents":2200}]');
+  assert.equal(env.HOSTS, "pve20,pve40");
   assert.equal(env["# a comment"], undefined);
 });
 
@@ -41,8 +41,8 @@ test("renders a schema-valid manifest body from config.env", () => {
   assert.equal(body.coalitionUrl, "https://acme.app.runonflux.io");
   assert.equal(body.trialDays, 2);
   assert.equal(body.manualApproval, true);
-  // priceCents dropped from the manifest tier.
-  assert.deepEqual(body.tiers, [{ tier: "nimbus", capacity: 8, storagePool: "local-lvm" }]);
+  // HOSTS becomes the owner-attested hardware list; no tiers/prices in the manifest.
+  assert.deepEqual(body.hardware, [{ name: "pve20" }, { name: "pve40" }]);
   // The rendered body passes the real schema (with pubkey/publishedAt stamped as sign does).
   const stamped = { ...body, pubkey: "x", publishedAt: new Date().toISOString() };
   assert.equal(ProviderManifestBody.safeParse(stamped).success, true);
@@ -72,11 +72,12 @@ test("rendered body signs to a manifest the real verifier accepts", () => {
 test("clear errors on malformed input", () => {
   assert.throws(() => renderManifestBodyFromConfig("PROVIDER_NAME=x"), /PROVIDER_SLUG is required/);
   assert.throws(
-    () => renderManifestBodyFromConfig("PROVIDER_SLUG=a\nPROVIDER_NAME=b\nCOALITION_URL=u\nTIERS_JSON=[]"),
-    /TIERS_JSON must be a non-empty array/
+    () => renderManifestBodyFromConfig("PROVIDER_SLUG=a\nPROVIDER_NAME=b\nCOALITION_URL=u"),
+    /HOSTS is required/
   );
+  // An empty/comma-only HOSTS parses to zero names — caught, not silently unconstrained.
   assert.throws(
-    () => renderManifestBodyFromConfig('PROVIDER_SLUG=a\nPROVIDER_NAME=b\nCOALITION_URL=u\nTIERS_JSON=[{"tier":"nimbus","storagePool":"p"}]'),
-    /capacity.*must be an integer/
+    () => renderManifestBodyFromConfig("PROVIDER_SLUG=a\nPROVIDER_NAME=b\nCOALITION_URL=u\nHOSTS=,"),
+    /HOSTS must list/
   );
 });

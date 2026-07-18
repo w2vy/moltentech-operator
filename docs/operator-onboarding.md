@@ -70,7 +70,13 @@ OWNER_ADDRESS=<your owner ZelID>
 # MT_PUBKEY — optional; leave blank for now. Pin later from {MT_BASE_URL}/api/mt-pubkey
 # once MT enables signing (503 until then). Only the Coalition consumes it.
 MT_PUBKEY=
-TIERS_JSON=[{"tier":"nimbus","capacity":8,"storagePool":"local-lvm","priceCents":2200}]
+# HOSTS — the Proxmox hosts you attest, as a comma-separated list of ProxmoxHost.name.
+# This is the owner-signed hardware list: MT rejects any inventory host not named here,
+# so adding a machine later means re-signing the manifest (see "Ongoing operations").
+HOSTS=pve-01,pve-02
+# TIER_PRICES_JSON — runtime price in integer CENTS per tier. NOT in the signed manifest,
+# so you can change price without re-signing.
+TIER_PRICES_JSON={"cumulus":700,"nimbus":20000}
 TRIAL_DAYS=1
 MANUAL_APPROVAL=false
 ```
@@ -83,8 +89,10 @@ mt-manifest verify --in manifest.json          # sanity: "OK — signature valid
 ```
 
 `manifest.json` is what your Coalition publishes. **Price is NOT in the manifest** —
-`priceCents` in `TIERS_JSON` feeds runtime pricing only (Step 3) and the agent listing
-(Step 4), so you change price without re-signing.
+`TIER_PRICES_JSON` feeds runtime pricing only (Step 3) and the agent listing (Step 4), so
+you change price without re-signing. What the manifest *does* carry is `HOSTS`: the
+hardware you attest, owner-signed. Tiers and slot counts are not in the manifest either —
+they derive from the inventory your agent asserts, constrained to the attested hosts.
 
 ---
 
@@ -373,9 +381,14 @@ burden, just an expanded role for a component you're already running.
 ## Ongoing operations
 
 - **Change price/capacity**: update the agent's `AGENT_LISTING_JSON` and restart it, and
-  update `priceCents` in `config.env`'s `TIERS_JSON` → re-run `manifest env` → re-import
-  `env.json` (free) so the Coalition's `TIER_PRICES_JSON` matches. No re-signing.
-- **Change identity/tiers offered**: edit `config.env`, re-`sign` the manifest, re-run
+  update `TIER_PRICES_JSON` in `config.env` → re-run `manifest env` → re-import
+  `env.json` (free) so the Coalition's prices match. No re-signing.
+- **Add or remove a host**: add its `ProxmoxHost.name` to `HOSTS` in `config.env`, then
+  re-`sign` + re-`authorize` (wallet) the manifest, re-run `manifest env`, re-import
+  `env.json`, and have MT re-ingest. Until then MT **rejects the whole inventory assert**
+  with a 409 naming the unattested host — this is the point of the attestation, so plan a
+  host addition around a signing session rather than a config edit.
+- **Change identity**: edit `config.env`, re-`sign` the manifest, re-run
   `manifest env`, and re-import `env.json` (free); MT re-pulls.
 - **Staleness**: if MT stops seeing fresh stats *and* listing past the TTL, your
   provider auto-hides from the marketplace (data retained) and auto-re-lists on the
