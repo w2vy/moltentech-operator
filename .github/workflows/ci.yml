@@ -80,55 +80,77 @@ jobs:
       # Exercise the documented operator flow end-to-end against a sample config.env.
       # Keep this config in sync with docs/operator-onboarding.md — if the contract
       # changes, this fails here rather than mid-ceremony on someone's signing machine.
-      - name: Sign + verify from a sample config.env
+      # Drive the flow using the ONBOARDING DOC'S OWN config.env, not a copy. A copy
+      # drifts silently: the doc once carried a nimbus price of 20000 cents ($200
+      # against a $20 floor) that this job would have happily signed, because it was
+      # validating its own sample instead. Now the doc IS the fixture — if the
+      # documented config stops working, or its prices stop clearing the platform
+      # floor, this fails.
+      - name: Sign + verify using the onboarding doc's own config.env
         run: |
           set -euo pipefail
           work="$(mktemp -d)"
-          cat > "$work/config.env" <<'EOF'
-          PROVIDER_SLUG=ci-operator
-          PROVIDER_NAME=CI Operator
-          MT_BASE_URL=https://www.moltentech.us
-          COALITION_URL=https://coalition.example
-          OWNER_ADDRESS=t1exampleOwnerWalletAddress
-          HOSTS=pve-01,pve-02
-          TIER_PRICES_JSON={"cumulus":700,"nimbus":20000}
-          TRIAL_DAYS=1
-          MANUAL_APPROVAL=false
-          EOF
-          cat > "$work/secrets.env" <<'EOF'
-          AGENT_KEY=ci-dummy-agent-key
-          COALITION_KEY=ci-dummy-coalition-key
-          STRIPE_SECRET_KEY=rk_test_ci_dummy
-          STRIPE_WEBHOOK_SECRET=whsec_ci_dummy
-          EOF
-          run() { docker run --rm -v "$work:/work" -u "$(id -u):$(id -g)" mt-manifest:ci "$@"; }
 
+          python3 - "$work" <<'EXTRACT'
+          import re, sys, pathlib
+          work = pathlib.Path(sys.argv[1])
+          doc = pathlib.Path("docs/operator-onboarding.md").read_text()
+          blocks = re.findall(r"```(?:sh|bash|env)?\n(.*?)```", doc, re.S)
+
+          cfg = [b for b in blocks if "PROVIDER_SLUG=" in b and "COALITION_URL=" in b]
+          sec = [b for b in blocks if "STRIPE_SECRET_KEY=" in b and "AGENT_KEY=" in b]
+          if not cfg or not sec:
+              sys.exit("FAIL: could not find the config.env / secrets.env blocks in "
+                       "docs/operator-onboarding.md — did the doc's structure change?")
+
+          # Substitute ONLY the <angle-bracket> placeholders. Everything else — key
+          # names, values, prices — is used exactly as an operator would copy it.
+          c = cfg[0].replace("https://<your-coalition>", "https://coalition.example")
+          c = c.replace("<your owner ZelID>", "t1exampleOwnerWalletAddress")
+          (work / "config.env").write_text(c)
+          (work / "secrets.env").write_text(re.sub(r"<[^>\n]*>", "ci-dummy", sec[0]))
+          print("extracted config.env + secrets.env from the onboarding doc")
+          EXTRACT
+
+          run() { docker run --rm -v "$work:/work" -u "$(id -u):$(id -g)" mt-manifest:ci "$@"; }
           run keygen
           run sign --key manifest-key.pem --from-config config.env --out manifest.json
           run verify --in manifest.json
-
-          # The manifest must carry the owner-attested hardware list and NOT the
-          # retired `tiers` field.
-          python3 - "$work/manifest.json" <<'PY'
-          import json, sys
-          m = json.load(open(sys.argv[1]))
-          assert "tiers" not in m, "retired `tiers` field is back in the manifest"
-          names = [h["name"] for h in m["hardware"]]
-          assert names == ["pve-01", "pve-02"], f"unexpected hardware: {names}"
-          assert m["schemaVersion"] == 2, f"unexpected schemaVersion: {m['schemaVersion']}"
-          print("manifest OK:", names)
-          PY
-
-          # `env` must pass TIER_PRICES_JSON through verbatim (it is no longer derived).
           run env --from-config config.env --secrets secrets.env \
                   --manifest manifest.json --out env.json
-          python3 - "$work/env.json" <<'PY'
-          import json, sys
-          pairs = dict(p.split("=", 1) for p in json.load(open(sys.argv[1])))
-          got = json.loads(pairs["TIER_PRICES_JSON"])
-          assert got == {"cumulus": 700, "nimbus": 20000}, f"price passthrough wrong: {got}"
-          print("TIER_PRICES_JSON OK:", got)
-          PY
+
+          python3 - "$work" <<'ASSERT'
+          import json, sys, pathlib
+          work = pathlib.Path(sys.argv[1])
+
+          m = json.load(open(work / "manifest.json"))
+          assert "tiers" not in m, "retired `tiers` field is back in the manifest"
+          assert m["schemaVersion"] == 2, f"unexpected schemaVersion: {m['schemaVersion']}"
+          assert m["hardware"], "manifest carries no hardware[]"
+          print("manifest OK:", [h["name"] for h in m["hardware"]])
+
+          pairs = dict(p.split("=", 1) for p in json.load(open(work / "env.json")))
+          prices = json.loads(pairs["TIER_PRICES_JSON"])
+
+          # Platform price floors, in CENTS. These MIRROR apps/web/src/lib/tiers.ts in
+          # the web repo (which this repo cannot import) — keep them in sync; MT rejects
+          # a listing below floor with a 422. This is the assertion that would have
+          # caught the doc's $200 nimbus.
+          FLOORS = {"cumulus": 700, "nimbus": 2000, "stratus": 4000}
+          for tier, cents in prices.items():
+              floor = FLOORS.get(tier)
+              assert floor is not None, f"unknown tier in the doc's TIER_PRICES_JSON: {tier}"
+              assert isinstance(cents, int), f"{tier}: price must be integer cents, got {cents!r}"
+              assert cents >= floor, (
+                  f"{tier}: the doc's price {cents} cents is BELOW the platform floor {floor}"
+              )
+              # A price wildly above floor is usually a misplaced zero, not a decision.
+              assert cents <= floor * 5, (
+                  f"{tier}: the doc's price {cents} cents is more than 5x the {floor} floor "
+                  f"— check for an extra zero (20000 vs 2000)"
+              )
+          print("TIER_PRICES_JSON OK (all tiers clear the floor, none suspiciously high):", prices)
+          ASSERT
 
       - name: Reject a malformed config.env
         run: |
