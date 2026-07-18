@@ -75,8 +75,10 @@ MT_PUBKEY=
 # so adding a machine later means re-signing the manifest (see "Ongoing operations").
 HOSTS=pve-01,pve-02
 # TIER_PRICES_JSON — runtime price in integer CENTS per tier. NOT in the signed manifest,
-# so you can change price without re-signing.
-TIER_PRICES_JSON={"cumulus":700,"nimbus":20000}
+# so you can change price without re-signing. Must be >= the platform floor for the tier
+# (cumulus $7, nimbus $20, stratus $40) — MT rejects a listing below it with a 422.
+# CHECK YOUR ZEROS: these are CENTS, so nimbus at $20 is 2000, not 20000.
+TIER_PRICES_JSON={"cumulus":700,"nimbus":2000}
 TRIAL_DAYS=1
 MANUAL_APPROVAL=false
 ```

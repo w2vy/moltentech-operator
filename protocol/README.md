@@ -52,13 +52,24 @@ alias mt-manifest='docker run --rm -v "$PWD:/work" -u "$(id -u):$(id -g)" ghcr.i
 mt-manifest keygen                                                       # -> manifest-key.pem (KEEP SECRET) + pubkey
 mt-manifest sign --key manifest-key.pem --from-config config.env --out manifest.json
 mt-manifest verify --in manifest.json
-mt-manifest env  --from-config config.env --secrets secrets.env --manifest manifest.json --out env.json
+
+# Owner-authorize: prove you control config.env's OWNER_ADDRESS (two steps — the
+# first prints the message + a Zelcore deep link, then you re-run with the signature)
+mt-manifest authorize --in manifest.json
+mt-manifest authorize --in manifest.json --signature <base64> --out signed-manifest.json
+
+mt-manifest env  --from-config config.env --secrets secrets.env --manifest signed-manifest.json --out env.json
 ```
 
 Commands: `keygen` (ed25519 keypair); `sign` (canonical-sign the manifest —
 `--from-config config.env` is the current flow; legacy `init` + `--in
-manifest.body.json` still work); `verify`; and `env` (assemble the Coalition's Flux
-`env.json` = config + secrets + embedded signed manifest). `sign` stamps `pubkey`
+manifest.body.json` still work); `verify`; `authorize` (wallet-sign the manifest so
+MT ingests it **owner-verified** — turns its blind-TOFU pubkey pin into proven
+ownership, auto-accepts a later key rotation from the same owner, and auto-issues
+your agent/coalition keys on a first ingest); and `env` (assemble the Coalition's
+Flux `env.json` = config + secrets + embedded signed manifest). `env` takes either a
+bare manifest or the `authorize` wrapper and ships it whole, so the owner signature
+reaches MT. `sign` stamps `pubkey`
 (from the key) + a fresh `publishedAt`, schema-validates, signs the canonical bytes,
 and self-verifies. Publish `manifest.json` at the Coalition's
 `/.well-known/mt-provider.json`; the MT admin ingests that URL.
