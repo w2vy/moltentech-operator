@@ -121,6 +121,9 @@ export const JobSlot = z.object({
   dns2: z.string().default("1.1.1.1"),
   vlan: z.number().int().min(1).max(4094).nullable().default(null),
   apiPort: z.number().int().positive(),
+  /** Proxmox bridge for this node's NIC (per-host fact; MT sends the slot's host bridge).
+   *  null → the agent falls back to its global PROXMOX_NETWORK. */
+  network: z.string().nullable().default(null),
   storagePool: z.string().nullable().default(null),
   vmId: z.number().int().positive().nullable().default(null),
   diskLimit: z.number().int().positive().nullable().default(null),
@@ -290,6 +293,8 @@ export const InventoryHost = z.object({
   nodeName: z.string().min(1),
   /** Reference API URL (agent injects its own creds; MT never calls it for agent hosts). */
   apiUrl: z.string().min(1).optional(),
+  /** Proxmox bridge the node NICs attach to on this host (e.g. vmbr0 / vmbr184). */
+  network: z.string().min(1).optional(),
   storageImages: z.string().min(1).optional(),
   storageIso: z.string().min(1).optional(),
   slots: z.array(InventorySlot),
