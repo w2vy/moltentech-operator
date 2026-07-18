@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { Envelope, ProviderSlug, TierKey, Timestamp } from "./common";
+import { Envelope, ProviderSlug, Timestamp } from "./common";
 
 /**
  * Provider Manifest — the operator's signed self-description, published as a
@@ -15,14 +15,11 @@ import { Envelope, ProviderSlug, TierKey, Timestamp } from "./common";
  * - Served as immutable-per-deploy config so multiple Coalition instances are
  *   byte-identical (Syncthing replicates, never merges).
  */
-export const ProviderManifestTier = z.object({
-  tier: TierKey,
-  /** Max nodes the operator offers for this tier (respects the 8/WAN-IP Flux cap upstream). */
-  capacity: z.number().int().nonnegative(),
-  /** Proxmox storage ID for the VM disk on the operator side (e.g. "local-lvm"). */
-  storagePool: z.string().min(1),
+export const ProviderManifestHardware = z.object({
+  /** ProxmoxHost.name the operator attests exists (1:1 with a machine post-pve40-merge). */
+  name: z.string().min(1),
 });
-export type ProviderManifestTier = z.infer<typeof ProviderManifestTier>;
+export type ProviderManifestHardware = z.infer<typeof ProviderManifestHardware>;
 
 export const ProviderManifestBody = Envelope.extend({
   provider: z.object({
@@ -50,8 +47,8 @@ export const ProviderManifestBody = Envelope.extend({
    * project_moltentech_wallet_manifest_auth.
    */
   ownerAddress: z.string().min(1).optional(),
-  /** Tiers the operator offers (price is NOT here — see listing assert). */
-  tiers: z.array(ProviderManifestTier).min(1),
+  /** Hardware (Proxmox host rows) the operator attests. Tiers/counts derive from inventory. */
+  hardware: z.array(ProviderManifestHardware).min(1),
   /** Operator-selectable free-trial window in days (1–7); MT defaults missing to 1. */
   trialDays: z.number().int().min(1).max(7).default(1),
   /** Cautious operators may require manual approval before provisioning a trial. */

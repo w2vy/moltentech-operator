@@ -10,8 +10,9 @@ import { SCHEMA_VERSION } from "./common";
  * Mapping:
  *   PROVIDER_SLUG/NAME/LOCATION/DESCRIPTION/CONTACT -> provider.*
  *   COALITION_URL                                   -> coalitionUrl
- *   TIERS_JSON[{tier,capacity,storagePool,...}]     -> tiers[] (priceCents dropped;
- *                                                      it feeds runtime prices only)
+ *   HOSTS=pve20,pve40,…                             -> hardware[{name}] (the owner-attested
+ *                                                      Proxmox host rows; tiers/counts
+ *                                                      derive from the agent's inventory)
  *   TRIAL_DAYS                                      -> trialDays
  *   MANUAL_APPROVAL ("true"/"false")                -> manualApproval
  *   OWNER_ADDRESS                                   -> ownerAddress (optional; the
@@ -56,30 +57,22 @@ export function renderManifestBodyFromConfig(configText: string): Record<string,
 
   const coalitionUrl = need("COALITION_URL");
 
-  // need() is OUTSIDE the try so a missing TIERS_JSON reports "required", not "not valid JSON".
-  const tiersStr = need("TIERS_JSON");
-  let tiersRaw: unknown;
-  try {
-    tiersRaw = JSON.parse(tiersStr);
-  } catch {
-    throw new Error("config.env: TIERS_JSON is not valid JSON");
-  }
-  if (!Array.isArray(tiersRaw) || tiersRaw.length === 0) {
-    throw new Error("config.env: TIERS_JSON must be a non-empty array");
-  }
-  const tiers = tiersRaw.map((t: any, n: number) => {
-    if (!t || typeof t.tier !== "string") throw new Error(`TIERS_JSON[${n}]: missing "tier"`);
-    if (!Number.isInteger(t.capacity)) throw new Error(`TIERS_JSON[${n}] (${t.tier}): "capacity" must be an integer`);
-    if (!t.storagePool) throw new Error(`TIERS_JSON[${n}] (${t.tier}): "storagePool" is required`);
-    // priceCents is intentionally dropped — it is a runtime price, not a manifest field.
-    return { tier: t.tier, capacity: t.capacity, storagePool: String(t.storagePool) };
-  });
+  // The owner-attested hardware list: the ProxmoxHost.name of every machine this operator
+  // is allowed to serve from. MT pins these at ingest and rejects any inventory host that
+  // isn't on the list, so a stolen agent key can't graft in a foreign machine.
+  const hostsStr = need("HOSTS");
+  const hardware = hostsStr
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map((name) => ({ name }));
+  if (hardware.length === 0) throw new Error("config.env: HOSTS must list ≥1 host name");
 
   const body: Record<string, unknown> = {
     schemaVersion: SCHEMA_VERSION,
     provider,
     coalitionUrl,
-    tiers,
+    hardware,
     trialDays: Number(env.TRIAL_DAYS ?? 1),
     manualApproval: env.MANUAL_APPROVAL === "true",
     serviceFlags: { delegationAvailable: false, autoRenew: true, whiteLabel: false, languages: ["en"] },

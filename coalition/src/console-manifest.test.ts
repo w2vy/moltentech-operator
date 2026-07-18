@@ -34,7 +34,7 @@ const WRAPPED_MANIFEST_JSON = JSON.stringify({
     coalitionUrl: "https://coalition.example",
     pubkey: agent.publicKeyBase64,
     ownerAddress: "t1exampleOwnerWalletAddress",
-    tiers: [{ tier: "nimbus", capacity: 1, storagePool: "local-lvm" }],
+    hardware: [{ name: "pve-01" }],
     trialDays: 1,
     manualApproval: false,
     serviceFlags: {},
