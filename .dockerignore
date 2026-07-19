@@ -1,0 +1,20 @@
+# Build context is the repo root (agent + coalition both build from here).
+# Dependencies are installed inside the image, so never ship local copies.
+#
+# This is not just about context size. `@moltentech/protocol` is a `file:../protocol`
+# dependency, so a host-side `npm install` materialises
+# coalition/node_modules/@moltentech/protocol as a real directory. Copying that over
+# the layer where the image's own npm install put it fails the build outright with
+# "cannot copy to non-directory" — and `--no-cache` does not help, because the
+# problem is the context, not the cache.
+**/node_modules
+.git
+**/.env
+**/.env.*
+!**/.env.example
+**/*.log
+
+# Operator-held secrets and signing output: never let these reach an image layer,
+# least of all in a public one.
+**/signed-manifest.json
+**/env.json
