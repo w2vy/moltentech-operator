@@ -42,7 +42,7 @@ The **restricted** Stripe key needs only: Checkout Sessions (write), Prices
 cancel, not a refund.
 
 ## Status
-`v0.1.0` — manifest/stats serving + payments (checkout/manage/webhook→relay)
+`v0.2.5` — manifest/stats serving + payments (checkout/manage/webhook→relay)
 complete and verified with an injected Stripe + mock MT. Remaining integration
 point: the real external **stats collector** (Flux-API polling). Sign the manifest
 with `@moltentech/protocol/signing` (operator CLI). To be extracted to the public

@@ -127,7 +127,7 @@ they derive from the inventory your agent asserts, constrained to the attested h
 
 ## Step 3 — Deploy the Coalition on Flux (publish the manifest)
 
-The Coalition runs as a **published Docker image** (`w2vy/coalition:0.1.0`) deployed as a
+The Coalition runs as a **published Docker image** (`w2vy/coalition:0.2.5`) deployed as a
 Flux App. Config, secrets, and your signed manifest are all supplied as **Flux environment
 variables** — nothing to mount. It can serve your manifest before you have the MT-issued
 keys (Step 5): deploy now with placeholder `AGENT_KEY`/`COALITION_KEY`; set the real values
@@ -164,7 +164,7 @@ mt-manifest env --from-config config.env --secrets secrets.env \
 and embeds the signed manifest as `MANIFEST_JSON` (verifying the signature first). **It
 contains secrets — do not commit it.**
 
-**2. Register the Flux App:** Docker image `w2vy/coalition:0.1.0`, container port **8088**,
+**2. Register the Flux App:** Docker image `w2vy/coalition:0.2.5`, container port **8088**,
 then paste `env.json` into the app's **Environment Variables → Import** (JSON array).
 
 **3. Verify:** `https://<your-coalition>/health` → `{"ok":true,"provider":"…","coalitionVersion":"…"}`
