@@ -16,7 +16,8 @@
  *                                       be a bare manifest OR an 'authorize' wrapper (owner-signed, shipped
  *                                       whole so MT ingests it owner-verified). Verifies the manifest (and any
  *                                       owner) signature first. Output contains SECRETS — never commit it.
- *   verify --in <manifest.json>         re-verify a signed manifest
+ *   verify --in <manifest.json>         re-verify a signed manifest — accepts a bare manifest OR an
+ *                                        'authorize' wrapper (whose owner signature is checked too)
  *   authorize --in <manifest.json>      print the owner-authorization message + a Zelcore
  *                                        deep link to sign (proves you control ownerAddress)
  *   authorize --in <manifest.json> --signature <b64> --out <signed-manifest.json>
@@ -223,9 +224,36 @@ function main() {
     case "verify": {
       const inPath = flag(args, "--in") ?? die("--in <manifest.json> required");
       const raw = JSON.parse(readFileSync(inPath, "utf8"));
-      const ok = verifyManifestObject(raw);
-      console.log(ok ? "OK — signature valid" : "FAILED — signature invalid");
-      process.exit(ok ? 0 : 1);
+      // Accept either shape an operator can hold: a bare manifest, or the
+      // 'authorize' wrapper they publish. Verifying the wrapper's top level
+      // could only ever fail (it carries no `signature` of its own), which
+      // told operators their VALID manifest was broken.
+      const { manifest, ownerSignature } = unwrapManifest(raw);
+      if (!verifyManifestObject(manifest)) {
+        console.log("FAILED — manifest signature invalid");
+        process.exit(1);
+      }
+      if (ownerSignature == null) {
+        console.log("OK — manifest signature valid (bare manifest, no owner authorization)");
+        break;
+      }
+      // A wrapper is only as good as its owner signature; verify it too rather
+      // than reporting OK on the ed25519 alone. Mirrors the checks in `env`.
+      const parsed = ProviderManifest.safeParse(manifest);
+      if (!parsed.success) {
+        console.log("FAILED — signed wrapper's manifest is invalid");
+        process.exit(1);
+      }
+      if (!parsed.data.ownerAddress) {
+        console.log("FAILED — signed manifest is missing ownerAddress");
+        process.exit(1);
+      }
+      if (!verifyManifestOwnerSignature(parsed.data, ownerSignature)) {
+        console.log("FAILED — owner wallet signature does not verify against ownerAddress");
+        process.exit(1);
+      }
+      console.log(`OK — manifest + owner signature valid (owner ${parsed.data.ownerAddress})`);
+      break;
     }
     case "authorize": {
       // Prove you control the manifest's ownerAddress by wallet-signing it, turning
