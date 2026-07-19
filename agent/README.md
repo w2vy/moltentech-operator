@@ -56,7 +56,7 @@ touching Proxmox — useful to validate connectivity/auth against MoltenTech.
 
 ## Status
 
-`v0.1.0` — control plane (claim/result/listing) complete and verified against the
+`v0.2.0` — control plane (claim/result/listing) complete and verified against the
 live MoltenTech agent API. The arcane-mage executor (real Proxmox provisioning) is
 the remaining integration point — see `src/executor.ts`; it reuses the same engine
 as `apps/provisioner`. To be extracted to the public `moltentech-operator` repo.
