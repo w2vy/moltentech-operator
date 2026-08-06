@@ -55,9 +55,11 @@ async function main() {
       let result;
       try {
         const r = await executor(job, cfg);
-        result = { ok: r.ok, message: r.message, vmId: r.vmId };
+        result = { ok: r.ok, message: r.message, vmId: r.vmId, failureClass: r.failureClass };
       } catch (err) {
-        result = { ok: false, message: (err as Error).message };
+        // An exception escaping the executor is an agent-side fault of unknown
+        // nature — left unclassified so MT never auto-retries it.
+        result = { ok: false, message: (err as Error).message, failureClass: undefined };
       }
       try {
         await client.postResult({
@@ -66,6 +68,7 @@ async function main() {
           status: result.ok ? "success" : "failed",
           message: result.message,
           vmId: result.vmId,
+          failureClass: result.failureClass,
         });
         console.log(`[agent] job ${job.jobId} (${job.action}) -> ${result.ok ? "success" : "failed"}`);
       } catch (err) {

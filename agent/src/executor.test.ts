@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { Job } from "@moltentech/protocol";
 import type { AgentConfig } from "./config";
-import { buildProvisionYaml } from "./executor";
+import { buildProvisionYaml, classifyAmFailure, amFailure, parseAmJson } from "./executor";
+import type { AmResult } from "./executor";
 
 // arcane-mage parses the config disk with PyYAML `yaml.safe_load`. Parse the generated
 // YAML with the SAME loader so the test proves what the node would actually see.
@@ -183,4 +184,119 @@ test("Job schema rejects control chars in nodeConfig strings", () => {
       },
     })
   );
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Failure classification (Phase 2 of the job retry queue).
+//
+// The rule under test is deliberately asymmetric: recognising a failure as
+// `transient` licenses MT to re-run the job unattended, so the bar for that
+// verdict is high and everything unrecognised must fall through to `unknown`.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Shape a fake arcane-mage run whose provision trace ends in `messages`. */
+function amRun(messages: string[], extra: Partial<AmResult> = {}): AmResult {
+  return {
+    error: null,
+    stdout: "",
+    stderr: "",
+    json: {
+      ok: false,
+      error: "Provisioning failed",
+      nodes: [
+        {
+          hostname: "pve25",
+          ok: false,
+          steps: [
+            { ok: true, message: "Validated hypervisor" },
+            ...messages.map((message) => ({ ok: false, message })),
+          ],
+        },
+      ],
+    },
+    ...extra,
+  };
+}
+
+test("classify: pre-flight cluster failures are transient", () => {
+  // Both are raised before anything is mutated, and both are the MT-0010 class.
+  assert.equal(classifyAmFailure(amRun(["Cluster has lost quorum, refusing to provision"])), "transient");
+  assert.equal(classifyAmFailure(amRun(["Node 'pve25' is offline in cluster"])), "transient");
+});
+
+test("classify: unreachable Proxmox API is transient", () => {
+  assert.equal(classifyAmFailure(amRun(["Unable to get Proxmox api version"])), "transient");
+  assert.equal(classifyAmFailure(amRun(["Unable to get Proxmox storage state"])), "transient");
+  assert.equal(classifyAmFailure(amRun(["Unable to list VMs on pve25"])), "transient");
+});
+
+test("classify: a name collision is permanent", () => {
+  assert.equal(
+    classifyAmFailure(amRun(["VM name 'mt-186-n4' already exists on node 'pve25'"])),
+    "permanent"
+  );
+  assert.equal(classifyAmFailure(amRun(["Unable to generate vm config"])), "permanent");
+});
+
+test("classify: permanent wins over transient when both appear", () => {
+  // A run can trip several steps; the permanent one decides, because retrying
+  // cannot clear it no matter how transient its neighbour was.
+  assert.equal(
+    classifyAmFailure(
+      amRun(["Node 'pve25' is offline in cluster", "VM name 'x' already exists on node 'pve30'"])
+    ),
+    "permanent"
+  );
+});
+
+test("classify: mutating steps stay unknown — the real cause never reaches us", () => {
+  // arcane-mage collapses the Proxmox HTTP status to a bool before the CLI sees
+  // it, so these could be a transient 595 or a full disk. Never auto-retry.
+  for (const m of [
+    "Unable to create VM on hypervisor",
+    "Unable to start VM on hypervisor",
+    "Unable to upload Config image to hypervisor",
+    "Unable to clean up disk images on hypervisor",
+  ]) {
+    assert.equal(classifyAmFailure(amRun([m])), "unknown", m);
+  }
+});
+
+test("classify: a timeout is unknown, not transient", () => {
+  // The VM may be half-built; a blind retry is not obviously safe.
+  const killed = amRun([], { error: Object.assign(new Error("timeout"), { killed: true }) });
+  assert.equal(classifyAmFailure(killed), "unknown");
+});
+
+test("classify: a missing arcane-mage binary is permanent", () => {
+  const enoent = amRun([], { error: Object.assign(new Error("spawn ENOENT"), { code: "ENOENT" }) });
+  assert.equal(classifyAmFailure(enoent), "permanent");
+});
+
+test("classify: no trace at all is unknown", () => {
+  // Exactly MT-0010's stored evidence: pydantic noise on stderr, nothing else.
+  const bare: AmResult = {
+    error: null,
+    stdout: "",
+    stderr: "PydanticSerializationUnexpectedValue: Expected 6 fields but got 5",
+    json: { ok: false, error: "Provisioning failed" },
+  };
+  assert.equal(classifyAmFailure(bare), "unknown");
+});
+
+test("failure message leads with the failed step, not the generic error", () => {
+  const msg = amFailure(amRun(["Node 'pve25' is offline in cluster"], { stderr: "pydantic noise" }));
+  assert.match(msg, /^\[step\] Node 'pve25' is offline in cluster/);
+  // stderr is retained for debugging, but demoted below the real signal.
+  assert.ok(msg.indexOf("pydantic noise") > msg.indexOf("[step]"));
+});
+
+test("parseAmJson survives stray stdout above the payload", () => {
+  // A single stray line used to drop the entire structured payload.
+  const out = 'warning: deprecated flag\n{"ok":false,"error":"Provisioning failed"}';
+  assert.deepEqual(parseAmJson(out), { ok: false, error: "Provisioning failed" });
+});
+
+test("parseAmJson returns null when there is no JSON at all", () => {
+  assert.equal(parseAmJson("Traceback (most recent call last):"), null);
 });

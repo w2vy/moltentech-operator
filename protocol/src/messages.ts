@@ -225,12 +225,41 @@ export type Job = z.infer<typeof Job>;
 // ───────────────────────────────────────────────────────────────────────────
 // 4. result  —  agent → MT
 // ───────────────────────────────────────────────────────────────────────────
+/**
+ * How a failed job should be treated by MT's retry queue.
+ *
+ * - `transient` — the run failed before touching anything, for a reason that may
+ *   well be gone on the next attempt (cluster lost quorum, node offline, Proxmox
+ *   API unreachable). Safe to retry automatically.
+ * - `permanent` — retrying cannot help (VM name already taken, unusable config).
+ * - `unknown`   — genuinely undetermined. Never auto-retried.
+ *
+ * `unknown` is also what MT infers when the field is absent, so an agent built
+ * before this field existed keeps today's behaviour exactly.
+ */
+export const FailureClass = z.enum(["transient", "permanent", "unknown"]);
+export type FailureClass = z.infer<typeof FailureClass>;
+
 export const JobResult = Envelope.extend({
   jobId: z.string().min(1),
   status: z.enum(["success", "failed"]),
   message: z.string().optional(),
   /** Proxmox VMID actually assigned (for traceability). */
   vmId: z.number().int().positive().optional(),
+  /**
+   * Structured failure cause, set by the agent at the point where the real cause
+   * is still in scope. Free-text `message` is NOT a reliable substitute — see
+   * MT-0010, where the stored output held only pydantic warnings and the actual
+   * Proxmox 595 never left the agent's docker logs.
+   *
+   * OPTIONAL ON PURPOSE, and `SCHEMA_VERSION` deliberately does NOT change:
+   * the Envelope pins `schemaVersion` with `z.literal()`, so a bump would be a
+   * flag day that 400s every deployed agent the moment MT redeploys. Zod strips
+   * unknown keys by default, so both mixed-version directions stay safe —
+   * a new agent talking to an old MT has the field dropped, and an old agent
+   * talking to a new MT simply omits it and is treated as `unknown`.
+   */
+  failureClass: FailureClass.optional(),
 });
 export type JobResult = z.infer<typeof JobResult>;
 

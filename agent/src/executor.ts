@@ -1,13 +1,14 @@
 import { execFile } from "node:child_process";
+import type { ExecFileException } from "node:child_process";
 import { writeFileSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
-import type { Job } from "@moltentech/protocol";
+import type { Job, FailureClass } from "@moltentech/protocol";
 import type { AgentConfig } from "./config";
 import { checkOwnerAuth } from "./owner-auth";
 
-export type ExecResult = { ok: boolean; message?: string; vmId?: number };
+export type ExecResult = { ok: boolean; message?: string; vmId?: number; failureClass?: FailureClass };
 export type Executor = (job: Job, cfg: AgentConfig) => Promise<ExecResult>;
 
 /**
@@ -109,8 +110,11 @@ export function buildProvisionYaml(job: Job, cfg: AgentConfig): string {
   return L.join("\n") + "\n";
 }
 
-type AmResult = {
-  error: Error | null;
+/** One entry of arcane-mage's per-stage provisioning trace. */
+type AmStep = { ok?: boolean; message?: string };
+
+export type AmResult = {
+  error: ExecFileException | null;
   stdout: string;
   stderr: string;
   json: {
@@ -123,6 +127,19 @@ type AmResult = {
     build?: string;
     severity?: string;
     release?: string;
+    /**
+     * Per-host provisioning trace. arcane-mage has always emitted this under
+     * `--json` (`__main__.py` builds it from the provisioner's step callback),
+     * but the agent never declared it and so silently dropped it — which is why
+     * a failure only ever reported the hardcoded generic `error: "Provisioning
+     * failed"` plus whatever noise was on stderr.
+     */
+    nodes?: Array<{
+      hostname?: string;
+      ok?: boolean;
+      vm_id?: number;
+      steps?: AmStep[];
+    }>;
   } | null;
 };
 
@@ -133,13 +150,7 @@ function runArcaneMage(args: string[], cfg: AgentConfig, timeoutMs: number): Pro
   const fullArgs = [subcommand!, "--url", cfg.proxmox.url!, "--token", token, ...rest];
   return new Promise((resolve) => {
     execFile("arcane-mage", fullArgs, { timeout: timeoutMs }, (error, stdout, stderr) => {
-      let json: AmResult["json"] = null;
-      try {
-        json = JSON.parse(stdout.trim());
-      } catch {
-        /* non-JSON output */
-      }
-      resolve({ error, stdout, stderr, json });
+      resolve({ error, stdout, stderr, json: parseAmJson(stdout) });
     });
   });
 }
@@ -147,14 +158,107 @@ function runArcaneMage(args: string[], cfg: AgentConfig, timeoutMs: number): Pro
 const TIMEOUT = { provision: 300_000, delete: 120_000, reprovision: 420_000, refreshIso: 1_200_000 };
 
 /**
+ * Recover arcane-mage's `--json` payload from stdout.
+ *
+ * A bare `JSON.parse(stdout)` is too brittle: any stray line written to stdout by
+ * a Python dependency (a warning, a progress line) drops the ENTIRE structured
+ * payload and silently degrades us to stderr-only — exactly the blindness this
+ * phase exists to remove. So fall back to scanning for the last line that parses
+ * as a JSON object.
+ */
+export function parseAmJson(stdout: string): AmResult["json"] {
+  const whole = stdout.trim();
+  if (!whole) return null;
+  try {
+    return JSON.parse(whole);
+  } catch {
+    /* fall through to the line scan */
+  }
+  const lines = whole.split("\n");
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i]!.trim();
+    if (!line.startsWith("{")) continue;
+    try {
+      const parsed = JSON.parse(line);
+      if (parsed && typeof parsed === "object") return parsed;
+    } catch {
+      /* not this line */
+    }
+  }
+  return null;
+}
+
+/** Messages of the failed steps in arcane-mage's per-host trace, outermost first. */
+export function failedSteps(r: AmResult): string[] {
+  const out: string[] = [];
+  for (const node of r.json?.nodes ?? []) {
+    for (const step of node.steps ?? []) {
+      if (step.ok === false && step.message?.trim()) out.push(step.message.trim());
+    }
+  }
+  return out;
+}
+
+/**
+ * Failures that are safe AND worth retrying. Every one of these is raised by
+ * arcane-mage's PRE-FLIGHT checks — before anything on the hypervisor has been
+ * mutated — so a retry cannot leave a half-built VM behind, and the condition
+ * (quorum, node reachability, API availability) is exactly the kind that clears
+ * on its own. MT-0010 was this class: a cluster-proxy wobble that also dropped
+ * the agent's health pass from 22 nodes to 17 in the same tick.
+ */
+const TRANSIENT = [
+  /lost quorum/i,
+  /is offline in cluster/i,
+  /Unable to get Proxmox api version/i,
+  /Unable to get Proxmox storage state/i,
+  /Unable to list VMs/i,
+];
+
+/** Failures where a retry provably cannot help. */
+const PERMANENT = [/already exists on node/i, /Unable to generate vm config/i];
+
+/**
+ * Classify a failed arcane-mage run for MT's retry queue.
+ *
+ * Deliberately conservative: anything not positively recognised is `unknown`, and
+ * MT never auto-retries `unknown`. That matters because most of arcane-mage's
+ * mutating steps collapse their real cause to a bare bool before the CLI sees it
+ * — "Unable to create VM on hypervisor" could be a transient 595 or a full disk,
+ * and the difference is not recoverable here. Those land in the admin queue with
+ * the failed stage named, which is still a large improvement on a generic string.
+ *
+ * A timeout is `unknown` for the same reason: the VM may be half-created, so a
+ * blind retry is not obviously safe.
+ */
+export function classifyAmFailure(r: AmResult): FailureClass {
+  // arcane-mage missing entirely is a deployment fault, not a hypervisor blip.
+  if (r.error?.code === "ENOENT") return "permanent";
+  if (r.error?.killed || r.error?.signal) return "unknown";
+
+  const haystack = [...failedSteps(r), r.json?.error ?? ""].join("\n");
+  if (PERMANENT.some((re) => re.test(haystack))) return "permanent";
+  if (TRANSIENT.some((re) => re.test(haystack))) return "transient";
+  return "unknown";
+}
+
+/**
  * Build the richest failure message for a failed arcane-mage run. The structured
  * `json.error` is usually a one-liner; the real diagnostic (Python traceback,
  * Proxmox API detail) lands on stderr. Combine both (plus any spawn/timeout error)
  * so ProvisionLog.output carries enough to debug — the old code dropped stderr
  * whenever json.error was present, blind-siding Phase 0 debugging.
+ *
+ * The failed STEP messages lead, because they name which stage actually broke.
+ * `json.error` on a provision failure is the hardcoded string "Provisioning
+ * failed", which says nothing; stderr is where the pydantic noise lives and is
+ * therefore last, so a verbose warning stream can no longer push the real signal
+ * past the 4000-char cap.
  */
-function amFailure(r: AmResult): string {
+export function amFailure(r: AmResult): string {
   const parts: string[] = [];
+  const steps = failedSteps(r);
+  if (steps.length) parts.push(steps.map((s) => `[step] ${s}`).join("\n"));
   for (const s of [r.json?.error, r.error?.message, r.stderr]) {
     const t = s?.trim();
     if (t && !parts.includes(t)) parts.push(t);
@@ -169,7 +273,11 @@ async function deprovision(job: Job, cfg: AgentConfig): Promise<ExecResult> {
     TIMEOUT.delete
   );
   const ok = r.json?.ok === true || !!r.json?.error?.includes("not found");
-  return { ok, message: ok ? (r.stdout + "\n" + r.stderr).trim().slice(0, 4000) : amFailure(r) };
+  return {
+    ok,
+    message: ok ? (r.stdout + "\n" + r.stderr).trim().slice(0, 4000) : amFailure(r),
+    failureClass: ok ? undefined : classifyAmFailure(r),
+  };
 }
 
 async function provision(job: Job, cfg: AgentConfig): Promise<ExecResult> {
@@ -177,10 +285,12 @@ async function provision(job: Job, cfg: AgentConfig): Promise<ExecResult> {
   writeFileSync(yamlPath, buildProvisionYaml(job, cfg), { mode: 0o600 });
   try {
     const r = await runArcaneMage(["provision", "--json", "-c", yamlPath], cfg, TIMEOUT.provision);
+    const ok = r.json?.ok === true;
     return {
-      ok: r.json?.ok === true,
-      message: r.json?.ok ? undefined : amFailure(r),
+      ok,
+      message: ok ? undefined : amFailure(r),
       vmId: typeof r.json?.vm_id === "number" ? r.json.vm_id : undefined,
+      failureClass: ok ? undefined : classifyAmFailure(r),
     };
   } finally {
     // Scrub the YAML — it briefly held the customer's Flux identity key.
@@ -253,7 +363,14 @@ function withOwnerAuthGate(inner: Executor): Executor {
   return async (job, cfg) => {
     const decision = checkOwnerAuth(job, cfg);
     if (!decision.ok) {
-      return { ok: false, message: `owner authorization refused: ${decision.reason}` };
+      // `permanent`: re-running the identical job produces the identical refusal.
+      // Recovery is a human re-authorizing (which spawns a REPLACEMENT row), not
+      // a retry of this one — precisely MT-0010's teardown leg.
+      return {
+        ok: false,
+        message: `owner authorization refused: ${decision.reason}`,
+        failureClass: "permanent",
+      };
     }
     return inner(job, cfg);
   };
