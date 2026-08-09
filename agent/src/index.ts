@@ -7,6 +7,7 @@ import { loadManifestKey } from "./signing";
 import { pickExecutor } from "./executor";
 import { collectHealth } from "./health";
 import { refreshIsoOnce } from "./iso-refresh";
+import { runDetached } from "./background";
 
 /**
  * Operator agent main loop. Outbound-only: it pulls jobs and pushes results +
@@ -137,11 +138,25 @@ async function main() {
   }
 
   // Declare inventory first so the host/slot rows exist before listing + health.
+  // These two are plain MT API calls — they cannot touch Proxmox, so awaiting them
+  // can only stall on MT itself, and the rows must exist before anything references them.
   await reassertInventory();
   await reassertListing();
-  await reportHealthOnce();
-  await courierOnce();
-  await refreshIsoOnce(cfg);
+
+  // NOTHING below may gate the poll loop (#90). `refreshIsoOnce` alone can burn
+  // TIMEOUT.refreshIso (20 min) PER declared host against a degraded Proxmox, and
+  // health/courier reach a hypervisor and a remote console respectively. Awaiting
+  // them meant a sick hypervisor stopped job claiming entirely while inventory and
+  // listing had already stamped `agentLastSeenAt` — so the hub saw a healthy agent
+  // that silently did no work, the worst possible failure shape.
+  //
+  // Trade-off, deliberate: a job claimed in the first seconds now runs before the
+  // first ISO refresh has adopted a newer image, so it can still fail its own
+  // staleness check. That is a single recoverable job failure with a named cause,
+  // which beats a total claiming outage with none.
+  runDetached("initial health report", reportHealthOnce);
+  runDetached("initial courier run", courierOnce);
+  runDetached("initial ISO refresh", () => refreshIsoOnce(cfg));
   const inventoryTimer = setInterval(reassertInventory, cfg.listingIntervalMs);
   const listingTimer = setInterval(reassertListing, cfg.listingIntervalMs);
   const healthTimer = setInterval(reportHealthOnce, cfg.healthIntervalMs);
