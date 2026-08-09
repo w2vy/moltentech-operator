@@ -341,3 +341,23 @@ test("coerceVmId rejects anything that is not a usable vmid", () => {
     assert.equal(coerceVmId(bad), undefined, `expected undefined for ${JSON.stringify(bad)}`);
   }
 });
+
+test("classify: a teardown that cannot discover nodes is transient, not unknown", () => {
+  // `deprovision` against an unreachable Proxmox emits NO nodes[] trace at all, so
+  // this arrives via json.error rather than a failed step — the shape that used to
+  // fall through to `unknown` and leave teardowns unable to auto-retry a fault that
+  // provisions retry happily. Discovery is read-only, so a retry is provably safe.
+  const r: AmResult = {
+    error: null,
+    stdout: "",
+    stderr: "",
+    json: { ok: false, error: "Unable to discover hypervisor nodes" },
+  };
+  assert.equal(classifyAmFailure(r), "transient");
+});
+
+test("classify: a half-mutated teardown stays unknown even so", () => {
+  // Only the discovery phase is safe to retry blindly. A failure at an actual
+  // deletion step must still land in the admin queue.
+  assert.equal(classifyAmFailure(amRun(["Unable to delete VM on hypervisor"])), "unknown");
+});

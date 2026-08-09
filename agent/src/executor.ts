@@ -249,6 +249,15 @@ const TRANSIENT = [
   /Unable to get Proxmox api version/i,
   /Unable to get Proxmox storage state/i,
   /Unable to list VMs/i,
+  /**
+   * Teardown's equivalent of the API-unreachable cases above. `deprovision` against
+   * an unreachable Proxmox dies during node discovery with NO `nodes[]` trace, so it
+   * matched nothing and classified `unknown` — meaning a teardown could never
+   * auto-retry a fault a provision retries happily. Discovery is strictly read-only,
+   * so nothing can be half-mutated when it fails; this is caught by `json.error`
+   * rather than a failed step, which the haystack already covers.
+   */
+  /Unable to discover hypervisor nodes/i,
 ];
 
 /** Failures where a retry provably cannot help. */
