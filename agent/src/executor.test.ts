@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { Job } from "@moltentech/protocol";
 import type { AgentConfig } from "./config";
-import { buildProvisionYaml, classifyAmFailure, amFailure, parseAmJson } from "./executor";
+import { buildProvisionYaml, classifyAmFailure, amFailure, parseAmJson, redactToken } from "./executor";
 import type { AmResult } from "./executor";
 
 // arcane-mage parses the config disk with PyYAML `yaml.safe_load`. Parse the generated
@@ -299,4 +299,28 @@ test("parseAmJson survives stray stdout above the payload", () => {
 
 test("parseAmJson returns null when there is no JSON at all", () => {
   assert.equal(parseAmJson("Traceback (most recent call last):"), null);
+});
+
+// --- token redaction (found live on staging 2026-08-09) ---------------------
+
+test("redactToken removes every occurrence of the secret, not just the first", () => {
+  const secret = "cb94f05c-aaa5-4664-9070-80efecaed9e0";
+  const text = `Command failed: arcane-mage provision --token mt-agent@pve!agent=${secret} -c /tmp/x.yaml\nretry with ${secret}`;
+  const out = redactToken(text, secret);
+  assert.equal(out.includes(secret), false);
+  assert.equal(out.match(/<redacted>/g)?.length, 2);
+  // The rest of the diagnostic must survive — this text is the only debugging aid an
+  // operator gets for a failed provision.
+  assert.match(out, /arcane-mage provision --token mt-agent@pve!agent=<redacted>/);
+});
+
+test("redactToken is a no-op without a usable secret", () => {
+  assert.equal(redactToken("nothing to hide", undefined), "nothing to hide");
+  assert.equal(redactToken("nothing to hide", ""), "nothing to hide");
+});
+
+test("REGRESSION: a very short secret does not redact the whole message", () => {
+  // A 1-2 char value would otherwise turn every occurrence of that character into a
+  // placeholder and destroy the diagnostic.
+  assert.equal(redactToken("aaa bbb aaa", "a"), "aaa bbb aaa");
 });

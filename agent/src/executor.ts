@@ -144,13 +144,48 @@ export type AmResult = {
 };
 
 /** Invoke the arcane-mage CLI with the LOCAL Proxmox creds as subcommand options. */
+/**
+ * Replace every occurrence of the Proxmox token secret with a placeholder.
+ *
+ * Found live on staging 2026-08-09: a failed provision stored
+ * `Command failed: arcane-mage provision --url … --token mt-agent@pve!agent=<secret> …`
+ * in `ProvisionLog.output`, which renders verbatim in `/admin/logs`. `execFile` builds
+ * its error message from the full argv, so ANY non-zero exit leaked the credential into
+ * MT's database — on prod as well as staging, for every operator.
+ *
+ * Substring replacement rather than a pattern: the secret is known exactly here, and a
+ * `--token \S+` regex would miss it wherever arcane-mage echoes the value on its own
+ * (tracebacks, request logs) without the flag in front of it.
+ */
+export function redactToken(text: string, secret?: string): string {
+  // A one- or two-character "secret" would turn the whole text into placeholders; only
+  // redact something long enough to actually be a credential.
+  if (!secret || secret.length < 8) return text;
+  return text.split(secret).join("<redacted>");
+}
+
 function runArcaneMage(args: string[], cfg: AgentConfig, timeoutMs: number): Promise<AmResult> {
   const token = `${cfg.proxmox.tokenId}=${cfg.proxmox.tokenSecret}`;
   const [subcommand, ...rest] = args;
   const fullArgs = [subcommand!, "--url", cfg.proxmox.url!, "--token", token, ...rest];
   return new Promise((resolve) => {
     execFile("arcane-mage", fullArgs, { timeout: timeoutMs }, (error, stdout, stderr) => {
-      resolve({ error, stdout, stderr, json: parseAmJson(stdout) });
+      // Scrub HERE, at the single choke point, rather than at each of the ~6 call sites
+      // that build a message — every one of them (success and failure, message, stdout,
+      // stderr) is downstream of this, so one redaction covers all of them and a future
+      // seventh call site inherits it for free.
+      const scrub = (s: string) => redactToken(s, cfg.proxmox.tokenSecret);
+      let scrubbed: ExecFileException | null = null;
+      if (error) {
+        // Rebuild rather than mutate: `error.message` is what carries the argv, but
+        // `code`/`killed`/`signal` are what classifyAmFailure reads, so they must survive
+        // exactly (killed/signal ⇒ "unknown", ENOENT ⇒ "permanent").
+        scrubbed = Object.assign(new Error(scrub(error.message)), error, {
+          message: scrub(error.message),
+        }) as ExecFileException;
+      }
+      const out = scrub(stdout);
+      resolve({ error: scrubbed, stdout: out, stderr: scrub(stderr), json: parseAmJson(out) });
     });
   });
 }
