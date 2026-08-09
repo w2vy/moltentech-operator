@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { Job } from "@moltentech/protocol";
 import type { AgentConfig } from "./config";
-import { buildProvisionYaml, classifyAmFailure, amFailure, parseAmJson, redactToken } from "./executor";
+import { buildProvisionYaml, classifyAmFailure, amFailure, parseAmJson, redactToken, coerceVmId } from "./executor";
 import type { AmResult } from "./executor";
 
 // arcane-mage parses the config disk with PyYAML `yaml.safe_load`. Parse the generated
@@ -323,4 +323,21 @@ test("REGRESSION: a very short secret does not redact the whole message", () => 
   // A 1-2 char value would otherwise turn every occurrence of that character into a
   // placeholder and destroy the diagnostic.
   assert.equal(redactToken("aaa bbb aaa", "a"), "aaa bbb aaa");
+});
+
+test("REGRESSION #92: a STRING vm_id from arcane-mage is captured, not dropped", () => {
+  // Proxmox `GET /cluster/nextid` answers "105", and nothing on arcane-mage's
+  // provision path coerces it, so the payload really does carry a string. The old
+  // `typeof === "number"` guard dropped it and Slot.vmId was NULL on every
+  // agent-path success. Verified against arcane-mage 2.1.0 on real hardware.
+  assert.equal(coerceVmId("105"), 105);
+  assert.equal(coerceVmId(105), 105);
+});
+
+test("coerceVmId rejects anything that is not a usable vmid", () => {
+  // A vmid must be a positive integer; everything else must stay undefined rather
+  // than write a bogus id onto the Slot.
+  for (const bad of [undefined, null, "", "  ", "abc", "1e3x", NaN, 0, -5, 1.5, "0", "-1", {}, []]) {
+    assert.equal(coerceVmId(bad), undefined, `expected undefined for ${JSON.stringify(bad)}`);
+  }
 });

@@ -137,7 +137,8 @@ export type AmResult = {
     nodes?: Array<{
       hostname?: string;
       ok?: boolean;
-      vm_id?: number;
+      /** May arrive as a STRING on the provision path — see `coerceVmId`. */
+      vm_id?: number | string;
       steps?: AmStep[];
     }>;
   } | null;
@@ -315,6 +316,26 @@ async function deprovision(job: Job, cfg: AgentConfig): Promise<ExecResult> {
   };
 }
 
+/**
+ * Coerce arcane-mage's `vm_id` to a number, accepting the string form.
+ *
+ * Proxmox's `GET /cluster/nextid` returns the id as a JSON **string** (`"105"`), and
+ * nothing on arcane-mage's provision path coerces it: `VmConfig` is a stdlib
+ * `@dataclass` so `vmid: int` is an unenforced annotation, and pydantic dataclasses
+ * do not validate on assignment, so the string reaches `Hypervisor.vm_id` and is
+ * emitted as `"vm_id": "105"`. The previous `typeof === "number"` guard therefore
+ * dropped EVERY provision vmid — `Slot.vmId` was NULL on every agent-path success
+ * since the path first existed (#92).
+ *
+ * The deprovision path is unaffected (it reads ints straight from the VM listing),
+ * which is exactly why the bug hid for so long. Accepting both shapes keeps this
+ * correct whichever way arcane-mage is fixed upstream.
+ */
+export function coerceVmId(v: unknown): number | undefined {
+  const n = typeof v === "string" && v.trim() !== "" ? Number(v) : v;
+  return typeof n === "number" && Number.isInteger(n) && n > 0 ? n : undefined;
+}
+
 async function provision(job: Job, cfg: AgentConfig): Promise<ExecResult> {
   const yamlPath = join(tmpdir(), `mt-${job.jobId}-${randomUUID()}.yaml`);
   writeFileSync(yamlPath, buildProvisionYaml(job, cfg), { mode: 0o600 });
@@ -324,7 +345,7 @@ async function provision(job: Job, cfg: AgentConfig): Promise<ExecResult> {
     return {
       ok,
       message: ok ? undefined : amFailure(r),
-      vmId: typeof r.json?.vm_id === "number" ? r.json.vm_id : undefined,
+      vmId: coerceVmId(r.json?.vm_id),
       failureClass: ok ? undefined : classifyAmFailure(r),
     };
   } finally {
