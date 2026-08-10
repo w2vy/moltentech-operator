@@ -1,0 +1,23 @@
+# Accepted findings, by fingerprint (commit:file:rule:line).
+#
+# Fingerprints are used here rather than an allowlisted value in .gitleaks.toml on
+# purpose: the finding below WAS a real credential, so writing the value into a config
+# file would re-publish the very thing we are retiring. A fingerprint pins the
+# acceptance to one commit and one line, so any other occurrence still fails the scan.
+#
+# ---------------------------------------------------------------------------------
+# fae138d — the live Proxmox API token secret for `mt-agent@pve!agent`, pasted verbatim
+# into the `redactToken` unit test as its fixture. The test was written to fix that same
+# token leaking into ProvisionLog, and reproduced the bug with the real leaked value.
+#
+# The repo is PUBLIC, so the secret was internet-readable from 2026-08-09 until it was
+# ROTATED on 2026-08-10: the token was removed and re-minted on the cluster (privsep 0,
+# so no ACLs to restore), the new secret verified against /api2/json/nodes, the old one
+# verified dead (401), and all three agents (prod, test1, test2) rolled onto it. The
+# value in this commit is therefore inert.
+#
+# It is NOT removed from history: rewriting a public repo's history would not un-publish
+# a secret that has already been cloneable for a day, and the rotation is what actually
+# closes the exposure. The current fixture was replaced with an obviously-fake UUID so
+# this cannot recur.
+fae138de58e7d6121abbf419daffca3d3915da8f:agent/src/executor.test.ts:generic-api-key:307
