@@ -42,6 +42,9 @@ The **restricted** Stripe key needs only: Checkout Sessions (write), Prices
 cancel, not a refund.
 
 ## Status
+`v0.2.6-rc.1` (pre-release, published as `w2vy/coalition:staging` — `latest` stays on
+`v0.2.5` until this is verified) — adds the Console v2 P3 dashboard: `/agent/state`
+ingest + a Nodes table, plus wallet-brand sign buttons and a served favicon.
 `v0.2.5` — manifest/stats serving + payments (checkout/manage/webhook→relay)
 complete and verified with an injected Stripe + mock MT. Remaining integration
 point: the real external **stats collector** (Flux-API polling). Sign the manifest
