@@ -24,6 +24,8 @@ import {
   PendingAuthPush,
   type PendingAuthItem,
   type SignedAuthorization,
+  NodeStateList,
+  type NodeStateItem,
   OwnerAuth,
   type OwnerAuthClaim,
   ownerAuthMessage,
@@ -43,6 +45,7 @@ import {
   buildZelcoreSignLink,
   escapeHtmlAttribute,
   CONSOLE_THEME_CSS,
+  CONSOLE_HEAD_ICONS,
 } from "@moltentech/protocol/sign-launcher";
 import { mintSessionCookie, newNonce } from "./session";
 import { readManifest, type CoalitionConfig } from "./config";
@@ -58,6 +61,7 @@ const html = (status: number, body: string): ConsoleResult => ({ status, content
 // ── In-memory courier state (single-use + short-lived; a restart just means re-sign) ──
 const pending = new Map<string, PendingAuthItem>(); // slotId -> item awaiting signature
 const authorizations: SignedAuthorization[] = []; // signed, awaiting agent pickup
+let nodeState: NodeStateItem[] = []; // latest dashboard snapshot the agent pushed
 
 // Nonces of claims we've queued, so the sign page can poll for success even after
 // the item leaves `pending` (or the agent re-pushes the still-pending slot before
@@ -179,6 +183,15 @@ export function handleAgentPending(cfg: CoalitionConfig, rawBody: Buffer, header
   return json(200, { ok: true, pending: pending.size });
 }
 
+/** POST /agent/state — replace the dashboard's slot-state snapshot. */
+export function handleAgentState(cfg: CoalitionConfig, rawBody: Buffer, headers: IncomingHttpHeaders): ConsoleResult {
+  if (!verifyAgentRequest(cfg, "POST", "/agent/state", rawBody, headers)) return json(401, { error: "Unauthorized" });
+  const parsed = NodeStateList.safeParse(JSON.parse(rawBody.toString() || "{}"));
+  if (!parsed.success) return json(400, { error: "Invalid state payload" });
+  nodeState = parsed.data.items;
+  return json(200, { ok: true, nodes: nodeState.length });
+}
+
 /** GET /agent/authorizations — hand the queued signed blobs to the agent and clear them. */
 export function handleAgentAuthorizations(cfg: CoalitionConfig, rawBody: Buffer, headers: IncomingHttpHeaders): ConsoleResult {
   if (!verifyAgentRequest(cfg, "GET", "/agent/authorizations", rawBody, headers)) return json(401, { error: "Unauthorized" });
@@ -191,6 +204,21 @@ export function handleAgentAuthorizations(cfg: CoalitionConfig, rawBody: Buffer,
 function actionBadge(action: string): string {
   const cls = action === "delete" ? "badge-delete" : action === "reprovision" ? "badge-reprovision" : "badge-move";
   return `<span class="badge ${cls}">${escapeHtmlAttribute(action)}</span>`;
+}
+
+/** Slot status → coloured pill. */
+function statusBadge(status: string): string {
+  const s = status.toLowerCase();
+  const cls = ["active", "bootstrap", "benchmark", "awaiting_start"].includes(s)
+    ? "badge-ok"
+    : s === "available"
+      ? "badge-info"
+      : ["provisioning", "pending_config", "maintenance"].includes(s)
+        ? "badge-warn"
+        : ["pending_delete", "deleting"].includes(s)
+          ? "badge-bad"
+          : "badge-mut";
+  return `<span class="badge ${cls}">${escapeHtmlAttribute(status)}</span>`;
 }
 
 /**
@@ -223,32 +251,92 @@ function maturingNodesSection(): string {
 </div>`;
 }
 
-/** GET /console — the pending-authorizations list. Login-less (see module doc). */
+/** GET /console — operator dashboard: node/rental state + actions awaiting signature. */
 export function handleConsoleIndex(cfg: CoalitionConfig): ConsoleResult {
-  const items = [...pending.values()];
-  const rows = items.length
-    ? items
+  const slug = escapeHtmlAttribute(cfg.providerSlug);
+
+  // Section 1 — node/rental state (from the agent's pushed snapshot).
+  //
+  // FAIL CLOSED: this section publishes node names, tiers, live status and the
+  // customer's rental code. Every other console route is protected either by the
+  // CV6 read-gate (server.ts, active only when SESSION_SECRET is set) or by a
+  // per-action wallet signature — but with SESSION_SECRET unset the console is
+  // open, and the Coalition is a public Flux App, so the dashboard would be
+  // world-readable. Found exactly that on coalition-test1, 2026-08-10.
+  //
+  // The gate lives here rather than in server.ts's `gated` list because the whole
+  // page must stay reachable when login is off: the pending-actions list is the
+  // operator's only route to authorize work, and each of those is signature-gated
+  // on its own. So we withhold the data, not the page — and say why, since a
+  // silently missing table reads as a bug.
+  const stateGated = Boolean(cfg.sessionSecret);
+  const stateRows = nodeState.length
+    ? nodeState
+        .map((n) => {
+          const rental = n.rentalCode ? `<code>${escapeHtmlAttribute(n.rentalCode)}</code>` : `<span class="muted">—</span>`;
+          return `<tr><td class="mono">${escapeHtmlAttribute(n.nodeName)}</td><td class="mono">${escapeHtmlAttribute(n.vmName)}</td><td>${escapeHtmlAttribute(n.tier)}</td><td>${statusBadge(n.status)}</td><td>${rental}</td></tr>`;
+        })
+        .join("")
+    : `<tr><td colspan="5" class="muted">No node state yet — the agent pushes a snapshot each heartbeat.</td></tr>`;
+
+  // Section 2 — pending privileged actions.
+  //
+  // This section stays visible with the read-gate off, because it is the operator's
+  // only route to authorize work and each action is separately wallet-signed. But the
+  // rental code is CUSTOMER data, and it is the one field here that isn't the
+  // operator's own to expose — so it follows the same gate as the dashboard.
+  //
+  // That closes rentalCode on this surface entirely: OwnerAuthClaim carries no rental
+  // code, so /console/sign and the authorize result page never had it. The vm@node
+  // identifiers stay: they are the operator's own infrastructure names, and without
+  // them the page cannot tell you what you are about to sign.
+  const actions = [...pending.values()];
+  const actionRows = actions.length
+    ? actions
         .map((it) => {
           const vm = escapeHtmlAttribute(`${it.vmName}@${it.nodeName}`);
-          const code = it.rentalCode ? `<code>${escapeHtmlAttribute(it.rentalCode)}</code>` : `<span class="muted">—</span>`;
+          const code = !stateGated
+            ? `<span class="badge badge-warn">hidden</span>`
+            : it.rentalCode
+              ? `<code>${escapeHtmlAttribute(it.rentalCode)}</code>`
+              : `<span class="muted">—</span>`;
           return `<tr><td>${actionBadge(it.action)} <span class="mono">${vm}</span></td><td>${code}</td><td><a class="btn btn-primary" href="/console/sign?slotId=${encodeURIComponent(it.slotId)}">Review &amp; sign</a></td></tr>`;
         })
         .join("")
     : `<tr><td colspan="3" class="muted">No actions awaiting your signature.</td></tr>`;
-  const slug = escapeHtmlAttribute(cfg.providerSlug);
+
+  const count = actions.length ? ` <span class="badge badge-warn">${actions.length}</span>` : "";
+
+  // Rendered only when the read-gate is active; otherwise an actionable explanation.
+  const nodesSection = stateGated
+    ? `<h1>Nodes</h1>
+<p class="muted">Your slots and their live state. Refreshes every 15s.</p>
+<div class="card" style="padding:0;overflow:hidden"><div style="overflow-x:auto">
+<table><thead><tr><th>Node</th><th>VM</th><th>Tier</th><th>Status</th><th>Rental</th></tr></thead><tbody>${stateRows}</tbody></table>
+</div></div>`
+    : `<h1>Nodes</h1>
+<div class="card">
+<p><span class="badge badge-warn">hidden</span> The node dashboard is withheld because <code>SESSION_SECRET</code> is not set.</p>
+<p class="muted">This console is a public Flux App. Without <code>SESSION_SECRET</code> there is no login gate, so anyone
+who knows the URL could read your node names, tiers, live status and your customers' rental codes. Set
+<code>SESSION_SECRET</code> in the Coalition's environment and redeploy; the dashboard then appears behind a wallet login.
+Actions below stay available either way — each one is authorized by its own wallet signature.</p>
+</div>`;
   return html(
     200,
     `<!doctype html><html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
 <meta http-equiv="refresh" content="15"/>
 <title>MoltenTech Operator Console — ${slug}</title>
+${CONSOLE_HEAD_ICONS}
 <style>${CONSOLE_THEME_CSS}</style></head><body>
 <div class="wrap">
 <header class="mt"><span class="mark">MoltenTech</span><span class="slug">operator console · ${slug}</span></header>
-<h1>Actions awaiting your signature</h1>
-<p class="muted">Each privileged action is authorized by signing it in your Flux owner wallet. This page refreshes every 15s.</p>
-<div class="card" style="padding:0;overflow:hidden">
-<table><thead><tr><th>Action</th><th>Rental</th><th></th></tr></thead><tbody>${rows}</tbody></table>
-</div>
+${nodesSection}
+<h1 style="margin-top:26px">Actions awaiting your signature${count}</h1>
+<p class="muted">Each privileged action is authorized by signing it in your Flux owner wallet.</p>
+<div class="card" style="padding:0;overflow:hidden"><div style="overflow-x:auto">
+<table><thead><tr><th>Action</th><th>Rental</th><th></th></tr></thead><tbody>${actionRows}</tbody></table>
+</div></div>
 ${maturingNodesSection()}
 </div>
 </body></html>`
@@ -405,7 +493,7 @@ export function handleConsoleAuthorize(cfg: CoalitionConfig, form: URLSearchPara
     html(
       status,
       `<!doctype html><html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
-<title>${title}</title><style>${CONSOLE_THEME_CSS}</style></head><body><div class="wrap">
+<title>${title}</title>${CONSOLE_HEAD_ICONS}<style>${CONSOLE_THEME_CSS}</style></head><body><div class="wrap">
 <header class="mt"><span class="mark">MoltenTech</span><span class="slug">operator console</span></header>
 ${bodyHtml}<p style="margin-top:12px"><a href="/console">&larr; Back to console</a></p></div></body></html>`
     );

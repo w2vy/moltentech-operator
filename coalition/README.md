@@ -42,6 +42,14 @@ The **restricted** Stripe key needs only: Checkout Sessions (write), Prices
 cancel, not a refund.
 
 ## Status
+`v0.2.6` — adds the Console v2 P3 dashboard (`/agent/state` ingest + a Nodes table),
+wallet-brand sign buttons, and a served favicon. Verified end-to-end on
+`coalition-test1`: agent state-push, wallet login, dashboard render.
+⚠️ **Set `SESSION_SECRET`.** Without it the console has no login gate, so the node
+dashboard is withheld rather than published to anyone with the URL — the same gate
+now also hides the rental code in the pending-actions table. The Nodes section needs
+an agent new enough to push state (`/agent/state`); an older agent simply leaves it
+empty.
 `v0.2.5` — manifest/stats serving + payments (checkout/manage/webhook→relay)
 complete and verified with an injected Stripe + mock MT. Remaining integration
 point: the real external **stats collector** (Flux-API polling). Sign the manifest

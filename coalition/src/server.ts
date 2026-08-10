@@ -7,6 +7,7 @@ import { getStatsSnapshot } from "./stats";
 import { verifyMtRequest } from "./auth";
 import {
   handleAgentPending,
+  handleAgentState,
   handleAgentAuthorizations,
   handleConsoleIndex,
   handleConsoleSign,
@@ -20,6 +21,7 @@ import {
   type ConsoleResult,
 } from "./console";
 import { verifySession } from "./session";
+import { getStaticAsset } from "./assets";
 import { COALITION_VERSION } from "./version";
 
 function readBody(req: http.IncomingMessage): Promise<Buffer> {
@@ -79,6 +81,20 @@ export function createServer(stripe: StripeLike, cfg: CoalitionConfig): http.Ser
         }
         return;
       }
+      // Public branding assets (favicon.ico/.svg, icon-512.png) — the same files the
+      // FluxHub web app publishes, so the console tab carries the FluxHub icon.
+      if (method === "GET" && (url?.startsWith("/favicon") || url === "/icon-512.png")) {
+        const asset = getStaticAsset(url ?? "");
+        if (asset) {
+          res.writeHead(200, {
+            "content-type": asset.contentType,
+            "content-length": String(asset.body.length),
+            "cache-control": "public, max-age=86400",
+          });
+          return res.end(asset.body);
+        }
+        return send(404, { error: "not found" });
+      }
       if (method === "GET" && url === "/stats") {
         const snap = getStatsSnapshot();
         return snap ? send(200, snap) : send(503, { error: "stats not ready" });
@@ -133,6 +149,10 @@ export function createServer(stripe: StripeLike, cfg: CoalitionConfig): http.Ser
       if (method === "POST" && url === "/agent/pending") {
         const raw = await readBody(req);
         return sendResult(handleAgentPending(cfg, raw, req.headers));
+      }
+      if (method === "POST" && url === "/agent/state") {
+        const raw = await readBody(req);
+        return sendResult(handleAgentState(cfg, raw, req.headers));
       }
       if (method === "GET" && url === "/agent/authorizations") {
         return sendResult(handleAgentAuthorizations(cfg, Buffer.alloc(0), req.headers));

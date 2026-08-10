@@ -225,12 +225,41 @@ export type Job = z.infer<typeof Job>;
 // ───────────────────────────────────────────────────────────────────────────
 // 4. result  —  agent → MT
 // ───────────────────────────────────────────────────────────────────────────
+/**
+ * How a failed job should be treated by MT's retry queue.
+ *
+ * - `transient` — the run failed before touching anything, for a reason that may
+ *   well be gone on the next attempt (cluster lost quorum, node offline, Proxmox
+ *   API unreachable). Safe to retry automatically.
+ * - `permanent` — retrying cannot help (VM name already taken, unusable config).
+ * - `unknown`   — genuinely undetermined. Never auto-retried.
+ *
+ * `unknown` is also what MT infers when the field is absent, so an agent built
+ * before this field existed keeps today's behaviour exactly.
+ */
+export const FailureClass = z.enum(["transient", "permanent", "unknown"]);
+export type FailureClass = z.infer<typeof FailureClass>;
+
 export const JobResult = Envelope.extend({
   jobId: z.string().min(1),
   status: z.enum(["success", "failed"]),
   message: z.string().optional(),
   /** Proxmox VMID actually assigned (for traceability). */
   vmId: z.number().int().positive().optional(),
+  /**
+   * Structured failure cause, set by the agent at the point where the real cause
+   * is still in scope. Free-text `message` is NOT a reliable substitute — see
+   * MT-0010, where the stored output held only pydantic warnings and the actual
+   * Proxmox 595 never left the agent's docker logs.
+   *
+   * OPTIONAL ON PURPOSE, and `SCHEMA_VERSION` deliberately does NOT change:
+   * the Envelope pins `schemaVersion` with `z.literal()`, so a bump would be a
+   * flag day that 400s every deployed agent the moment MT redeploys. Zod strips
+   * unknown keys by default, so both mixed-version directions stay safe —
+   * a new agent talking to an old MT has the field dropped, and an old agent
+   * talking to a new MT simply omits it and is treated as `unknown`.
+   */
+  failureClass: FailureClass.optional(),
 });
 export type JobResult = z.infer<typeof JobResult>;
 
@@ -350,6 +379,29 @@ export type SignedAuthorization = z.infer<typeof SignedAuthorization>;
 /** Coalition → agent: the signed authorizations queued since the last poll. */
 export const AuthorizationList = z.object({ items: z.array(SignedAuthorization) });
 export type AuthorizationList = z.infer<typeof AuthorizationList>;
+
+/**
+ * One slot's live state for the operator console dashboard (CV2). The agent reads
+ * it from MT (GET /api/agent/state) and PUSHES the snapshot to the coalition, which
+ * renders it. Read-only operational state; no secrets.
+ */
+export const NodeStateItem = z.object({
+  nodeName: z.string().min(1),
+  vmName: z.string().min(1),
+  tier: TierKey,
+  /** Slot lifecycle status (available/active/maintenance/pending_delete/…). */
+  status: z.string().min(1),
+  /** Present when the slot is rented (the customer's rental code); null when free. */
+  rentalCode: z.string().nullable(),
+  /** Public IP:port surface, informational. */
+  ipAddress: z.string().nullable().default(null),
+  apiPort: z.number().int().positive().nullable().default(null),
+});
+export type NodeStateItem = z.infer<typeof NodeStateItem>;
+
+/** MT → agent response AND agent → coalition push: the provider's slot state snapshot. */
+export const NodeStateList = z.object({ items: z.array(NodeStateItem) });
+export type NodeStateList = z.infer<typeof NodeStateList>;
 
 // ───────────────────────────────────────────────────────────────────────────
 // 6. stats  —  published by the Coalition's external collector; MT PULLS it.
