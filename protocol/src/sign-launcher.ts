@@ -61,7 +61,12 @@ th{color:var(--muted);font-weight:600;font-size:11px;text-transform:uppercase;le
 font-size:15px;font-weight:600;text-decoration:none;color:#fff;margin:4px 6px 4px 0}
 .btn:hover{text-decoration:none}
 .btn-primary{background:linear-gradient(135deg,var(--accent),var(--accent2));box-shadow:0 0 18px var(--glow)}
-.btn-ssp{background:#2563eb}.btn-zelcore{background:#1a1a2e;border:1px solid #33334d}
+/* Wallet buttons wear their own wallet's brand colour, not ours, so the operator
+   recognises the button from inside SSP / Zelcore itself (SSP amber #fbbf24 on
+   black text; Zelcore blue #1b63ef on white). Keep these in sync with the web
+   app's .btn-wallet-* utilities in apps/web/src/app/globals.css. */
+.btn-ssp{background:#fbbf24;color:#000}.btn-ssp:hover{background:#f5b310}
+.btn-zelcore{background:#1b63ef;color:#fff;border:none}.btn-zelcore:hover{background:#1550c8}
 .btn:disabled{opacity:.5;cursor:not-allowed}
 .badge{display:inline-block;padding:2px 9px;border-radius:999px;font-size:11px;font-weight:700;
 text-transform:uppercase;letter-spacing:.3px}
@@ -81,6 +86,16 @@ textarea.sig-box{min-height:60px}
 .done{display:none}.done .big{font-size:44px;line-height:1;color:var(--ok)}
 summary{cursor:pointer;color:var(--muted)}
 `;
+
+/**
+ * Favicon <link>s for every console/launcher page, mirroring the FluxHub web app's
+ * `metadata.icons` (apps/web/src/app/layout.tsx). Root-relative so any host that
+ * serves the same asset names — the Next app, or the coalition's own static route —
+ * shows the identical tab icon.
+ */
+export const CONSOLE_HEAD_ICONS = `<link rel="icon" href="/favicon.svg" type="image/svg+xml"/>` +
+  `<link rel="icon" href="/favicon.ico" sizes="32x32"/>` +
+  `<link rel="apple-touch-icon" href="/icon-512.png"/>`;
 
 /**
  * Build a Zelcore `zel:?action=sign…` deep link for `message`. An optional
@@ -122,6 +137,7 @@ export function buildSignLauncherHtml(opts: {
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>${title}</title>
+    ${CONSOLE_HEAD_ICONS}
     <style>${CONSOLE_THEME_CSS}</style>
   </head>
   <body>

@@ -43,6 +43,7 @@ import {
   buildZelcoreSignLink,
   escapeHtmlAttribute,
   CONSOLE_THEME_CSS,
+  CONSOLE_HEAD_ICONS,
 } from "@moltentech/protocol/sign-launcher";
 import { mintSessionCookie, newNonce } from "./session";
 import { readManifest, type CoalitionConfig } from "./config";
@@ -241,6 +242,7 @@ export function handleConsoleIndex(cfg: CoalitionConfig): ConsoleResult {
     `<!doctype html><html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
 <meta http-equiv="refresh" content="15"/>
 <title>MoltenTech Operator Console — ${slug}</title>
+${CONSOLE_HEAD_ICONS}
 <style>${CONSOLE_THEME_CSS}</style></head><body>
 <div class="wrap">
 <header class="mt"><span class="mark">MoltenTech</span><span class="slug">operator console · ${slug}</span></header>
@@ -405,7 +407,7 @@ export function handleConsoleAuthorize(cfg: CoalitionConfig, form: URLSearchPara
     html(
       status,
       `<!doctype html><html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
-<title>${title}</title><style>${CONSOLE_THEME_CSS}</style></head><body><div class="wrap">
+<title>${title}</title>${CONSOLE_HEAD_ICONS}<style>${CONSOLE_THEME_CSS}</style></head><body><div class="wrap">
 <header class="mt"><span class="mark">MoltenTech</span><span class="slug">operator console</span></header>
 ${bodyHtml}<p style="margin-top:12px"><a href="/console">&larr; Back to console</a></p></div></body></html>`
     );
