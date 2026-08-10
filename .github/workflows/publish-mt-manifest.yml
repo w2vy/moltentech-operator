@@ -4,14 +4,15 @@ name: Publish mt-manifest
 # do not build from source. Before this workflow it was pushed by hand, so a merged
 # protocol change could leave every operator on a stale CLI that rejects the current
 # config.env format. That happened once, mid-signing-ceremony. Now any protocol change
-# that lands on main republishes the image.
+# that lands on master republishes the image. Trunk only — a protocol change on
+# staging is not yet something operators should be pulling.
 #
 # Tags: `latest` (what the documented alias pulls) and the commit SHA (so a bad publish
 # can be rolled back to a known-good image without rebuilding).
 
 on:
   push:
-    branches: [main]
+    branches: [master]
     paths:
       - "protocol/**"
       - ".github/workflows/publish-mt-manifest.yml"
