@@ -7,6 +7,8 @@ import { randomUUID } from "node:crypto";
 import type { Job, FailureClass } from "@moltentech/protocol";
 import type { AgentConfig } from "./config";
 import { checkOwnerAuth } from "./owner-auth";
+import { allocateVmId, VMID_MIN, VMID_MAX } from "./vmid";
+import { getClusterVmIds } from "./health";
 
 export type ExecResult = { ok: boolean; message?: string; vmId?: number; failureClass?: FailureClass };
 export type Executor = (job: Job, cfg: AgentConfig) => Promise<ExecResult>;
@@ -42,11 +44,14 @@ function yamlStr(v: string | number): string {
  * identity_key, tx_id, discord/telegram) MUST NOT be interpolated raw, or a crafted
  * value with newlines could inject sibling YAML keys (e.g. override `hypervisor`).
  */
-export function buildProvisionYaml(job: Job, cfg: AgentConfig): string {
+export function buildProvisionYaml(job: Job, cfg: AgentConfig, vmIdOverride?: number): string {
   const { slot, nodeConfig } = job;
   if (!nodeConfig) throw new Error(`Job ${job.jobId} has no nodeConfig (required to provision)`);
   const h = cfg.host;
   const L: string[] = [];
+  // D3-B: a rotated id, used only when MT sent no pin. `slot.vmId` still wins — that
+  // is the operator's own per-slot `vmId` from inventory.json, a deliberate choice.
+  const vmId = slot.vmId ?? vmIdOverride ?? null;
 
   L.push("nodes:");
   L.push("  - hypervisor:");
@@ -59,7 +64,7 @@ export function buildProvisionYaml(job: Job, cfg: AgentConfig): string {
   L.push(`      storage_iso: ${yamlStr(h.storageIso)}`);
   L.push(`      storage_import: ${yamlStr(h.storageImport)}`);
   L.push("      start_on_creation: true");
-  if (slot.vmId != null) L.push(`      vm_id: ${slot.vmId}`);
+  if (vmId != null) L.push(`      vm_id: ${vmId}`);
   if (slot.startupConfig) L.push(`      startup_config: ${yamlStr(slot.startupConfig)}`);
   if (slot.diskLimit != null) L.push(`      disk_limit: ${slot.diskLimit}`);
   if (slot.cpuLimit != null) L.push(`      cpu_limit: ${slot.cpuLimit}`);
@@ -345,9 +350,35 @@ export function coerceVmId(v: unknown): number | undefined {
   return typeof n === "number" && Number.isInteger(n) && n > 0 ? n : undefined;
 }
 
+/**
+ * D3-B: pick a rotated VMID for a job MT sent no pin for.
+ *
+ * Best-effort by design. If the cluster listing fails we return undefined and the
+ * YAML simply omits `vm_id`, so arcane-mage falls back to `/cluster/nextid` — the
+ * exact pre-D3-B behaviour. Rotation makes logs readable; it must never be the reason
+ * a customer's node fails to build, so no path here throws into the job result.
+ */
+async function pickRotatedVmId(job: Job, cfg: AgentConfig): Promise<number | undefined> {
+  if (job.slot.vmId != null) return undefined; // operator-declared pin wins
+  if (!cfg.proxmox.url || !cfg.proxmox.tokenId || !cfg.proxmox.tokenSecret) return undefined;
+  try {
+    const vmId = await allocateVmId(() => getClusterVmIds(cfg));
+    if (vmId == null) {
+      console.error(`[vmid] no free VMID in ${VMID_MIN}-${VMID_MAX}; letting Proxmox allocate`);
+      return undefined;
+    }
+    return vmId;
+  } catch (err) {
+    console.error(`[vmid] cluster listing failed (${(err as Error).message}); letting Proxmox allocate`);
+    return undefined;
+  }
+}
+
 async function provision(job: Job, cfg: AgentConfig): Promise<ExecResult> {
   const yamlPath = join(tmpdir(), `mt-${job.jobId}-${randomUUID()}.yaml`);
-  writeFileSync(yamlPath, buildProvisionYaml(job, cfg), { mode: 0o600 });
+  const rotated = await pickRotatedVmId(job, cfg);
+  if (rotated != null) console.log(`[vmid] ${job.slot.vmName}: allocated ${rotated}`);
+  writeFileSync(yamlPath, buildProvisionYaml(job, cfg, rotated), { mode: 0o600 });
   try {
     const r = await runArcaneMage(["provision", "--json", "-c", yamlPath], cfg, TIMEOUT.provision);
     const ok = r.json?.ok === true;

@@ -365,3 +365,47 @@ test("classify: a half-mutated teardown stays unknown even so", () => {
   // deletion step must still land in the admin queue.
   assert.equal(classifyAmFailure(amRun(["Unable to delete VM on hypervisor"])), "unknown");
 });
+
+// ── D3-B: the rotated VMID and how it interacts with a declared pin ─────────────
+
+/** Minimal valid nodeConfig — the D3-B cases care only about the hypervisor block. */
+function plainConfig(): Record<string, unknown> {
+  return {
+    fluxId: "t1abcdefghijkmnopqrstuvwx",
+    fluxIdentityKey: "Kx1abcdefghijkmnopqrstuvwxyz0123456789ABCDEFGHJKLMN",
+    collateralTxid: "a".repeat(64),
+    collateralVout: 0,
+    discordUserId: null,
+    discordWebhook: null,
+    telegramBotToken: null,
+    telegramChatId: null,
+  };
+}
+
+test("D3-B: a rotated vm_id is emitted when MT sent no pin", () => {
+  const doc = safeLoad(buildProvisionYaml(jobWith(plainConfig()), cfg, 4242)) as {
+    nodes: { hypervisor: { vm_id?: number } }[];
+  };
+  assert.equal(doc.nodes[0]!.hypervisor.vm_id, 4242);
+});
+
+test("D3-B: a DECLARED pin beats the rotated id", () => {
+  // slot.vmId here can only be an operator's per-slot `vmId` from inventory.json —
+  // a deliberate choice — because since D2-A a teardown clears the residual one.
+  // Rotation must never override it, or declaring a pin would stop meaning anything.
+  const job = jobWith(plainConfig());
+  (job.slot as { vmId: number | null }).vmId = 777;
+  const doc = safeLoad(buildProvisionYaml(job, cfg, 4242)) as {
+    nodes: { hypervisor: { vm_id?: number } }[];
+  };
+  assert.equal(doc.nodes[0]!.hypervisor.vm_id, 777);
+});
+
+test("D3-B: no pin and no rotated id omits vm_id entirely", () => {
+  // The fallback when the cluster listing fails: arcane-mage calls /cluster/nextid,
+  // i.e. exactly the pre-D3-B behaviour. Rotation must never fail a provision.
+  const doc = safeLoad(buildProvisionYaml(jobWith(plainConfig()), cfg)) as {
+    nodes: { hypervisor: { vm_id?: number } }[];
+  };
+  assert.equal(doc.nodes[0]!.hypervisor.vm_id, undefined);
+});
