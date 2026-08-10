@@ -303,8 +303,12 @@ after `AGENT_KEY`/`COALITION_KEY` becomes part of the key and MT will reject it 
 # secrets.env
 STRIPE_SECRET_KEY=rk_live_<restricted>
 STRIPE_WEBHOOK_SECRET=whsec_<from step 3>
-# SESSION_SECRET — optional, local-only. Set = console view-gate on (wallet-login to
-# view); blank = reads ungated. Node ACTIONS are wallet-signed either way.
+# SESSION_SECRET — SET THIS. Any long random string; it is only an HMAC key for the
+# console session cookie, so `openssl rand -hex 32` is all it needs to be. Leave it
+# blank and the console still works, but the NODE DASHBOARD IS WITHHELD — your
+# Coalition is a public Flux App, and without this there is no login gate, so the
+# dashboard would publish your node names, tiers, live status and your customers'
+# rental codes to anyone with the URL. Node ACTIONS are wallet-signed either way.
 SESSION_SECRET=<openssl rand -hex 32>
 # AGENT_KEY / COALITION_KEY — the real values from Step 2.
 AGENT_KEY=<agentKey from /onboard>
@@ -326,6 +330,16 @@ mt-manifest env --from-config config.env --secrets secrets.env \
 `env.json` is a JSON array of `"KEY=value"`. It embeds your manifest as `MANIFEST_JSON`
 (verifying the signature first) and passes `TIER_PRICES_JSON` through. **It contains
 secrets — do not commit it.**
+
+You never set a variable on the Flux app by hand: non-secret settings live in
+`config.env`, secrets in `secrets.env`, and `mt-manifest env` merges both into
+`env.json`, which is the only thing the app ever sees. So `SESSION_SECRET` goes in
+**`secrets.env`** and reaches Flux via `env.json` — changing it later means editing
+`secrets.env`, re-running the command above, and re-importing.
+
+⚠️ A **blank** value is dropped, not passed through as empty: `mt-manifest env` omits
+any variable with no value, so leaving `SESSION_SECRET=` in `secrets.env` is identical
+to never listing it, and the console will withhold the node dashboard.
 
 **2. Register the Flux App:** Docker image `w2vy/coalition:latest`, container port
 **8088**, then supply `env.json` as the app's environment.
