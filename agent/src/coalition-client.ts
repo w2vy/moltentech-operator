@@ -2,6 +2,7 @@ import type { KeyObject } from "node:crypto";
 import {
   AuthorizationList,
   type PendingAuthItem,
+  type NodeStateItem,
   type SignedAuthorization,
 } from "@moltentech/protocol";
 import { signAgentRequest } from "./signing";
@@ -34,6 +35,18 @@ export class CoalitionClient {
       body: raw,
     });
     if (!res.ok) throw new Error(`coalition pending push failed: ${res.status}`);
+  }
+
+  /** Push the provider's slot-state snapshot for the console dashboard to render. */
+  async pushState(items: NodeStateItem[]): Promise<void> {
+    const path = "/agent/state";
+    const raw = JSON.stringify({ items });
+    const res = await fetch(`${this.baseUrl}${path}`, {
+      method: "POST",
+      headers: this.headers("POST", path, raw),
+      body: raw,
+    });
+    if (!res.ok) throw new Error(`coalition state push failed: ${res.status}`);
   }
 
   /** Pull the operator-signed authorizations queued since the last poll. */
