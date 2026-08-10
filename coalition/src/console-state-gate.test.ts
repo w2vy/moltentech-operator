@@ -20,7 +20,7 @@ import {
   HEADER_AGENT_NONCE,
   HEADER_AGENT_SLUG,
 } from "@moltentech/protocol";
-import { handleAgentState, handleConsoleIndex } from "./console";
+import { handleAgentState, handleAgentPending, handleConsoleIndex } from "./console";
 import type { CoalitionConfig } from "./config";
 
 const SLUG = "gate-test";
@@ -76,6 +76,56 @@ function pushState(): void {
   } as never);
   assert.equal(res.status, 200, "state push should be accepted");
 }
+
+/** Push one pending action through the real manifest-signed ingest path. */
+function pushPending(): void {
+  const body = Buffer.from(
+    JSON.stringify({
+      items: [
+        {
+          slotId: "slot-1",
+          action: "delete",
+          providerSlug: SLUG,
+          vmName: "mt-action-vm",
+          nodeName: "pve-action",
+          rentalCode: "MT-8888",
+        },
+      ],
+    })
+  );
+  const issuedAt = new Date().toISOString();
+  const nonce = randomBytes(16).toString("hex");
+  const signature = signRequest(
+    { method: "POST", path: "/agent/pending", slug: SLUG, issuedAt, nonce, bodyHash: bodyHash(body) },
+    agent.privateKey
+  );
+  const res = handleAgentPending(cfg("secret"), body, {
+    [HEADER_AGENT_SIGNATURE]: signature,
+    [HEADER_AGENT_TIMESTAMP]: issuedAt,
+    [HEADER_AGENT_NONCE]: nonce,
+    [HEADER_AGENT_SLUG]: SLUG,
+  } as never);
+  assert.equal(res.status, 200, "pending push should be accepted");
+}
+
+test("actions table withholds the rental code when SESSION_SECRET is unset", () => {
+  pushPending();
+  const body = handleConsoleIndex(cfg(undefined)).body;
+
+  // The customer's code must not reach an ungated page…
+  assert.ok(!body.includes("MT-8888"), "rental code must not be rendered ungated");
+
+  // …but the action itself must remain signable: this list is the operator's only
+  // route to authorize work, so withholding the row entirely would strand them.
+  assert.match(body, /Review &amp; sign/);
+  assert.ok(body.includes("mt-action-vm@pve-action"), "vm@node identifies what is being signed");
+});
+
+test("actions table shows the rental code once SESSION_SECRET is set", () => {
+  pushPending();
+  const body = handleConsoleIndex(cfg("a-session-secret")).body;
+  assert.ok(body.includes("MT-8888"), "rental code should render behind the gate");
+});
 
 test("console withholds node state when SESSION_SECRET is unset", () => {
   pushState();

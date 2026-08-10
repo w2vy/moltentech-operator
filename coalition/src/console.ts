@@ -280,12 +280,26 @@ export function handleConsoleIndex(cfg: CoalitionConfig): ConsoleResult {
     : `<tr><td colspan="5" class="muted">No node state yet — the agent pushes a snapshot each heartbeat.</td></tr>`;
 
   // Section 2 — pending privileged actions.
+  //
+  // This section stays visible with the read-gate off, because it is the operator's
+  // only route to authorize work and each action is separately wallet-signed. But the
+  // rental code is CUSTOMER data, and it is the one field here that isn't the
+  // operator's own to expose — so it follows the same gate as the dashboard.
+  //
+  // That closes rentalCode on this surface entirely: OwnerAuthClaim carries no rental
+  // code, so /console/sign and the authorize result page never had it. The vm@node
+  // identifiers stay: they are the operator's own infrastructure names, and without
+  // them the page cannot tell you what you are about to sign.
   const actions = [...pending.values()];
   const actionRows = actions.length
     ? actions
         .map((it) => {
           const vm = escapeHtmlAttribute(`${it.vmName}@${it.nodeName}`);
-          const code = it.rentalCode ? `<code>${escapeHtmlAttribute(it.rentalCode)}</code>` : `<span class="muted">—</span>`;
+          const code = !stateGated
+            ? `<span class="badge badge-warn">hidden</span>`
+            : it.rentalCode
+              ? `<code>${escapeHtmlAttribute(it.rentalCode)}</code>`
+              : `<span class="muted">—</span>`;
           return `<tr><td>${actionBadge(it.action)} <span class="mono">${vm}</span></td><td>${code}</td><td><a class="btn btn-primary" href="/console/sign?slotId=${encodeURIComponent(it.slotId)}">Review &amp; sign</a></td></tr>`;
         })
         .join("")
