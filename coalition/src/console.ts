@@ -256,6 +256,20 @@ export function handleConsoleIndex(cfg: CoalitionConfig): ConsoleResult {
   const slug = escapeHtmlAttribute(cfg.providerSlug);
 
   // Section 1 — node/rental state (from the agent's pushed snapshot).
+  //
+  // FAIL CLOSED: this section publishes node names, tiers, live status and the
+  // customer's rental code. Every other console route is protected either by the
+  // CV6 read-gate (server.ts, active only when SESSION_SECRET is set) or by a
+  // per-action wallet signature — but with SESSION_SECRET unset the console is
+  // open, and the Coalition is a public Flux App, so the dashboard would be
+  // world-readable. Found exactly that on coalition-test1, 2026-08-10.
+  //
+  // The gate lives here rather than in server.ts's `gated` list because the whole
+  // page must stay reachable when login is off: the pending-actions list is the
+  // operator's only route to authorize work, and each of those is signature-gated
+  // on its own. So we withhold the data, not the page — and say why, since a
+  // silently missing table reads as a bug.
+  const stateGated = Boolean(cfg.sessionSecret);
   const stateRows = nodeState.length
     ? nodeState
         .map((n) => {
@@ -278,6 +292,22 @@ export function handleConsoleIndex(cfg: CoalitionConfig): ConsoleResult {
     : `<tr><td colspan="3" class="muted">No actions awaiting your signature.</td></tr>`;
 
   const count = actions.length ? ` <span class="badge badge-warn">${actions.length}</span>` : "";
+
+  // Rendered only when the read-gate is active; otherwise an actionable explanation.
+  const nodesSection = stateGated
+    ? `<h1>Nodes</h1>
+<p class="muted">Your slots and their live state. Refreshes every 15s.</p>
+<div class="card" style="padding:0;overflow:hidden"><div style="overflow-x:auto">
+<table><thead><tr><th>Node</th><th>VM</th><th>Tier</th><th>Status</th><th>Rental</th></tr></thead><tbody>${stateRows}</tbody></table>
+</div></div>`
+    : `<h1>Nodes</h1>
+<div class="card">
+<p><span class="badge badge-warn">hidden</span> The node dashboard is withheld because <code>SESSION_SECRET</code> is not set.</p>
+<p class="muted">This console is a public Flux App. Without <code>SESSION_SECRET</code> there is no login gate, so anyone
+who knows the URL could read your node names, tiers, live status and your customers' rental codes. Set
+<code>SESSION_SECRET</code> in the Coalition's environment and redeploy; the dashboard then appears behind a wallet login.
+Actions below stay available either way — each one is authorized by its own wallet signature.</p>
+</div>`;
   return html(
     200,
     `<!doctype html><html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
@@ -287,11 +317,7 @@ ${CONSOLE_HEAD_ICONS}
 <style>${CONSOLE_THEME_CSS}</style></head><body>
 <div class="wrap">
 <header class="mt"><span class="mark">MoltenTech</span><span class="slug">operator console · ${slug}</span></header>
-<h1>Nodes</h1>
-<p class="muted">Your slots and their live state. Refreshes every 15s.</p>
-<div class="card" style="padding:0;overflow:hidden"><div style="overflow-x:auto">
-<table><thead><tr><th>Node</th><th>VM</th><th>Tier</th><th>Status</th><th>Rental</th></tr></thead><tbody>${stateRows}</tbody></table>
-</div></div>
+${nodesSection}
 <h1 style="margin-top:26px">Actions awaiting your signature${count}</h1>
 <p class="muted">Each privileged action is authorized by signing it in your Flux owner wallet.</p>
 <div class="card" style="padding:0;overflow:hidden"><div style="overflow-x:auto">

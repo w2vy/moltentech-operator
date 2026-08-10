@@ -1,6 +1,6 @@
 {
   "name": "@moltentech/operator-coalition",
-  "version": "0.2.6-rc.1",
+  "version": "0.2.6-rc.2",
   "private": true,
   "type": "module",
   "license": "MIT",
@@ -8,7 +8,7 @@
   "scripts": {
     "start": "tsx src/index.ts",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test src/auth.test.ts src/console-manifest.test.ts"
+    "test": "tsx --test src/auth.test.ts src/console-manifest.test.ts src/console-state-gate.test.ts"
   },
   "dependencies": {
     "@moltentech/protocol": "file:../protocol",
