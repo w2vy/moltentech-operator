@@ -304,7 +304,11 @@ test("parseAmJson returns null when there is no JSON at all", () => {
 // --- token redaction (found live on staging 2026-08-09) ---------------------
 
 test("redactToken removes every occurrence of the secret, not just the first", () => {
-  const secret = "cb94f05c-aaa5-4664-9070-80efecaed9e0";
+  // Obviously-fake, and it must stay that way: this test originally used the REAL
+  // leaked token as its fixture, which published a live credential to a public repo
+  // (rotated 2026-08-10; see .gitleaksignore). Reproducing a leak never needs the
+  // actual value — redactToken only cares that the substring occurs more than once.
+  const secret = "00000000-0000-4000-8000-000000000000";
   const text = `Command failed: arcane-mage provision --token mt-agent@pve!agent=${secret} -c /tmp/x.yaml\nretry with ${secret}`;
   const out = redactToken(text, secret);
   assert.equal(out.includes(secret), false);
