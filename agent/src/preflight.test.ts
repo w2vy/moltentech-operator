@@ -8,6 +8,41 @@ import type { AgentConfig } from "./config";
  * each check is asserted in both directions — a check that never fires is worse than
  * no check, because it reads as a clean bill of health. */
 
+/** The real pve30 shapes, copied from its live API — the host that proved the failure. */
+const PVE30_DISKS = [
+  { devpath: "/dev/sda", type: "hdd", rpm: "5400", model: "WDC_WD20EFRX-68EUZN0" },
+  { devpath: "/dev/sdb", type: "ssd", rpm: 0, model: "WDC_WDS500G2B0A-00SM50" },
+];
+const PVE30_LVM = {
+  children: [
+    { name: "pve", children: [{ name: "/dev/sda3" }] },
+    { name: "ssd", children: [{ name: "/dev/sdb" }] },
+  ],
+};
+
+test("pve30 LIVE shapes: local-lvm is REFUSED and ssd is ACCEPTED", () => {
+  // §10.3's acceptance criterion, as a unit test against the real payloads.
+  const bad = classifyRotational(PVE30_DISKS, "local-lvm", "pve", PVE30_LVM);
+  assert.equal(bad.rotational, true);
+  assert.match(bad.why, /VG pve.*\/dev\/sda/);
+
+  const good = classifyRotational(PVE30_DISKS, "ssd", "ssd", PVE30_LVM);
+  assert.equal(good.rotational, false);
+  assert.match(good.why, /\/dev\/sdb/);
+});
+
+test("rpm arrives as a STRING for spinning disks and must still compare", () => {
+  // Proxmox returns rpm "5400" (string) for an HDD and 0 (number) for an SSD; a bare
+  // `> 0` on the raw value reads every HDD as stationary.
+  const { rotational } = classifyRotational(
+    [{ devpath: "/dev/sda", type: "unknown", rpm: "5400" }],
+    "x",
+    "vg",
+    { children: [{ name: "vg", children: [{ name: "/dev/sda1" }] }] }
+  );
+  assert.equal(rotational, true);
+});
+
 test("classifyRotational: an all-spinning node is rotational", () => {
   const { rotational } = classifyRotational([{ devpath: "/dev/sda", type: "hdd", rpm: 7200 }], "local-lvm");
   assert.equal(rotational, true);
@@ -18,9 +53,10 @@ test("classifyRotational: an all-SSD node is not", () => {
   assert.equal(rotational, false);
 });
 
-test("classifyRotational: a mixed node is INDETERMINATE, not a guess", () => {
-  // pve30's real shape. Reporting "cannot tell" beats a confident wrong answer,
-  // because the failure being prevented already presents as having no cause.
+test("a mixed node with NO VG mapping is INDETERMINATE, not a guess", () => {
+  // Reporting "cannot tell" beats a confident wrong answer, because the failure being
+  // prevented already presents as having no cause. With a VG the chain resolves
+  // exactly (see the pve30 test above); this is the dir/zfs fallback.
   const { rotational, why } = classifyRotational(
     [
       { devpath: "/dev/sda", type: "hdd", rpm: 7200 },
@@ -29,7 +65,7 @@ test("classifyRotational: a mixed node is INDETERMINATE, not a guess", () => {
     "ssd"
   );
   assert.equal(rotational, null);
-  assert.match(why, /cannot attribute/);
+  assert.match(why, /could not resolve/);
 });
 
 test("classifyRotational: a storage named after the spinning device is flagged", () => {

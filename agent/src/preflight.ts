@@ -71,37 +71,75 @@ interface StorageContent {
   volid?: string;
 }
 
+export interface LvmNode {
+  name?: string;
+  children?: LvmNode[];
+}
+
+export interface DiskInfo {
+  devpath?: string;
+  type?: string;
+  /** ⚠️ Proxmox returns this as a STRING for spinning disks ("5400") and the number 0
+   * for solid state. Coerce before comparing, or every HDD reads as 0 rpm. */
+  rpm?: number | string;
+}
+
 /**
- * Whether a storage id is backed by rotational media.
+ * Resolve a storage id to its physical media and decide whether it spins.
  *
- * Proxmox does not report ROTA on the storage itself, so this resolves through the
- * storage TYPE: `lvmthin`/`lvm` and `dir` sit on a device, `zfspool` on a pool. The
- * honest answer for most types is "cannot tell from the API alone" — and reporting
- * that is better than a guess, because the failure this prevents is precisely the one
- * that presents as "no cause at all".
+ * `DOC_DEFAULT_STORAGE_IS_HDD` is the worst failure in the onboarding set: silent,
+ * costs a full provision plus benchmark cycle, and reports no cause. Proxmox does not
+ * expose rotational-ness on the storage object, so this walks the real chain:
  *
- * The concrete signal we DO have is the disk list: `/nodes/<node>/disks/list` reports
- * `rpm` and `type` per device, so a pool whose name matches a spinning device is
- * flagged. Exported for unit testing without a hypervisor.
+ *   storage id ──vgname──▶ LVM volume group ──children──▶ /dev/sdaN ──▶ disk rpm/type
+ *
+ * Verified against pve30, the host that proved the failure: `ssd` → VG `ssd` →
+ * /dev/sdb (WD Blue SSD, rpm 0) and `local-lvm` → VG `pve` → /dev/sda3 → /dev/sda
+ * (WD Red, rpm 5400). Returns null only when the chain genuinely cannot be followed —
+ * an honest "cannot tell" beats a confident wrong answer here.
  */
 export function classifyRotational(
-  disks: Array<{ devpath?: string; type?: string; rpm?: number }>,
-  storageName: string
+  disks: DiskInfo[],
+  storageName: string,
+  vgname?: string,
+  lvmTree?: LvmNode
 ): { rotational: boolean | null; why: string } {
-  // Proxmox reports type "hdd"/"ssd"/"nvme" and rpm>0 only for spinning media.
-  const spinning = disks.filter((d) => (d.rpm ?? 0) > 0 || d.type === "hdd");
-  if (spinning.length === 0) {
-    return { rotational: false, why: "no rotational devices reported on this node" };
+  const spins = (d: DiskInfo): boolean => Number(d.rpm ?? 0) > 0 || d.type === "hdd";
+
+  // Preferred path: follow vgname through the LVM tree to the actual PVs.
+  const vg = vgname
+    ? (lvmTree?.children ?? []).find((c) => c.name === vgname)
+    : undefined;
+  if (vg) {
+    const pvPaths = (vg.children ?? []).map((c) => c.name ?? "").filter(Boolean);
+    // A PV is a PARTITION (/dev/sda3); the disk list reports whole devices (/dev/sda).
+    const backing = disks.filter((d) => pvPaths.some((pv) => pv.startsWith(d.devpath ?? "\u0000")));
+    if (backing.length > 0) {
+      const spinning = backing.filter(spins);
+      if (spinning.length > 0) {
+        return {
+          rotational: true,
+          why: `${storageName} → VG ${vgname} → ${spinning.map((d) => d.devpath).join(", ")} (rotational)`,
+        };
+      }
+      return {
+        rotational: false,
+        why: `${storageName} → VG ${vgname} → ${backing.map((d) => d.devpath).join(", ")} (solid state)`,
+      };
+    }
   }
-  // A storage id named after a spinning device, or the classic `local-lvm` on a host
-  // whose only devices spin, is the shape that bit us on pve30.
+
+  // Fallback: no VG mapping available (dir/zfs storage, or an API that did not answer).
+  const spinning = disks.filter(spins);
+  if (spinning.length === 0) return { rotational: false, why: "no rotational devices reported on this node" };
   const named = spinning.find((d) => (d.devpath ?? "").includes(storageName));
   if (named) return { rotational: true, why: `${storageName} matches spinning device ${named.devpath}` };
-  const allSpin = disks.length > 0 && spinning.length === disks.length;
-  if (allSpin) return { rotational: true, why: "every device on this node is rotational" };
+  if (disks.length > 0 && spinning.length === disks.length) {
+    return { rotational: true, why: "every device on this node is rotational" };
+  }
   return {
     rotational: null,
-    why: `node has both spinning and solid-state devices; cannot attribute "${storageName}" from the API alone`,
+    why: `node has both spinning and solid-state devices; could not resolve "${storageName}" to one of them`,
   };
 }
 
@@ -227,11 +265,21 @@ export async function runPreflight(
     } else {
       out.push({ name: `${node}: storageImages "${images}" exists`, status: "pass", detail: "active" });
       try {
-        const disks = await get<Array<{ devpath?: string; type?: string; rpm?: number }>>(
-          cfg,
-          `/api2/json/nodes/${node}/disks/list`
-        );
-        const { rotational, why } = classifyRotational(disks, images);
+        const disks = await get<DiskInfo[]>(cfg, `/api2/json/nodes/${node}/disks/list`);
+        // vgname lives on the CLUSTER storage object, not the per-node status row.
+        let vgname: string | undefined;
+        try {
+          vgname = (await get<{ vgname?: string }>(cfg, `/api2/json/storage/${images}`)).vgname;
+        } catch {
+          /* dir/zfs storage has no VG; the fallback heuristic covers it */
+        }
+        let lvmTree: LvmNode | undefined;
+        try {
+          lvmTree = await get<LvmNode>(cfg, `/api2/json/nodes/${node}/disks/lvm`);
+        } catch {
+          /* same */
+        }
+        const { rotational, why } = classifyRotational(disks, images, vgname, lvmTree);
         out.push({
           name: `${node}: storageImages "${images}" is not rotational`,
           status: rotational === true ? "fail" : rotational === false ? "pass" : "skip",
