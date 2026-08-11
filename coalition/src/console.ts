@@ -244,7 +244,7 @@ function maturingNodesSection(): string {
     })
     .join("");
   return `
-<h1>Nodes maturing (collateral / benchmark guard)</h1>
+<h1 style="margin-top:26px">Nodes maturing (collateral / benchmark guard)</h1>
 <p class="muted">MoltenTech withholds the customer's "Start your node" prompt until benchmarks pass and the collateral clears ${COLLATERAL_MIN_CONFIRMATIONS} confirmations — Starting earlier is rejected by Flux with a DoS cooldown. This is informational only.</p>
 <div class="card" style="padding:0;overflow:hidden">
 <table><thead><tr><th>Node</th><th>Benchmark</th><th>Collateral</th><th>Started</th></tr></thead><tbody>${rows}</tbody></table>
@@ -331,13 +331,13 @@ ${CONSOLE_HEAD_ICONS}
 <style>${CONSOLE_THEME_CSS}</style></head><body>
 <div class="wrap">
 <header class="mt"><span class="mark">MoltenTech</span><span class="slug">operator console · ${slug}</span></header>
-${nodesSection}
-<h1 style="margin-top:26px">Actions awaiting your signature${count}</h1>
+<h1>Actions awaiting your signature${count}</h1>
 <p class="muted">Each privileged action is authorized by signing it in your Flux owner wallet.</p>
 <div class="card" style="padding:0;overflow:hidden"><div style="overflow-x:auto">
 <table><thead><tr><th>Action</th><th>Rental</th><th></th></tr></thead><tbody>${actionRows}</tbody></table>
 </div></div>
 ${maturingNodesSection()}
+<div style="margin-top:26px">${nodesSection}</div>
 </div>
 </body></html>`
   );
