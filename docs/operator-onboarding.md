@@ -144,6 +144,53 @@ mt-manifest keygen             # writes manifest-key.pem (KEEP SECRET, 0600) + p
 Every `mt-manifest` command below reads and writes the **current directory** — run them
 all from the same folder.
 
+### ⭐ The fast path: `mt-manifest init`
+
+`init` asks about eight questions and writes **every** file this guide would otherwise
+have you create by hand — `config.env`, a `secrets.env` skeleton, `.env.operator`,
+`inventory.json`, and the Flux app spec:
+
+```sh
+mt-manifest init
+```
+
+It exists because the values in those files are **duplicated across them**, and every
+transcription is a chance to make a deployment that half-works. `init` derives each
+duplicate from one answer, so whole categories of failure stop being possible rather
+than merely being checked for:
+
+- `COALITION_URL` is derived from your Flux **app name** — the URL is always
+  `https://<app>.app.runonflux.io`, so you never have to know it in advance.
+- `HOSTS` and the host names in `inventory.json` come from the same answer, so the
+  unattested-host rejection cannot happen.
+- Prices are asked in **dollars** and converted, so an extra zero cannot slip in.
+- `secrets.env` is written with every value **empty** and each comment on its own
+  line. Fill them in as later steps issue them; a comment after `=` becomes part of
+  the value, which is why the file is generated rather than described.
+
+Re-runnable and scriptable: `mt-manifest init --answers answers.json` takes the same
+answers as a file and runs the same generator, so you can fix one typo without
+re-answering everything.
+
+### Check your work at any point: `mt-manifest doctor`
+
+```sh
+mt-manifest doctor
+```
+
+Reads whichever of the files exist and reports anything that disagrees — values that
+differ between two files, an inventory host missing from `HOSTS`, a `lanIp` with no
+`/NN`, a `$(…)` that will ship literally, a trailing comment swallowed into a value, a
+secret sitting in a non-secret file, a price under the platform floor, or a courier
+that will start silently disabled. It holds no credentials and touches no network.
+
+Empty values in a fresh `secrets.env` are reported as **not yet filled**, naming the
+step that issues each one — that is expected on first run, not an error.
+
+⚠️ `doctor` checks that your FILES agree. The checks that need your Proxmox token —
+including whether your storage pool is a spinning disk — run in the agent image as
+`mt-agent doctor` (Step 6).
+
 ⚠️ **`keygen` is a once-ever act.** `manifest-key.pem` *is* your provider identity: MT
 pins its public half as `Provider.manifestPubkey` at onboarding, and re-running `keygen`
 silently overwrites it, after which every signature you produce is rejected. Back it up
@@ -495,6 +542,34 @@ to `inventory.json` alone: `.env.operator` and `manifest-key.pem` have no busine
 readable inside the container.
 
 ### Dry run, then run
+
+### ⭐ First, the hypervisor preflight: `mt-agent doctor`
+
+Before any VM is created, run the credentialed checks — read-only, creates nothing:
+
+```sh
+docker run --rm --env-file .env.operator -v "$PWD/agent-data:/data:ro" \
+  w2vy/mt-agent:latest doctor
+```
+
+It exits non-zero if anything fails, so it works as a gate. It checks that Proxmox is
+reachable and your token is accepted, that the CA trust store is present, that each
+`storageImages` id exists **and is not a spinning disk**, that `storageIso` actually
+holds the ArcaneOS ISO, and that `MANIFEST_KEY` decodes to a key whose public half is
+the one MT pinned.
+
+⚠️ **The storage check is the one that pays for this step.** A pool on rotational media
+provisions fine and then fails benchmarks with no visible cause — the single most
+expensive silent failure in this whole guide (§0.2). `doctor` resolves the storage id
+through its LVM volume group to the actual device and refuses it, e.g.:
+
+```
+FAIL  pve30: storageImages "local-lvm" is not rotational
+      local-lvm → VG pve → /dev/sda (rotational) — VMs will land on a spinning disk
+```
+
+If it reports `could not resolve …`, the storage is not LVM-backed and you must confirm
+the media yourself; an honest "cannot tell" is deliberate rather than a guess.
 
 Validate connectivity/auth to MT first, **without touching Proxmox**:
 
