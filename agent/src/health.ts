@@ -7,10 +7,10 @@ const insecureAgent = new https.Agent({ rejectUnauthorized: false });
 
 type Vm = { name?: string; status?: string };
 
-/** GET the VM list for one Proxmox node via the local API token. */
-function getQemuList(cfg: AgentConfig, nodeName: string): Promise<Vm[]> {
+/** GET a Proxmox API path via the local token, returning its `data` payload. */
+function getJson<T>(cfg: AgentConfig, path: string): Promise<T> {
   return new Promise((resolve, reject) => {
-    const url = new URL(`${cfg.proxmox.url}/api2/json/nodes/${nodeName}/qemu`);
+    const url = new URL(`${cfg.proxmox.url}${path}`);
     const r = https.request(
       url,
       {
@@ -28,7 +28,7 @@ function getQemuList(cfg: AgentConfig, nodeName: string): Promise<Vm[]> {
             return reject(new Error(`proxmox ${res.statusCode}`));
           }
           try {
-            resolve((JSON.parse(data).data ?? []) as Vm[]);
+            resolve((JSON.parse(data).data ?? []) as T);
           } catch (e) {
             reject(e as Error);
           }
@@ -38,6 +38,32 @@ function getQemuList(cfg: AgentConfig, nodeName: string): Promise<Vm[]> {
     r.on("error", reject);
     r.end();
   });
+}
+
+/** GET the VM list for one Proxmox node via the local API token. */
+function getQemuList(cfg: AgentConfig, nodeName: string): Promise<Vm[]> {
+  return getJson<Vm[]>(cfg, `/api2/json/nodes/${nodeName}/qemu`);
+}
+
+/**
+ * Every VMID currently live on the CLUSTER — qemu and lxc, every node, including VMs
+ * that have nothing to do with MT.
+ *
+ * Cluster-wide on purpose: a VMID is unique per cluster, not per node, so a per-node
+ * listing would happily hand out an id already taken on another host. `/cluster/resources`
+ * answers from any member, which is why one `PROXMOX_URL` is enough.
+ *
+ * Foreign VMs are exactly why D3-B allocates here and not on the hub: MT holds no
+ * hypervisor credentials and cannot see them.
+ */
+export async function getClusterVmIds(cfg: AgentConfig): Promise<Set<number>> {
+  const raw = await getJson<{ vmid?: number | string }[]>(cfg, "/api2/json/cluster/resources?type=vm");
+  const ids = new Set<number>();
+  for (const r of raw) {
+    const n = typeof r.vmid === "string" ? Number(r.vmid) : r.vmid;
+    if (typeof n === "number" && Number.isInteger(n) && n > 0) ids.add(n);
+  }
+  return ids;
 }
 
 /**
