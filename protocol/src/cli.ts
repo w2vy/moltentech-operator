@@ -552,9 +552,10 @@ async function main() {
       break;
     }
     default:
-      console.log("usage: mt-manifest <keygen|init|sign|env|verify|authorize> [options]\n");
+      console.log("usage: mt-manifest <keygen|init|doctor|sign|env|verify|authorize> [options]\n");
       console.log("  keygen    [--out <dir>]");
-      console.log("  init      [--out <body.json>]");
+      console.log("  init      [--out <dir>] [--answers <answers.json>] [--force]");
+      console.log("  doctor    [--dir <dir>]");
       console.log("  sign      --key <pem> (--from-config <config.env> | --in <body.json>) [--out <manifest.json>]");
       console.log("  env       --from-config <config.env> --secrets <secrets.env> --manifest <manifest|signed-manifest.json> [--out <env.json>]");
       console.log("  verify    --in <manifest.json>");
