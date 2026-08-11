@@ -147,6 +147,12 @@ export async function handleWebhook(
   signature: string,
   fetchImpl: typeof fetch = fetch
 ): Promise<number> {
+  // No webhook secret means no way to authenticate the caller. Refusing is the only
+  // safe answer: verifying against a placeholder would accept forged events. The
+  // route above already 503s when Stripe is disabled entirely, so this is the
+  // narrower case of a key present but a secret missing.
+  if (!cfg.stripeWebhookSecret) return 503;
+
   let event: StripeEvent;
   try {
     event = stripe.webhooks.constructEvent(rawBody, signature, cfg.stripeWebhookSecret);

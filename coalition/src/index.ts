@@ -11,7 +11,11 @@ const COLLATERAL_INTERVAL_MS = 2 * 60_000;
 
 async function main() {
   const cfg = loadConfig();
-  const stripe = createStripe(cfg.stripeSecretKey);
+  // Deferred: `new Stripe(undefined)` throws at construction, so a free-tier operator
+  // could never start. loadConfig has already refused the dangerous combination — a
+  // PAID tier with no keys — so reaching here without a key means every tier is free.
+  const stripe = cfg.stripeSecretKey ? createStripe(cfg.stripeSecretKey) : null;
+  if (!stripe) console.log("[coalition] no Stripe key — nothing is listed for sale; payment routes disabled");
 
   await collectStats(cfg).catch((e) => console.error("[coalition] initial stats error:", e.message));
   setInterval(() => {

@@ -28,7 +28,9 @@
       "default": "./src/sign-launcher.ts"
     }
   },
-  "files": ["src"],
+  "files": [
+    "src"
+  ],
   "bin": {
     "mt-manifest": "./src/cli.ts",
     "mt-authorize": "./src/authorize-cli.ts"
@@ -36,7 +38,7 @@
   "scripts": {
     "build": "tsc",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test src/signing.test.ts src/wallet.test.ts src/sign-launcher.test.ts src/manifest-config.test.ts src/manifest.test.ts src/cli-verify.test.ts",
+    "test": "tsx --test src/signing.test.ts src/wallet.test.ts src/sign-launcher.test.ts src/manifest-config.test.ts src/manifest.test.ts src/cli-verify.test.ts src/config-lint.test.ts src/scaffold.test.ts",
     "manifest": "tsx src/cli.ts"
   },
   "dependencies": {

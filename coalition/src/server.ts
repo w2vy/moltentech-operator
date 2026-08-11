@@ -37,7 +37,12 @@ function readBody(req: http.IncomingMessage): Promise<Buffer> {
  * The inbound Coalition server. Public: the signed manifest + stats. Authenticated
  * (MT-issued coalitionKey): /checkout + /manage. Stripe-signed: /webhook (raw body).
  */
-export function createServer(stripe: StripeLike, cfg: CoalitionConfig): http.Server {
+/**
+ * `stripe` is null when the operator lists only free tiers. The payment routes then
+ * answer 503 instead of throwing: a free-tier Coalition is a valid deployment, and
+ * an unreachable checkout is better than a process that will not boot.
+ */
+export function createServer(stripe: StripeLike | null, cfg: CoalitionConfig): http.Server {
   return http.createServer(async (req, res) => {
     // Stamp every response with the running code version so MT (which pulls the
     // manifest + stats) can detect providers on an outdated coalition. setHeader
@@ -105,6 +110,7 @@ export function createServer(stripe: StripeLike, cfg: CoalitionConfig): http.Ser
 
       // Stripe webhook — verify on the RAW body (no JSON parse before signature check).
       if (method === "POST" && url === "/webhook") {
+        if (!stripe) return send(503, { error: "payments disabled — this operator lists only free tiers" });
         const sig = (req.headers["stripe-signature"] as string) ?? "";
         const raw = await readBody(req);
         const status = await handleWebhook(stripe, cfg, raw, sig);
@@ -132,10 +138,12 @@ export function createServer(stripe: StripeLike, cfg: CoalitionConfig): http.Ser
           if (url === "/checkout") {
             const p = CheckoutInitRequest.safeParse(json);
             if (!p.success) return send(400, { error: "Invalid checkout request" });
+            if (!stripe) return send(503, { error: "payments disabled — this operator lists only free tiers" });
             return send(200, await handleCheckout(stripe, cfg, p.data));
           } else {
             const p = ManageRequest.safeParse(json);
             if (!p.success) return send(400, { error: "Invalid manage request" });
+            if (!stripe) return send(503, { error: "payments disabled — this operator lists only free tiers" });
             return send(200, await handleManage(stripe, p.data));
           }
         } catch (err) {
