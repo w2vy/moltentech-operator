@@ -90,7 +90,10 @@ export function suggestFluxAppName(providerSlug: string): string {
 
 const SLUG_RE = /^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$/;
 
-export function validateAnswers(a: Answers): string[] {
+export function validateAnswers(
+  a: Answers,
+  minimums: Record<string, number> = TIER_FLOORS_CENTS
+): string[] {
   const errs: string[] = [];
   if (!SLUG_RE.test(a.providerSlug)) {
     errs.push(
@@ -111,7 +114,7 @@ export function validateAnswers(a: Answers): string[] {
       if (!/\/\d{1,2}$/.test(s.lanIp)) {
         errs.push(`slot ${s.vmName}: lanIp "${s.lanIp}" needs a /NN suffix, or the node boots with no gateway.`);
       }
-      if (TIER_FLOORS_CENTS[s.tier] == null) errs.push(`slot ${s.vmName}: unknown tier "${s.tier}".`);
+      if (minimums[s.tier] == null) errs.push(`slot ${s.vmName}: unknown tier "${s.tier}".`);
       if (seenVmNames.has(s.vmName)) errs.push(`duplicate vmName "${s.vmName}".`);
       seenVmNames.add(s.vmName);
       if (!Number.isInteger(s.apiPort)) errs.push(`slot ${s.vmName}: apiPort must be an integer.`);
@@ -119,10 +122,10 @@ export function validateAnswers(a: Answers): string[] {
   }
 
   for (const [tier, cents] of Object.entries(a.tierPricesCents ?? {})) {
-    const floor = TIER_FLOORS_CENTS[tier];
+    const floor = minimums[tier];
     if (floor == null) errs.push(`price for unknown tier "${tier}".`);
     else if (!Number.isInteger(cents)) errs.push(`price for ${tier} must be integer cents.`);
-    else if (cents < floor) errs.push(`price for ${tier} (${cents}) is below the platform floor ${floor}.`);
+    else if (cents < floor) errs.push(`price for ${tier} (${cents}) is below the platform minimum ${floor}.`);
   }
   return errs;
 }

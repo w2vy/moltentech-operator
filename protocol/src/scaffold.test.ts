@@ -139,10 +139,20 @@ test("validateAnswers rejects a malformed slug and says it is permanent", () => 
   assert.match(validateAnswers({ ...ANSWERS, providerSlug: "Acme_Nodes" }).join("\n"), /PERMANENT/);
 });
 
-test("validateAnswers rejects a price below the floor", () => {
+test("validateAnswers rejects a price below the minimum", () => {
   assert.match(
     validateAnswers({ ...ANSWERS, tierPricesCents: { cumulus: 100 } }).join("\n"),
-    /below the platform floor/
+    /below the platform minimum/
+  );
+});
+
+test("validateAnswers honours LIVE minimums over the bundled table", () => {
+  // If MT lowers a minimum, the wizard must accept the new price without anyone
+  // editing this repo — that is the entire point of GET /api/tiers.
+  assert.deepEqual(validateAnswers({ ...ANSWERS, tierPricesCents: { cumulus: 400 } }, { cumulus: 400 }), []);
+  assert.match(
+    validateAnswers({ ...ANSWERS, tierPricesCents: { cumulus: 400 } }).join("\n"),
+    /below the platform minimum/
   );
 });
 

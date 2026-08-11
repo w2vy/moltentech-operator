@@ -39,7 +39,7 @@ import { join } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { ProviderManifest, ProviderManifestBody, manifestOwnerMessage, unwrapManifest } from "./manifest";
 import { renderManifestBodyFromConfig, parseConfigEnv } from "./manifest-config";
-import { runDoctor, formatReport, TIER_FLOORS_CENTS } from "./config-lint";
+import { runDoctor, formatReport, fetchTierMinimums, TIER_FLOORS_CENTS } from "./config-lint";
 import {
   generateAll,
   validateAnswers,
@@ -78,7 +78,7 @@ function die(msg: string): never {
  * derived, because the URL is deterministic (`https://<app>.app.runonflux.io`) and
  * asking for it directly is what created the chicken-and-egg in the old runbook.
  */
-async function askAnswers(): Promise<Answers> {
+async function askAnswers(minimums: Record<string, number> = TIER_FLOORS_CENTS): Promise<Answers> {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   const ask = async (q: string, def?: string): Promise<string> => {
     const a = (await rl.question(def ? `${q} [${def}]: ` : `${q}: `)).trim();
@@ -125,7 +125,7 @@ async function askAnswers(): Promise<Answers> {
       const count = Number(await ask(`  how many slots on ${name}?`, "1"));
       for (let i = 0; i < count; i++) {
         console.log(`  · slot ${i + 1} of ${count}`);
-        const tier = await ask(`    tier (${Object.keys(TIER_FLOORS_CENTS).join("/")})`, "cumulus");
+        const tier = await ask(`    tier (${Object.keys(minimums).join("/")})`, "cumulus");
         const vmName = await ask("    VM name");
         const ipAddress = await ask("    public WAN IP");
         const lanIp = await ask("    LAN IP with prefix, e.g. 192.168.87.2/24");
@@ -143,7 +143,7 @@ async function askAnswers(): Promise<Answers> {
     const tiers = [...new Set(hosts.flatMap((h) => h.slots.map((s) => s.tier)))].sort();
     console.log("");
     for (const tier of tiers) {
-      const floor = TIER_FLOORS_CENTS[tier] ?? 0;
+      const floor = minimums[tier] ?? 0;
       const dollars = await ask(
         `Monthly price for ${tier} in DOLLARS (floor $${(floor / 100).toFixed(2)})`,
         (floor / 100).toFixed(2)
@@ -221,6 +221,16 @@ async function main() {
       const answersPath = flag(args, "--answers");
       const force = args.includes("--force");
 
+      // Same rule as doctor: ask MT for the live minimums, fall back to the bundled
+      // table. Done before the prompts so the wizard quotes the real floor.
+      const liveMinimums = await fetchTierMinimums(
+        process.env.MT_BASE_URL ?? "https://www.moltentech.us"
+      );
+      if (!liveMinimums) {
+        console.error("note: could not reach MT for live tier minimums — using this tool's bundled copy.");
+      }
+      const minimums = liveMinimums ?? TIER_FLOORS_CENTS;
+
       let answers: Answers;
       if (answersPath) {
         // The non-interactive path is what makes this testable and re-runnable after
@@ -232,10 +242,10 @@ async function main() {
           die(`${answersPath}: ${(e as Error).message}`);
         }
       } else {
-        answers = await askAnswers();
+        answers = await askAnswers(minimums);
       }
 
-      const problems = validateAnswers(answers);
+      const problems = validateAnswers(answers, minimums);
       if (problems.length > 0) die(`answers are not usable:\n  - ${problems.join("\n  - ")}`);
 
       const files = generateAll(answers);
@@ -278,11 +288,18 @@ async function main() {
       // inventory.json sits beside the others during onboarding but is mounted at
       // data/ once the agent runs, so look in both rather than reporting it missing.
       const inventory = read("inventory.json") ?? read(join("data", "inventory.json"));
+      const configText = read("config.env");
+      // Price rules come from MT itself when we can reach it — the minimum is MT's to
+      // set, and a copy in this repo is only a fallback. MT_BASE_URL is read from the
+      // operator's own config so no flag is needed.
+      const mtBaseUrl = configText ? parseConfigEnv(configText).MT_BASE_URL : undefined;
+      const tierMinimums = mtBaseUrl ? ((await fetchTierMinimums(mtBaseUrl)) ?? undefined) : undefined;
       const report = runDoctor({
-        configEnv: read("config.env"),
+        configEnv: configText,
         secretsEnv: read("secrets.env"),
         envOperator: read(".env.operator"),
         inventoryJson: inventory,
+        tierMinimums,
       });
       const { text, ok } = formatReport(report);
       console.log(text);

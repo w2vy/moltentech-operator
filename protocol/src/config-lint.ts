@@ -18,26 +18,68 @@
  * cannot diagnose either. The silent rules are the reason this file exists.
  */
 
-/** The lowest price, in CENTS, MT will accept for a listed tier.
+/** The lowest price, in CENTS, MT will accept for a listed tier — **FALLBACK ONLY**.
  *
- * Source of truth is `TierInfo.minPriceCents` in `apps/web/src/lib/tiers.ts` (hub repo,
- * which this repo cannot import); MT rejects anything lower with a 422 from
- * `api/agent/listing` and `api/agent/inventory`.
+ * The live values come from `GET /api/tiers` on the hub (`fetchTierMinimums` below);
+ * this table is what we use when that call cannot be made — offline, MT down, or no
+ * `MT_BASE_URL` known yet. Treat it as a cache, not a second source of truth: if it
+ * disagrees with the API, the API wins and the operator is told which was used.
  *
- * ⚠️ Do NOT confuse this with `TierInfo.price`, MoltenTech's own list price. They were
- * one field until 2026-08-11 — which meant a change to what MT charged silently moved
- * what operators were allowed to charge — and are now deliberately separate even though
- * the values still match.
+ * ⚠️ Source of truth is `TierInfo.minPriceCents` in `apps/web/src/lib/tiers.ts` (hub
+ * repo, which this repo cannot import). Do NOT confuse it with `TierInfo.price`,
+ * MoltenTech's own list price — they were one field until 2026-08-11, which meant a
+ * change to what MT charged silently moved what operators were allowed to charge.
  *
- * ⚠️ Mirrored in two more places: here, and the `FLOORS` dict in
- * `.github/workflows/ci.yml`. Three copies is a known wart; the fix is a public
- * `GET /api/tiers` (tracked in `peppy-discovering-floyd.md`).
+ * ⚠️ The operator CI asserts this table still equals the live API, so drift fails a
+ * build instead of silently blessing a price MT will 422.
  */
 export const TIER_FLOORS_CENTS: Record<string, number> = {
   cumulus: 700,
   nimbus: 2000,
   stratus: 4000,
 };
+
+export interface TierCatalogEntry {
+  key: string;
+  name?: string;
+  minPriceCents: number;
+  listPriceCents?: number;
+}
+
+/**
+ * Fetch the live tier minimums from the hub.
+ *
+ * Returns `null` on any failure — unreachable, non-200, malformed — because a wizard
+ * that cannot reach MT must still be able to scaffold. The caller falls back to
+ * `TIER_FLOORS_CENTS` and says so, rather than either failing outright or pretending
+ * the stale numbers came from the API.
+ */
+export async function fetchTierMinimums(
+  mtBaseUrl: string,
+  fetchImpl: typeof fetch = fetch,
+  timeoutMs = 5000
+): Promise<Record<string, number> | null> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetchImpl(`${mtBaseUrl.replace(/\/$/, "")}/api/tiers`, {
+      signal: controller.signal,
+    });
+    if (!res.ok) return null;
+    const body = (await res.json()) as { tiers?: TierCatalogEntry[] };
+    if (!Array.isArray(body?.tiers) || body.tiers.length === 0) return null;
+    const out: Record<string, number> = {};
+    for (const t of body.tiers) {
+      if (typeof t?.key !== "string" || !Number.isInteger(t?.minPriceCents)) return null;
+      out[t.key] = t.minPriceCents;
+    }
+    return out;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 /** A price this far above the floor is a misplaced zero, not a pricing decision. */
 const PRICE_SANITY_MULTIPLE = 5;
@@ -195,7 +237,11 @@ function lintSecretPlacement(entries: EnvEntry[], file: string, bannedKeys: stri
 }
 
 /** Rule 7: price floors, and the misplaced-zero check that caught a real $200 nimbus. */
-export function lintTierPrices(entries: EnvEntry[], file: string): Finding[] {
+export function lintTierPrices(
+  entries: EnvEntry[],
+  file: string,
+  minimums: Record<string, number> = TIER_FLOORS_CENTS
+): Finding[] {
   const entry = entries.find((e) => e.key === "TIER_PRICES_JSON");
   if (!entry) return [];
   let prices: unknown;
@@ -225,7 +271,7 @@ export function lintTierPrices(entries: EnvEntry[], file: string): Finding[] {
   }
   const found: Finding[] = [];
   for (const [tier, cents] of Object.entries(prices as Record<string, unknown>)) {
-    const floor = TIER_FLOORS_CENTS[tier];
+    const floor = minimums[tier];
     if (floor == null) {
       found.push({
         rule: "PRICE_UNKNOWN_TIER",
@@ -440,12 +486,17 @@ export interface DoctorInput {
   secretsEnv?: string;
   envOperator?: string;
   inventoryJson?: string;
+  /** Live minimums from `GET /api/tiers`; omitted = use the bundled fallback. */
+  tierMinimums?: Record<string, number>;
 }
 
 export interface DoctorReport {
   findings: Finding[];
   /** Files that were actually examined, for an honest summary line. */
   filesChecked: string[];
+  /** Whether price rules came from the live API or the bundled fallback. Reported,
+   * because "your price is fine" means less if it was checked against stale numbers. */
+  minimumsSource: "api" | "bundled";
 }
 
 /**
@@ -457,6 +508,8 @@ export interface DoctorReport {
 export function runDoctor(input: DoctorInput): DoctorReport {
   const findings: Finding[] = [];
   const filesChecked: string[] = [];
+  const minimums = input.tierMinimums ?? TIER_FLOORS_CENTS;
+  const minimumsSource: "api" | "bundled" = input.tierMinimums ? "api" : "bundled";
 
   let configRec: Record<string, string> = {};
   let hostsFromConfig: string[] = [];
@@ -471,7 +524,7 @@ export function runDoctor(input: DoctorInput): DoctorReport {
       .filter(Boolean);
     findings.push(...lintValueShape(entries, "config.env"));
     findings.push(...lintSecretPlacement(entries, "config.env", SECRET_KEYS_BANNED_IN_CONFIG));
-    findings.push(...lintTierPrices(entries, "config.env"));
+    findings.push(...lintTierPrices(entries, "config.env", minimums));
   }
 
   if (input.secretsEnv != null) {
@@ -503,7 +556,7 @@ export function runDoctor(input: DoctorInput): DoctorReport {
     findings.push(...lintInventory(input.inventoryJson, hostsFromConfig));
   }
 
-  return { findings, filesChecked };
+  return { findings, filesChecked, minimumsSource };
 }
 
 /** Human-readable report. Returns the text and whether anything is fatal. */
@@ -527,6 +580,12 @@ export function formatReport(report: DoctorReport): { text: string; ok: boolean 
   lines.push(
     `checked ${report.filesChecked.join(", ")} — ${errors.length} error(s), ${warnings.length} warning(s)`
   );
+  if (report.minimumsSource === "bundled") {
+    lines.push(
+      "note: could not reach MT for live tier minimums; price rules used this tool's " +
+        "bundled copy, which may be out of date."
+    );
+  }
   if (errors.length === 0 && warnings.length === 0) lines.push("everything agrees.");
   return { text: lines.join("\n"), ok: errors.length === 0 };
 }

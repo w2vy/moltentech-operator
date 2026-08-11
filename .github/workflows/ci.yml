@@ -134,11 +134,9 @@ jobs:
           pairs = dict(p.split("=", 1) for p in json.load(open(work / "env.json")))
           prices = json.loads(pairs["TIER_PRICES_JSON"])
 
-          # Lowest listable price per tier, in CENTS. Mirrors TierInfo.minPriceCents in
-          # apps/web/src/lib/tiers.ts (the web repo, which this repo cannot import) — NOT
-          # TierInfo.price, which is MT's own list price and a separate field since
-          # 2026-08-11. MT rejects a lower listing with a 422. This is the assertion that
-          # would have caught the doc's $200 nimbus.
+          # Lowest listable price per tier, in CENTS. The LIVE values come from
+          # GET /api/tiers; this literal is only the offline fallback, and the
+          # "bundled tier minimums are current" job below fails if the two diverge.
           FLOORS = {"cumulus": 700, "nimbus": 2000, "stratus": 4000}  # = minPriceCents
           for tier, cents in prices.items():
               floor = FLOORS.get(tier)
@@ -257,6 +255,35 @@ jobs:
           run env --from-config config.env --secrets secrets.env \
                   --manifest manifest.json --out env.json
           echo "sell-nothing env.json built with no Stripe keys"
+
+      - name: Bundled tier minimums are current
+        # The minimum is MT's to set and lives in apps/web/src/lib/tiers.ts. This repo
+        # keeps a copy so `doctor` works offline — a cache, not a second source of
+        # truth. Before GET /api/tiers existed, a change on the hub silently left this
+        # copy stale and the operator's own tooling would bless a price MT then 422'd.
+        # Now that drift fails HERE instead.
+        continue-on-error: true   # MT being down must not block an operator's PR
+        run: |
+          set -uo pipefail
+          live="$(curl -fsS --max-time 20 https://www.moltentech.us/api/tiers)" || {
+            echo "::warning::could not reach GET /api/tiers — skipping the drift check"
+            exit 0
+          }
+          echo "$live" | python3 -c '
+          import json, re, sys, pathlib
+          live = {t["key"]: t["minPriceCents"] for t in json.load(sys.stdin)["tiers"]}
+          src = pathlib.Path("protocol/src/config-lint.ts").read_text()
+          block = re.search(r"TIER_FLOORS_CENTS: Record<string, number> = \{(.*?)\}", src, re.S).group(1)
+          bundled = {k: int(v) for k, v in re.findall(r"(\w+):\s*(\d+)", block)}
+          if bundled != live:
+              sys.exit(
+                  "::error::bundled tier minimums are stale.\n"
+                  f"  live (GET /api/tiers): {live}\n"
+                  f"  bundled (config-lint.ts): {bundled}\n"
+                  "  Update TIER_FLOORS_CENTS and the FLOORS dict in this workflow."
+              )
+          print("bundled minimums match the live API:", bundled)
+          '
 
       - name: Reject a malformed config.env
         run: |

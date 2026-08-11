@@ -8,6 +8,7 @@ import {
   lintCrossFile,
   lintCourier,
   lintTierPrices,
+  fetchTierMinimums,
   TIER_FLOORS_CENTS,
 } from "./config-lint";
 
@@ -264,4 +265,65 @@ test("the report names file and line so a beginner can find it", () => {
 test("warnings alone do not fail the run", () => {
   const { ok } = formatReport(runDoctor({ configEnv: 'TIER_PRICES_JSON={"nimbus":20000}\n' }));
   assert.equal(ok, true);
+});
+
+test("fetchTierMinimums returns the live table", async () => {
+  const fake = (async () =>
+    new Response(JSON.stringify({ tiers: [{ key: "cumulus", minPriceCents: 500 }] }), {
+      status: 200,
+    })) as unknown as typeof fetch;
+  assert.deepEqual(await fetchTierMinimums("https://mt.example", fake), { cumulus: 500 });
+});
+
+test("fetchTierMinimums trailing slash does not double up the path", async () => {
+  let seen = "";
+  const fake = (async (url: string) => {
+    seen = url;
+    return new Response(JSON.stringify({ tiers: [{ key: "cumulus", minPriceCents: 700 }] }), { status: 200 });
+  }) as unknown as typeof fetch;
+  await fetchTierMinimums("https://mt.example/", fake);
+  assert.equal(seen, "https://mt.example/api/tiers");
+});
+
+test("fetchTierMinimums returns null on every failure shape", async () => {
+  const cases: Array<typeof fetch> = [
+    (async () => new Response("nope", { status: 500 })) as unknown as typeof fetch,
+    (async () => new Response("not json", { status: 200 })) as unknown as typeof fetch,
+    (async () => new Response(JSON.stringify({ tiers: [] }), { status: 200 })) as unknown as typeof fetch,
+    (async () =>
+      new Response(JSON.stringify({ tiers: [{ key: "cumulus" }] }), { status: 200 })) as unknown as typeof fetch,
+    (async () => {
+      throw new Error("ECONNREFUSED");
+    }) as unknown as typeof fetch,
+  ];
+  for (const f of cases) {
+    assert.equal(await fetchTierMinimums("https://mt.example", f), null);
+  }
+});
+
+test("live minimums override the bundled table, and the source is reported", async () => {
+  // The whole point: if MT lowers a minimum, doctor must stop rejecting the new price
+  // without anyone editing this repo.
+  const cheap = runDoctor({
+    configEnv: 'TIER_PRICES_JSON={"cumulus":500}\n',
+    tierMinimums: { cumulus: 400 },
+  });
+  assert.deepEqual(rules(cheap), []);
+  assert.equal(cheap.minimumsSource, "api");
+
+  const bundled = runDoctor({ configEnv: 'TIER_PRICES_JSON={"cumulus":500}\n' });
+  assert.deepEqual(rules(bundled), ["PRICE_BELOW_FLOOR"]);
+  assert.equal(bundled.minimumsSource, "bundled");
+});
+
+test("a bundled-fallback run says so, so a pass is not over-read", () => {
+  const { text } = formatReport(runDoctor({ configEnv: GOOD_CONFIG }));
+  assert.match(text, /bundled copy, which may be out of date/);
+});
+
+test("a live-minimums run does not print the stale-copy note", () => {
+  const { text } = formatReport(
+    runDoctor({ configEnv: GOOD_CONFIG, tierMinimums: { cumulus: 700, nimbus: 2000 } })
+  );
+  assert.ok(!text.includes("bundled copy"));
 });
