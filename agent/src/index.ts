@@ -8,12 +8,45 @@ import { pickExecutor } from "./executor";
 import { collectHealth } from "./health";
 import { refreshIsoOnce } from "./iso-refresh";
 import { runDetached } from "./background";
+import { runPreflight, formatPreflight, checkManifestKey } from "./preflight";
 
 /**
  * Operator agent main loop. Outbound-only: it pulls jobs and pushes results +
  * listing to MoltenTech; nothing connects in. Holds the local Proxmox creds.
  */
+/**
+ * `mt-agent doctor` — the credentialed half of onboarding validation.
+ *
+ * `mt-manifest doctor` checks that the five config files agree with each other, but it
+ * is deliberately secret-free and cannot ask the hypervisor anything. These checks need
+ * the Proxmox token, which lives HERE and nowhere else. Read-only: no VM is created.
+ *
+ * Runs to completion and exits non-zero on any failure, so it works as a bring-up gate
+ * before the first provision rather than after a wasted benchmark cycle.
+ */
+async function doctor(): Promise<never> {
+  const cfg = loadConfig();
+  const hosts = reloadInventory(cfg);
+  console.log(`mt-agent doctor — provider=${cfg.providerSlug} proxmox=${cfg.proxmox.url}\n`);
+
+  const results = await runPreflight(
+    cfg,
+    hosts.map((h) => ({ nodeName: h.nodeName, storageImages: h.storageImages, storageIso: h.storageIso }))
+  );
+  // Compares the key the process ACTUALLY loaded, which is what makes it catch the
+  // "docker restart didn't reload it" class rather than just re-reading a file.
+  results.push(checkManifestKey(cfg.manifestKey, process.env.MANIFEST_PUBKEY));
+
+  const { text, ok } = formatPreflight(results);
+  console.log(text);
+  if (hosts.length === 0) {
+    console.log("\nnote: no declared inventory — only the hypervisor-wide checks ran.");
+  }
+  process.exit(ok ? 0 : 1);
+}
+
 async function main() {
+  if (process.argv[2] === "doctor") return doctor();
   const cfg = loadConfig();
   const manifestKey = loadManifestKey(cfg.manifestKey);
   const auth: MtClientAuth = manifestKey
