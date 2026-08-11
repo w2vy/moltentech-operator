@@ -164,6 +164,12 @@ than merely being checked for:
 - `HOSTS` and the host names in `inventory.json` come from the same answer, so the
   unattested-host rejection cannot happen.
 - Prices are asked in **dollars** and converted, so an extra zero cannot slip in.
+  Each tier has a minimum MT will accept; `init` defaults to it and refuses less.
+
+If you are running nodes only for yourself, answer that you are **not selling**: the
+scaffold then lists no tiers and skips Stripe entirely. You can still be given nodes —
+a rental an admin **assigns** to you involves no payment method at all. Stripe is what
+lets strangers buy from you.
 - `secrets.env` is written with every value **empty** and each comment on its own
   line. Fill them in as later steps issue them; a comment after `=` becomes part of
   the value, which is why the file is generated rather than described.

@@ -17,16 +17,17 @@ const BASE = {
 };
 
 test("selling nothing loads with no Stripe keys at all", () => {
-  // ⚠️ "Free" is an EMPTY price list, not a tier priced at 0: MT enforces a per-tier
-  // floor (700 cents at the lowest) and 422s anything below it, so a 0-priced listing
-  // cannot exist. The self-hoster rents to themselves via the hub free-rental path.
+  // ⚠️ Selling nothing is an EMPTY price list, not a tier priced at 0: MT enforces a
+  // per-tier minimum and 422s anything below it, so a 0-priced listing cannot exist.
+  // A self-hoster gets nodes via an admin-ASSIGNED rental, which involves no price
+  // and no Stripe account.
   const cfg = loadConfig({ ...BASE, TIER_PRICES_JSON: "{}" });
   assert.equal(cfg.stripeSecretKey, undefined);
   assert.equal(cfg.stripeWebhookSecret, undefined);
   assert.deepEqual(cfg.tierPrices, {});
 });
 
-test("a tier priced at 0 is still rejected by the schema — the floor makes it unlistable", () => {
+test("a tier priced at 0 is still rejected by the schema — the minimum makes it unlistable", () => {
   assert.throws(() => loadConfig({ ...BASE, TIER_PRICES_JSON: JSON.stringify({ cumulus: 0 }) }));
 });
 

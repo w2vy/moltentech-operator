@@ -18,12 +18,20 @@
  * cannot diagnose either. The silent rules are the reason this file exists.
  */
 
-/** Platform price floors, in CENTS.
+/** The lowest price, in CENTS, MT will accept for a listed tier.
  *
- * ⚠️ These MIRROR two other places: `apps/web/src/lib/tiers.ts` in the hub repo (which
- * this repo cannot import) and the `FLOORS` dict in `.github/workflows/ci.yml`. Keeping
- * three copies in sync is a known wart — the fix is a public `GET /api/tiers`, tracked
- * in `peppy-discovering-floyd.md`. Until then, changing a floor means changing all three.
+ * Source of truth is `TierInfo.minPriceCents` in `apps/web/src/lib/tiers.ts` (hub repo,
+ * which this repo cannot import); MT rejects anything lower with a 422 from
+ * `api/agent/listing` and `api/agent/inventory`.
+ *
+ * ⚠️ Do NOT confuse this with `TierInfo.price`, MoltenTech's own list price. They were
+ * one field until 2026-08-11 — which meant a change to what MT charged silently moved
+ * what operators were allowed to charge — and are now deliberately separate even though
+ * the values still match.
+ *
+ * ⚠️ Mirrored in two more places: here, and the `FLOORS` dict in
+ * `.github/workflows/ci.yml`. Three copies is a known wart; the fix is a public
+ * `GET /api/tiers` (tracked in `peppy-discovering-floyd.md`).
  */
 export const TIER_FLOORS_CENTS: Record<string, number> = {
   cumulus: 700,

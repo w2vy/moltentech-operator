@@ -134,11 +134,12 @@ jobs:
           pairs = dict(p.split("=", 1) for p in json.load(open(work / "env.json")))
           prices = json.loads(pairs["TIER_PRICES_JSON"])
 
-          # Platform price floors, in CENTS. These MIRROR apps/web/src/lib/tiers.ts in
-          # the web repo (which this repo cannot import) — keep them in sync; MT rejects
-          # a listing below floor with a 422. This is the assertion that would have
-          # caught the doc's $200 nimbus.
-          FLOORS = {"cumulus": 700, "nimbus": 2000, "stratus": 4000}
+          # Lowest listable price per tier, in CENTS. Mirrors TierInfo.minPriceCents in
+          # apps/web/src/lib/tiers.ts (the web repo, which this repo cannot import) — NOT
+          # TierInfo.price, which is MT's own list price and a separate field since
+          # 2026-08-11. MT rejects a lower listing with a 422. This is the assertion that
+          # would have caught the doc's $200 nimbus.
+          FLOORS = {"cumulus": 700, "nimbus": 2000, "stratus": 4000}  # = minPriceCents
           for tier, cents in prices.items():
               floor = FLOORS.get(tier)
               assert floor is not None, f"unknown tier in the doc's TIER_PRICES_JSON: {tier}"
@@ -214,19 +215,20 @@ jobs:
 
           # Every price must clear the floor, same rule as the doc fixture.
           pairs = dict(p.split("=", 1) for p in json.load(open(work / "env.json")))
-          FLOORS = {"cumulus": 700, "nimbus": 2000, "stratus": 4000}
+          FLOORS = {"cumulus": 700, "nimbus": 2000, "stratus": 4000}  # = minPriceCents
           for tier, cents in json.loads(pairs["TIER_PRICES_JSON"]).items():
               assert cents >= FLOORS[tier], f"{tier}: {cents} below floor {FLOORS[tier]}"
           print("generated config OK:", pairs["TIER_PRICES_JSON"])
           ASSERT
 
-      - name: A generated free-only operator needs no Stripe keys
+      - name: A generated sell-nothing operator needs no Stripe keys
         run: |
           set -euo pipefail
           work="$(mktemp -d)"
           # NO_STRIPE: the self-hoster with no customers must be able to build env.json
-          # with no Stripe account at all. "Free" is an EMPTY price list — MT enforces a
-          # 700-cent floor, so a tier priced at 0 cannot be listed.
+          # with no Stripe account at all. Selling nothing is an EMPTY price list — MT
+          # enforces a per-tier minimum, so a tier priced at 0 cannot be listed. (An
+          # admin-assigned "free rental" is unrelated and needs no listing.)
           cat > "$work/answers.json" <<'ANSWERS'
           {
             "providerSlug": "ci-selfhost",
@@ -248,13 +250,13 @@ jobs:
           run() { docker run --rm -v "$work:/work" -u "$(id -u):$(id -g)" mt-manifest:ci "$@"; }
           run init --answers answers.json
           grep -q '^TIER_PRICES_JSON={}$' "$work/config.env" || { echo "expected an empty price list"; exit 1; }
-          grep -q 'STRIPE' "$work/secrets.env" && { echo "Stripe leaked into a free-only scaffold"; exit 1; }
+          grep -q 'STRIPE' "$work/secrets.env" && { echo "Stripe leaked into a sell-nothing scaffold"; exit 1; }
           sed -i 's/^AGENT_KEY=$/AGENT_KEY=ci-dummy/;s/^COALITION_KEY=$/COALITION_KEY=ci-dummy/' "$work/secrets.env"
           run keygen
           run sign --key manifest-key.pem --from-config config.env --out manifest.json
           run env --from-config config.env --secrets secrets.env \
                   --manifest manifest.json --out env.json
-          echo "free-only env.json built with no Stripe keys"
+          echo "sell-nothing env.json built with no Stripe keys"
 
       - name: Reject a malformed config.env
         run: |

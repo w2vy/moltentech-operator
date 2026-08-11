@@ -402,8 +402,10 @@ async function main() {
       // customers and should never have needed a Stripe account — but both keys were
       // hard-required here, so env.json could not be built at all without one.
       //
-      // ⚠️ "Free" means listing NO tiers. A tier priced at 0 is not expressible: MT
-      // enforces a floor (700 cents at the lowest) and 422s anything under it.
+      // ⚠️ Selling nothing means listing NO tiers. A tier priced at 0 is not
+      // expressible: MT enforces a minimum (`TierInfo.minPriceCents`) and 422s anything
+      // under it. Unrelated to a "free rental", which is an admin-ASSIGNED rental and
+      // needs no Stripe account whatever the tier costs.
       const paidTiers = Object.keys(prices as Record<string, number>);
       if (paidTiers.length > 0) {
         const missing = ["STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET"].filter((k) => !secrets[k]);

@@ -62,8 +62,14 @@ export interface Answers {
    * own nodes (and Foundation collateral): TIER_PRICES_JSON is written EMPTY and no
    * Stripe keys are scaffolded.
    *
-   * ⚠️ Not selling is expressed as an EMPTY price list, never as a tier priced at 0 —
-   * MT enforces a per-tier floor (700 cents at the lowest) and 422s anything under it.
+   * ⚠️ Not selling is an EMPTY price list, never a tier priced at 0 — MT enforces a
+   * per-tier minimum (`TierInfo.minPriceCents`, 700 at the lowest) and 422s anything
+   * under it, so a 0 is not expressible.
+   *
+   * ⚠️ This is NOT what a "free rental" is. That is a rental an admin ASSIGNS to a
+   * customer (or to themselves); it carries a synthetic `free-<slotId>-<ts>`
+   * subscription id and is unrelated to what any tier costs. An operator can receive
+   * assigned rentals with no Stripe account and no listing at all.
    */
   selling?: boolean;
   trialDays?: number;
@@ -133,7 +139,7 @@ export function resolvedPrices(a: Answers): Record<string, number> {
   if (a.selling === false) return out;
   for (const tier of tiersInUse(a)) {
     // An unknown tier has no floor to fall back on; validateAnswers rejects it, and
-    // defaulting to 0 here would quietly turn a typo into a free tier.
+    // defaulting to 0 here would quietly produce an unlistable price.
     const price = a.tierPricesCents?.[tier] ?? TIER_FLOORS_CENTS[tier];
     if (price != null) out[tier] = price;
   }
@@ -219,7 +225,10 @@ export function renderSecretsEnv(a: Answers, opts: { includeStripe: boolean }): 
     lines.push(
       "",
       "# No Stripe keys needed: you are not listing anything for sale. Add a tier to",
-      "# TIER_PRICES_JSON later and `mt-manifest env` will tell you what it then needs."
+      "# TIER_PRICES_JSON later and `mt-manifest env` will tell you what it then needs.",
+      "#",
+      "# You can still run nodes: a rental an admin ASSIGNS to you needs no payment",
+      "# method at all. Stripe is what lets STRANGERS buy from you."
     );
   }
   lines.push("");

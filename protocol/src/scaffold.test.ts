@@ -164,8 +164,9 @@ test("a self-hoster's scaffold omits Stripe entirely", () => {
 });
 
 test("selling:false writes an EMPTY price list, not a zero price", () => {
-  // A tier priced at 0 cannot be listed — MT 422s anything below the floor — so the
-  // only way to sell nothing is to list nothing.
+  // A tier priced at 0 cannot be listed — MT 422s anything below minPriceCents — so
+  // the only way to sell nothing is to list nothing. (An admin-assigned "free rental"
+  // is a different thing entirely and needs no listing at all.)
   const files = generateAll({ ...ANSWERS, selling: false });
   assert.match(files["config.env"], /^TIER_PRICES_JSON=\{\}$/m);
   assert.ok(!files["secrets.env"].includes("STRIPE_SECRET_KEY"));
