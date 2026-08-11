@@ -111,6 +111,9 @@ test("SECRET_IN_NONSECRET_CONFIG: a Proxmox token in config.env — the real pve
 });
 
 test("SECRET_IN_NONSECRET_CONFIG: a Stripe key detected by VALUE shape, not key name", () => {
+  // ⚠️ Keep this fixture SHORT. A realistic-length `sk_live_…` trips the repo's own
+  // gitleaks job, which cannot tell a test fixture from a real key — and an allowlist
+  // entry for a fake secret is exactly the habit that lets a real one through later.
   const report = runDoctor({ configEnv: "SOME_INNOCENT_NAME=sk_live_x\n" });
   assert.ok(rules(report).includes("SECRET_IN_NONSECRET_CONFIG"));
 });
