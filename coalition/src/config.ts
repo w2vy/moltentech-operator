@@ -20,8 +20,12 @@ export type CoalitionConfig = {
    */
   mtPubkey?: string;
   /** Operator's restricted Stripe key + webhook signing secret (the only secrets here). */
-  stripeSecretKey: string;
-  stripeWebhookSecret: string;
+  /** Stripe credentials are OPTIONAL: required only when a PAID tier is listed.
+   * A self-hoster running their own nodes on Foundation collateral has no customers
+   * and should never have needed a Stripe account — but `req()` threw on these, so
+   * the Coalition would not start at all without them. */
+  stripeSecretKey?: string;
+  stripeWebhookSecret?: string;
   /** Path to the offline-signed manifest JSON served at /.well-known/mt-provider.json. */
   manifestPath: string;
   /**
@@ -69,15 +73,15 @@ export function readManifest(cfg: CoalitionConfig): string {
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): CoalitionConfig {
-  return {
+  const cfg: CoalitionConfig = {
     port: Number(env.PORT ?? 8088),
     providerSlug: req(env, "PROVIDER_SLUG"),
     mtBaseUrl: req(env, "MT_BASE_URL").replace(/\/$/, ""),
     agentKey: req(env, "AGENT_KEY"),
     coalitionKey: req(env, "COALITION_KEY"),
     mtPubkey: env.MT_PUBKEY || undefined,
-    stripeSecretKey: req(env, "STRIPE_SECRET_KEY"),
-    stripeWebhookSecret: req(env, "STRIPE_WEBHOOK_SECRET"),
+    stripeSecretKey: env.STRIPE_SECRET_KEY || undefined,
+    stripeWebhookSecret: env.STRIPE_WEBHOOK_SECRET || undefined,
     manifestPath: env.MANIFEST_PATH ?? "./manifest.json",
     manifestJson: env.MANIFEST_JSON || undefined,
     ownerAddress: env.OWNER_ADDRESS || undefined,
@@ -88,4 +92,26 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CoalitionConfi
     statsWindowDays: Number(env.STATS_WINDOW_DAYS ?? 90),
     fluxApiUrl: (env.FLUX_API ?? "https://api.runonflux.io").replace(/\/$/, ""),
   };
+
+  // Fail fast, and name the tier: listing something for sale with no way to charge
+  // for it is a misconfiguration, but ONLY then.
+  //
+  // ⚠️ "Free" means listing NO tiers — not listing one at price 0. MT enforces a
+  // per-tier price floor (700 cents at the lowest) and 422s anything below it, so a
+  // 0-priced listing cannot exist; `TierPrices` requires a positive integer for the
+  // same reason. A self-hoster renting to themselves uses the hub's free-rental path,
+  // which never touches a Stripe Price.
+  const paidTiers = Object.keys(cfg.tierPrices);
+  if (paidTiers.length > 0) {
+    const missing = (["stripeSecretKey", "stripeWebhookSecret"] as const)
+      .filter((k) => !cfg[k])
+      .map((k) => (k === "stripeSecretKey" ? "STRIPE_SECRET_KEY" : "STRIPE_WEBHOOK_SECRET"));
+    if (missing.length > 0) {
+      throw new Error(
+        `Missing required env ${missing.join(" and ")} — you list PAID tier(s): ` +
+          `${paidTiers.join(", ")}. Run with TIER_PRICES_JSON={} to sell nothing and skip Stripe.`
+      );
+    }
+  }
+  return cfg;
 }
