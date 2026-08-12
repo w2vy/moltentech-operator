@@ -152,3 +152,32 @@ test("console renders node state once SESSION_SECRET is set", () => {
   assert.ok(body.includes("pve30"), "node name should render behind the gate");
   assert.ok(body.includes("MT-9999"), "rental code should render behind the gate");
 });
+
+/**
+ * Section ORDER is a product decision (tom, 2026-08-11): what needs the operator's
+ * attention comes first; the nodes table is reference material and goes last.
+ *
+ * Pinned as a test because the page is one template literal — a later edit that adds
+ * a section is very easy to drop in the wrong place, and nothing else would notice.
+ */
+test("actions awaiting signature render ABOVE the nodes list", () => {
+  pushState();
+  const res = handleConsoleIndex(cfg("s".repeat(32)));
+  const body = res.body;
+
+  const actionsAt = body.indexOf("Actions awaiting your signature");
+  const nodesAt = body.indexOf("<h1>Nodes</h1>");
+  assert.ok(actionsAt > -1, "actions heading missing");
+  assert.ok(nodesAt > -1, "nodes heading missing");
+  assert.ok(actionsAt < nodesAt, "actions must come before the nodes list");
+});
+
+test("the withheld-dashboard placeholder also sits below the actions", () => {
+  // The gate swaps the Nodes table for an explanation card; the ordering rule applies
+  // to whichever of the two is rendered.
+  const res = handleConsoleIndex(cfg(undefined));
+  const actionsAt = res.body.indexOf("Actions awaiting your signature");
+  const nodesAt = res.body.indexOf("<h1>Nodes</h1>");
+  assert.ok(actionsAt > -1 && nodesAt > -1);
+  assert.ok(actionsAt < nodesAt, "actions must come before the withheld-dashboard card");
+});
