@@ -112,11 +112,55 @@ async function getCollateralConfirmations(
   }
 }
 
-/** Is the node on the deterministic list yet (i.e. has it been Started)? */
+/**
+ * Flux's default node port. A deterministic-list entry with a BARE address means this
+ * port — measured on the live list: of 6071 nodes, 2306 were bare and exactly one carried
+ * an explicit `:16127`. So bare and `:16127` are the same endpoint and must compare equal,
+ * or every default-port node would read as a mismatch.
+ */
+const DEFAULT_FLUX_PORT = 16127;
+
+/**
+ * Normalize a deterministic-list `ip` to `host:port` for comparison.
+ *
+ * Returns null for anything unparseable, which the caller treats as "cannot prove this
+ * entry is our endpoint" — fail-closed, consistent with the rest of this module.
+ *
+ * IPv6 is not special-cased: Flux's list is IPv4 in practice, and a bracketed IPv6
+ * literal would fall out as unparseable rather than silently mis-comparing.
+ */
+export function normalizeListEndpoint(ip: unknown): string | null {
+  if (typeof ip !== "string") return null;
+  const trimmed = ip.trim();
+  if (!trimmed || trimmed.includes("[")) return null;
+  const parts = trimmed.split(":");
+  if (parts.length === 1) return `${parts[0]}:${DEFAULT_FLUX_PORT}`;
+  if (parts.length !== 2) return null;
+  const [host, port] = parts;
+  if (!host || !port || !/^\d+$/.test(port)) return null;
+  return `${host}:${Number(port)}`;
+}
+
+/**
+ * Is the node on the deterministic list yet (i.e. has it been Started) — AT THE ENDPOINT
+ * we expect it to serve from?
+ *
+ * ⚠️ The endpoint half is load-bearing (#89). Matching on `txhash`+`outidx` alone answers
+ * "is this COLLATERAL listed?", but the caller uses the answer as "is this NODE, at this
+ * endpoint, listed?". Those diverge exactly during a move, which is when it matters:
+ * observed twice on real hardware — once reporting `active` ~2 min early, and once
+ * advertising a DESTROYED VM's endpoint for over 90 minutes while the replacement
+ * bootstrapped. Collateral is stable across a move; the endpoint is the part that changes,
+ * so the endpoint is what proves the new node is actually serving.
+ *
+ * Note a same-WAN-IP move shows up as a PORT change, not an address change — easy to
+ * misread as "nothing happened".
+ */
 async function isOnDeterministicList(
   cfg: CoalitionConfig,
   txid: string,
   outputId: number,
+  expectedEndpoint: string,
   fetchImpl: typeof fetch
 ): Promise<boolean> {
   try {
@@ -124,9 +168,15 @@ async function isOnDeterministicList(
       cfg,
       `/daemon/viewdeterministiczelnodelist?filter=${txid}`,
       fetchImpl
-    )) as { txhash?: string; outidx?: unknown }[] | null;
+    )) as { txhash?: string; outidx?: unknown; ip?: unknown }[] | null;
     for (const n of Array.isArray(list) ? list : []) {
-      if (n && n.txhash === txid && String(n.outidx) === String(outputId)) return true;
+      if (!n || n.txhash !== txid || String(n.outidx) !== String(outputId)) continue;
+      const listed = normalizeListEndpoint(n.ip);
+      if (listed === expectedEndpoint) return true;
+      console.warn(
+        `[collateral] ${txid}:${outputId} is listed at ${listed ?? String(n.ip)} but we expect ` +
+          `${expectedEndpoint} — reporting NOT on-list (node not yet serving at its assigned endpoint)`
+      );
     }
   } catch (err) {
     console.error(`[collateral] deterministic-list check failed for ${txid}:`, (err as Error).message);
@@ -167,7 +217,15 @@ export async function checkCollateralOnce(cfg: CoalitionConfig, fetchImpl: typeo
       const [benchmarkPassed, collateralConfs, onDeterministicList] = await Promise.all([
         fetchBenchmarkPassed(node, fetchImpl),
         getCollateralConfirmations(cfg, node.collateralTxid!, fetchImpl),
-        isOnDeterministicList(cfg, node.collateralTxid!, node.collateralVout ?? 0, fetchImpl),
+        // Same `host:apiPort` this module already polls for benchmarks — the endpoint MT
+        // assigned the slot, so it is what the list entry must agree with.
+        isOnDeterministicList(
+          cfg,
+          node.collateralTxid!,
+          node.collateralVout ?? 0,
+          `${node.host}:${node.apiPort}`,
+          fetchImpl
+        ),
       ]);
       return { vmName: node.vmName, benchmarkPassed, collateralConfs, onDeterministicList };
     })
