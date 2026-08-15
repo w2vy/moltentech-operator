@@ -24,6 +24,20 @@ export type ProviderManifestHardware = z.infer<typeof ProviderManifestHardware>;
 export const ProviderManifestBody = Envelope.extend({
   provider: z.object({
     slug: ProviderSlug,
+    /**
+     * curry §6h — the VM-name namespace this provider declares, e.g. `mt-`.
+     *
+     * MT rejects any inventory slot whose `vmName` falls outside it, which is what keeps the
+     * Foundation's reserved `fh-` namespace unreachable by structure rather than by blacklist.
+     *
+     * ⚠️ NOT derivable from `slug` — on the live fleet `moltentech` uses `mt` while
+     * `moltentech-test2` uses `test`.
+     *
+     * Optional, and adding it does not break existing manifests: the body signature covers the
+     * canonical JSON of every field except `signature`, so a manifest that OMITS this field
+     * serializes and verifies exactly as before.
+     */
+    vmNamePrefix: z.string().min(1).max(32).optional(),
     name: z.string().min(1),
     location: z.string().optional(),
     description: z.string().optional(),

@@ -27,6 +27,31 @@ function rememberNonce(nonce: string, expiresAtMs: number): boolean {
 export type OwnerAuthDecision = { ok: true } | { ok: false; reason: string };
 
 /**
+ * Is this a `delete` of a VM marked as Flux-Hub-destroyable?
+ *
+ * 🔒 The security argument rests on ONE property: this reads `job.slot.vmName`, the exact field
+ * `deprovision()` passes to `arcane-mage --vm-name` (`executor.ts`). Gate and executor must name
+ * the same object, or a job could be admitted on one name and destroy another — at which point the
+ * marking proves nothing. **If the executor's argument ever changes, change this with it.**
+ *
+ * Scoped to `delete` deliberately. `reprovision` and `move` stay gated unconditionally: a naming
+ * convention must never become a general privilege escalation, and relabelling a running node
+ * requires `reprovision`, which is what keeps a mislabelled VM from being manufactured after the
+ * fact.
+ *
+ * `startsWith`, not `includes` — `mt-fh-187-c3` is a customer VM whose name merely contains the
+ * prefix, and must stay gated.
+ */
+function isFoundationDelete(job: Job, cfg: AgentConfig): boolean {
+  if (job.action !== "delete") return false;
+  const prefix = cfg.foundationVmPrefix;
+  if (!prefix) return false; // operator disabled the exemption
+  const vmName = job.slot?.vmName;
+  if (typeof vmName !== "string" || vmName.length <= prefix.length) return false;
+  return vmName.toLowerCase().startsWith(prefix);
+}
+
+/**
  * Decide whether a job may execute under the owner-auth policy. Cross-checks the
  * signed claim binds to THIS job (so a valid auth for one node can't authorize
  * another), verifies the signature/expiry against the pinned owner, and burns the
@@ -39,6 +64,10 @@ export function checkOwnerAuth(
 ): OwnerAuthDecision {
   if (!isPrivilegedAction(job.action)) return { ok: true };
   if (!cfg.ownerAddress) return { ok: true }; // enforcement not enabled yet
+
+  // Foundation eviction: machine-initiated, so no human exists to sign it. Permitted only for a
+  // `delete` whose target VM carries the reserved prefix — see isFoundationDelete().
+  if (isFoundationDelete(job, cfg)) return { ok: true };
 
   const auth = job.ownerAuth;
   if (!auth) return { ok: false, reason: "missing owner authorization" };

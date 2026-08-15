@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { z } from "zod";
-import { TierKey, InventoryHost } from "@moltentech/protocol";
+import { TierKey, InventoryHost, FOUNDATION_VM_PREFIX } from "@moltentech/protocol";
 
 /** One tier's desired listing state, re-asserted to MT on a heartbeat. */
 const ListingTierConfig = z.object({
@@ -21,6 +21,20 @@ export type AgentConfig = {
    * signature. Unset = enforcement off (pre-cutover behavior). NEVER sourced from MT.
    */
   ownerAddress?: string;
+  /**
+   * VM-name prefix marking a node Flux Hub may DELETE without an owner signature.
+   *
+   * An eviction is machine-initiated — a customer buying a slot occupied by a free Foundation
+   * node — so there is no human to sign it, and `delete` is a privileged action. The marking is
+   * the VM's own name (`fh-mt-187-c3`) rather than a flag on the job, because a flag is written
+   * by MT and the gate exists precisely to survive a compromised MT. A name is the identity of
+   * the object on the hypervisor and is the same string `arcane-mage --vm-name` acts on, so a
+   * delete permitted by this rule can destroy nothing except a VM actually named `fh-*`.
+   *
+   * Set to `""` to disable the exemption entirely — every delete then needs a signature, and
+   * evictions on this operator's hardware simply fail.
+   */
+  foundationVmPrefix: string;
   providerSlug: string;
   pollIntervalMs: number;
   listingIntervalMs: number;
@@ -103,6 +117,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AgentConfig {
     mtBaseUrl: req(env, "MT_BASE_URL").replace(/\/$/, ""),
     agentKey,
     ownerAddress: env.OWNER_ADDRESS || undefined,
+    // `??` not `||`: an explicit empty string is a meaningful setting (exemption off), and
+    // `||` would silently restore the default for the one operator who deliberately opted out.
+    // Lowercased here so the comparison site never has to remember to — vmName becomes the guest
+    // hostname, and hostnames get lowercased by convention.
+    // Default comes from `protocol` so MT's decorator and this gate cannot drift apart — if they
+    // did, MT would create VMs the agent refuses to delete and every eviction would fail.
+    foundationVmPrefix: (env.FOUNDATION_VM_PREFIX ?? FOUNDATION_VM_PREFIX).toLowerCase(),
     manifestKey,
     providerSlug: req(env, "PROVIDER_SLUG"),
     pollIntervalMs: Number(env.AGENT_POLL_INTERVAL_MS ?? 10_000),
