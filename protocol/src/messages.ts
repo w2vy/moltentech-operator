@@ -149,6 +149,30 @@ export function isPrivilegedAction(action: JobAction): boolean {
   return PRIVILEGED_ACTIONS.has(action);
 }
 
+/**
+ * VM-name prefix marking a node Flux Hub may DELETE without an owner signature.
+ *
+ * The one exemption to `isPrivilegedAction`, which is why it lives beside it. An eviction — a
+ * customer buying a slot a free Foundation node occupies — is machine-initiated, so there is no
+ * human to produce a signature, and no retry ever resolves that.
+ *
+ * The marking is the VM's own NAME rather than a flag on the job, because a flag is written by MT
+ * and this gate exists to survive a compromised MT relaying jobs. A name is the identity of the
+ * object on the hypervisor and is the same string `arcane-mage --vm-name` acts on, so a delete
+ * permitted by this rule can destroy nothing except a VM actually named `fh-*`.
+ *
+ * 🔗 **This constant is why it is in `protocol` and not in either app.** MT decorates outbound
+ * names with it and the agent gates on it, in two separate repos; if the two strings ever drifted,
+ * MT would create VMs the agent refuses to delete and every eviction would fail exactly as it does
+ * today. Operators may override the agent side via `FOUNDATION_VM_PREFIX` (empty disables the
+ * exemption), but the DEFAULT must be this value.
+ *
+ * Lowercase, and compared case-insensitively: `vmName` becomes the guest hostname, and hostnames
+ * are lowercased by convention — an agent asking Proxmox for `FH-x` when the VM is `fh-x` finds
+ * nothing and reports the node missing.
+ */
+export const FOUNDATION_VM_PREFIX = "fh-";
+
 /** The owner-signed fields that bind an authorization to one action on one node. */
 export const OwnerAuthClaim = z.object({
   action: JobAction,

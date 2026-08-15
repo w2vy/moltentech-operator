@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { z } from "zod";
-import { TierKey, InventoryHost } from "@moltentech/protocol";
+import { TierKey, InventoryHost, FOUNDATION_VM_PREFIX } from "@moltentech/protocol";
 
 /** One tier's desired listing state, re-asserted to MT on a heartbeat. */
 const ListingTierConfig = z.object({
@@ -121,7 +121,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AgentConfig {
     // `||` would silently restore the default for the one operator who deliberately opted out.
     // Lowercased here so the comparison site never has to remember to — vmName becomes the guest
     // hostname, and hostnames get lowercased by convention.
-    foundationVmPrefix: (env.FOUNDATION_VM_PREFIX ?? "fh-").toLowerCase(),
+    // Default comes from `protocol` so MT's decorator and this gate cannot drift apart — if they
+    // did, MT would create VMs the agent refuses to delete and every eviction would fail.
+    foundationVmPrefix: (env.FOUNDATION_VM_PREFIX ?? FOUNDATION_VM_PREFIX).toLowerCase(),
     manifestKey,
     providerSlug: req(env, "PROVIDER_SLUG"),
     pollIntervalMs: Number(env.AGENT_POLL_INTERVAL_MS ?? 10_000),
