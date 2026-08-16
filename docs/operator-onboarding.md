@@ -224,9 +224,20 @@ COALITION_URL=https://<your-coalition>
 # OWNER_ADDRESS — the wallet address that signs onboarding and every privileged node
 # action. It is baked into the bytes you sign in Step 2 — get it right the first time.
 OWNER_ADDRESS=<your owner ZelID>
-# MT_PUBKEY — optional; leave blank for now. Pin later from {MT_BASE_URL}/api/mt-pubkey
-# once MT enables signing (503 until then). Only the Coalition consumes it.
-MT_PUBKEY=
+# MT_PUBKEY — FILL THIS IN. Fetch it now: curl {MT_BASE_URL}/api/mt-pubkey
+# Only the Coalition consumes it, to verify MT's inbound calls are really from MT.
+#
+# ⚠️ Leaving it blank is a DELAYED failure, not a deferred decision. Onboarding, the
+# agent and node provisioning all work without it; what breaks later is the
+# checkout/manage leg, and it breaks quietly — so the symptom shows up long after the
+# step that caused it.
+#
+# ⚠️ It is PER-MT. Each MoltenTech instance has its own signing key, so a Coalition
+# moved between instances (e.g. staging -> production) needs MT_PUBKEY changed as well
+# as MT_BASE_URL; repointing the URL alone leaves it pinned to the old instance's key.
+# Neither field is in the signed manifest, so changing both needs NO re-sign — edit
+# config.env, re-run `mt-manifest env`, re-import.
+MT_PUBKEY=<your MT pubkey>
 # HOSTS — the Proxmox hosts you attest, as a comma-separated list of ProxmoxHost.name.
 # This is the owner-signed hardware list: MT rejects any inventory host not named here,
 # so adding a machine later means re-signing the manifest (see "Ongoing operations").
@@ -341,7 +352,7 @@ Your provider now exists at MT in status `pending`. Step 7 activates it.
 
 ## Step 4 — Deploy the Coalition on Flux
 
-The Coalition runs as a **published Docker image** (`w2vy/coalition:latest`) deployed as
+The Coalition runs as a **published Docker image** (`w2vy/coalition:0.2.7`) deployed as
 a Flux App. Config, secrets, and your signed manifest are all supplied as **Flux
 environment variables** — nothing to mount. Because Step 2 already gave you the real
 keys, this is a **single deploy**; there is no placeholder-then-re-import round trip.
@@ -394,7 +405,7 @@ You never set a variable on the Flux app by hand: non-secret settings live in
 any variable with no value, so leaving `SESSION_SECRET=` in `secrets.env` is identical
 to never listing it, and the console will withhold the node dashboard.
 
-**2. Register the Flux App:** Docker image `w2vy/coalition:latest`, container port
+**2. Register the Flux App:** Docker image `w2vy/coalition:0.2.7`, container port
 **8088**, then supply `env.json` as the app's environment.
 
 ⚠️ **Flux caps a plaintext environment parameter at 400 characters, and `MANIFEST_JSON`
@@ -419,8 +430,21 @@ re-import** of a fresh `env.json`, then Flux's **Free Deploy**.
 re-import is a silent no-op. Always verify downstream (`/health`, a real checkout)
 rather than trusting that the import took.
 
-⚠️ **Do not pin an old Coalition tag.** A published image predating a protocol change
-cannot complete onboarding; use `:latest` unless you have been told otherwise.
+⚠️ **Pin the version this guide names; do not pin an OLDER one.** A published image
+predating a protocol change cannot complete onboarding — `coalition:0.2.4` was built one
+day before the protocol gained owner-attested `hardware[]`, and the hub 409s an unattested
+host, so that tag can never finish onboarding no matter how carefully you follow this.
+
+The versions above (`coalition:0.2.7`, `mt-agent:0.3.0`) are what production runs and are
+known to complete the whole flow. `:latest` also works and is what the fleet tracks, but
+pinning is what makes YOUR onboarding reproducible: if a run half-succeeds, you want to be
+able to say which image did it.
+
+⚠️ **`mt-manifest` is the exception — use `:latest` for it.** Its publish workflow emits
+only `latest` and a commit SHA, so its `0.1.0`/`0.2.0` tags are stale hand-pushed
+leftovers: `0.2.0` has no `doctor` and no `authorize` subcommand at all, so pinning it
+would break this guide's own instructions. Pin it to a commit SHA if you need
+reproducibility today.
 
 ---
 
@@ -555,7 +579,7 @@ Before any VM is created, run the credentialed checks — read-only, creates not
 
 ```sh
 docker run --rm --env-file .env.operator -v "$PWD/agent-data:/data:ro" \
-  w2vy/mt-agent:latest doctor
+  w2vy/mt-agent:0.3.0 doctor
 ```
 
 It exits non-zero if anything fails, so it works as a gate. It checks that Proxmox is
@@ -581,7 +605,7 @@ Validate connectivity/auth to MT first, **without touching Proxmox**:
 
 ```sh
 docker run --rm --env-file .env.operator -v "$PWD/agent-data:/data:ro" \
-  -e AGENT_DRY_RUN=1 w2vy/mt-agent:latest
+  -e AGENT_DRY_RUN=1 w2vy/mt-agent:0.3.0
 # expect: provider=… mt=… dryRun=true auth=signature ownerAuth=enforced courier=on
 ```
 
@@ -596,7 +620,7 @@ Then run it for real:
 
 ```sh
 docker run -d --name mt-agent --restart unless-stopped \
-  --env-file .env.operator -v "$PWD/agent-data:/data:ro" w2vy/mt-agent:latest
+  --env-file .env.operator -v "$PWD/agent-data:/data:ro" w2vy/mt-agent:0.3.0
 ```
 
 ⚠️ **`docker restart` does NOT reload `--env-file` changes.** Any env edit requires

@@ -109,7 +109,21 @@ jobs:
           # names, values, prices — is used exactly as an operator would copy it.
           c = cfg[0].replace("https://<your-coalition>", "https://coalition.example")
           c = c.replace("<your owner ZelID>", "t1exampleOwnerWalletAddress")
+          c = c.replace("<your MT pubkey>", "Y2ktZHVtbXktbXQtcHVia2V5LTMyLWJ5dGVzISE=")
           (work / "config.env").write_text(c)
+
+          # Every placeholder in a VALUE must be substituted above. An unsubstituted <...>
+          # would be signed and shipped verbatim and the flow would still pass — which is
+          # how a placeholder silently becomes a "value". Fail loudly instead of guessing.
+          #
+          # Comments are deliberately exempt: the doc explains COALITION_URL by writing
+          # `https://<your-flux-app-name>.app.runonflux.io` in prose above the key, and
+          # that is documentation, not something that gets signed.
+          leftover = [l for l in c.splitlines()
+                      if not l.lstrip().startswith("#") and re.search(r"<[^>\n]*>", l)]
+          if leftover:
+              sys.exit(f"FAIL: unsubstituted placeholder(s) in the doc's config.env: {leftover}. "
+                       "Add a .replace() above when you add a placeholder to the doc.")
           (work / "secrets.env").write_text(re.sub(r"<[^>\n]*>", "ci-dummy", sec[0]))
           print("extracted config.env + secrets.env from the onboarding doc")
           EXTRACT
