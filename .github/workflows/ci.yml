@@ -243,6 +243,30 @@ jobs:
                   assert slot.get("storagePool"), f"slot {slot['vmName']} has no storagePool"
                   assert slot.get("network"), f"slot {slot['vmName']} has no network"
 
+          # AGENT_LISTING_JSON must be an ARRAY of {tier, priceCents, availableSlots} —
+          # the shape agent/src/config.ts parses. `init` once wrote the TIER_PRICES_JSON
+          # map here, and the only symptom was the agent exiting on a ZodError before it
+          # asserted anything.
+          env_op = dict(
+              l.split("=", 1)
+              for l in (work / ".env.operator").read_text().splitlines()
+              if "=" in l and not l.lstrip().startswith("#")
+          )
+          listing = json.loads(env_op["AGENT_LISTING_JSON"])
+          assert isinstance(listing, list), f"AGENT_LISTING_JSON is not an array: {listing!r}"
+          prices = json.loads(dict(
+              l.split("=", 1)
+              for l in (work / "config.env").read_text().splitlines()
+              if "=" in l and not l.lstrip().startswith("#")
+          )["TIER_PRICES_JSON"])
+          for entry in listing:
+              assert set(entry) == {"tier", "priceCents", "availableSlots"}, entry
+              assert isinstance(entry["availableSlots"], int) and entry["availableSlots"] >= 0, entry
+              # One answer, two files: a divergence here means MT and the Coalition
+              # quote different prices for the same tier.
+              assert entry["priceCents"] == prices[entry["tier"]], (entry, prices)
+          print("AGENT_LISTING_JSON OK:", listing)
+
           # The Flux app spec is a signed artifact: :latest makes two registrations of
           # "the same" spec deploy different code with nothing recording the difference.
           spec = json.load(open(work / "flux-app-spec.json"))
@@ -289,6 +313,11 @@ jobs:
           run init --answers answers.json
           grep -q '^TIER_PRICES_JSON={}$' "$work/config.env" || { echo "expected an empty price list"; exit 1; }
           grep -q 'STRIPE' "$work/secrets.env" && { echo "Stripe leaked into a sell-nothing scaffold"; exit 1; }
+          # Selling nothing is an EMPTY listing, not a zero-priced tier.
+          grep -q '^AGENT_LISTING_JSON=\[\]$' "$work/.env.operator" || {
+            echo "expected an empty AGENT_LISTING_JSON for a sell-nothing operator"
+            grep '^AGENT_LISTING_JSON=' "$work/.env.operator"; exit 1
+          }
           sed -i 's/^AGENT_KEY=$/AGENT_KEY=ci-dummy/;s/^COALITION_KEY=$/COALITION_KEY=ci-dummy/' "$work/secrets.env"
           run keygen
           run sign --key manifest-key.pem --from-config config.env --out manifest.json

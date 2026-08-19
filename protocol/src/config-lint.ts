@@ -343,6 +343,109 @@ export function lintCrossFile(
   return found;
 }
 
+/**
+ * `AGENT_LISTING_JSON` must be an ARRAY of `{tier, priceCents, availableSlots}` — the
+ * shape `agent/src/config.ts` parses. `init` used to write the TIER_PRICES_JSON map
+ * here, and the only symptom was the agent exiting at startup on a ZodError, before
+ * it had asserted anything: nothing that came later could point back at the cause.
+ *
+ * Also checks the price against `TIER_PRICES_JSON`, because the two files are the two
+ * halves of one answer — disagree, and MT and the Coalition quote different numbers
+ * for the same tier.
+ */
+export function lintListing(
+  operator: Record<string, string>,
+  config: Record<string, string>,
+  minimums: Record<string, number>
+): Finding[] {
+  const raw = operator.AGENT_LISTING_JSON;
+  if (!raw) return []; // absent = nothing offered for sale; a valid self-hoster state
+  const file = ".env.operator";
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (e) {
+    return [
+      {
+        rule: "LISTING_MALFORMED",
+        severity: "error",
+        file,
+        message: `AGENT_LISTING_JSON is not valid JSON: ${(e as Error).message}`,
+      },
+    ];
+  }
+  if (!Array.isArray(parsed)) {
+    return [
+      {
+        rule: "LISTING_NOT_AN_ARRAY",
+        severity: "error",
+        file,
+        message:
+          "AGENT_LISTING_JSON must be an ARRAY of {tier, priceCents, availableSlots}, not " +
+          "the TIER_PRICES_JSON map. The agent exits at startup with `ZodError: Expected " +
+          "array, received object` and asserts nothing, so no later symptom names this.",
+      },
+    ];
+  }
+
+  const found: Finding[] = [];
+  let prices: Record<string, unknown> = {};
+  try {
+    prices = config.TIER_PRICES_JSON ? JSON.parse(config.TIER_PRICES_JSON) : {};
+  } catch {
+    // config.env's own price rules already report this; don't double-report here.
+  }
+  for (const entry of parsed as Array<Record<string, unknown>>) {
+    const tier = typeof entry?.tier === "string" ? entry.tier : undefined;
+    if (!tier) {
+      found.push({
+        rule: "LISTING_MALFORMED",
+        severity: "error",
+        file,
+        message: `AGENT_LISTING_JSON has an entry with no tier: ${JSON.stringify(entry)}`,
+      });
+      continue;
+    }
+    if (!Number.isInteger(entry.priceCents) || (entry.priceCents as number) <= 0) {
+      found.push({
+        rule: "LISTING_MALFORMED",
+        severity: "error",
+        file,
+        message: `AGENT_LISTING_JSON: ${tier} needs an integer priceCents in CENTS.`,
+      });
+    } else if (minimums[tier] != null && (entry.priceCents as number) < minimums[tier]!) {
+      found.push({
+        rule: "PRICE_BELOW_FLOOR",
+        severity: "error",
+        file,
+        message: `AGENT_LISTING_JSON: ${tier} at ${entry.priceCents} is below the platform minimum ${minimums[tier]}.`,
+      });
+    }
+    if (!Number.isInteger(entry.availableSlots) || (entry.availableSlots as number) < 0) {
+      found.push({
+        rule: "LISTING_MALFORMED",
+        severity: "error",
+        file,
+        message:
+          `AGENT_LISTING_JSON: ${tier} needs availableSlots — how many to OFFER. ` +
+          "MT clamps it to your live available slots, so it cannot oversell.",
+      });
+    }
+    const configured = prices[tier];
+    if (typeof configured === "number" && configured !== entry.priceCents) {
+      found.push({
+        rule: "PRICE_DISAGREES_ACROSS_FILES",
+        severity: "error",
+        file,
+        message:
+          `${tier} is ${entry.priceCents} in AGENT_LISTING_JSON but ${configured} in ` +
+          "config.env's TIER_PRICES_JSON — MT and your Coalition would quote different prices.",
+      });
+    }
+  }
+  return found;
+}
+
 /** Rule 8: the courier fails OPEN and SILENT — `courier=off` in one startup line and
  * nothing else, ever. No authorization request will reach the operator. */
 /** Which onboarding step issues each value, so "not yet filled" can say what to do. */
@@ -549,6 +652,7 @@ export function runDoctor(input: DoctorInput): DoctorReport {
 
   if (input.configEnv != null && input.envOperator != null) {
     findings.push(...lintCrossFile(configRec, operatorRec));
+    findings.push(...lintListing(operatorRec, configRec, minimums));
   }
 
   if (input.inventoryJson != null) {

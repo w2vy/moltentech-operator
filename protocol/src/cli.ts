@@ -44,6 +44,7 @@ import { probeStripeWiring } from "./stripe-wiring";
 import {
   generateAll,
   fillManifestPubkey,
+  slotCountsByTier,
   validateAnswers,
   resolvedPrices,
   hasPaidTier,
@@ -205,11 +206,23 @@ async function askAnswers(minimums: Record<string, number> = TIER_FLOORS_CENTS):
       tierPricesCents[tier] = Math.round(Number(dollars) * 100);
     }
 
+    // How many to OFFER, defaulted to how many exist — the answer almost everyone
+    // wants, so the prompt only has to be read by someone holding slots back. MT
+    // clamps this to the live available count, so a number here can never oversell.
+    const availableSlots: Record<string, number> = {};
+    const counts = slotCountsByTier(draft);
+    for (const tier of tiers) {
+      const have = counts[tier] ?? 0;
+      const offered = await ask(`How many of your ${have} ${tier} slot(s) to offer for sale`, String(have));
+      availableSlots[tier] = Math.trunc(Number(offered));
+    }
+
     return {
       ...draft,
       providerLocation: providerLocation || undefined,
       providerContact: providerContact || undefined,
       tierPricesCents,
+      availableSlots,
     };
   } finally {
     rl.close();
