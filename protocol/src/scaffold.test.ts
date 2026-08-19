@@ -8,6 +8,7 @@ import {
   resolvedPrices,
   hasPaidTier,
   renderSecretsEnv,
+  renderFluxAppSpec,
   fillManifestPubkey,
   slotCountsByTier,
   resolvedListing,
@@ -417,4 +418,16 @@ test("the listing price and TIER_PRICES_JSON cannot disagree", () => {
   for (const entry of JSON.parse(parseConfigEnv(files[".env.operator"]).AGENT_LISTING_JSON!)) {
     assert.equal(entry.priceCents, prices[entry.tier], `price for ${entry.tier} disagrees across files`);
   }
+});
+
+/** Measured on the pve50 cold run: the generated spec named the MT attestation wallet as
+ * the Flux app owner, which is a different identity from the ZelID that registers it. The
+ * FluxOS register view overwrites `owner` with the logged-in ZelID regardless, so the
+ * field could only ever mislead the operator reading the file. */
+test("the Flux app spec does not claim an owner — FluxOS fills it from the logged-in ZelID", () => {
+  const spec = JSON.parse(renderFluxAppSpec(ANSWERS));
+  assert.ok(!("owner" in spec), "owner must not be generated: it is the ZelID, not OWNER_ADDRESS");
+  // The fields the generator CAN know are still there.
+  assert.equal(spec.name, ANSWERS.fluxAppName);
+  assert.equal(spec.compose[0].repotag, COALITION_IMAGE);
 });

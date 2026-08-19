@@ -223,7 +223,10 @@ MT_BASE_URL=https://www.moltentech.us
 COALITION_URL=https://<your-coalition>
 # OWNER_ADDRESS — the wallet address that signs onboarding and every privileged node
 # action. It is baked into the bytes you sign in Step 2 — get it right the first time.
-OWNER_ADDRESS=<your owner ZelID>
+# NOT necessarily the ZelID that owns your Flux app: that identity is whatever you are
+# logged into FluxOS as in Step 4, and the two can differ. This one is the wallet you
+# will sign with at /onboard.
+OWNER_ADDRESS=<the wallet address you sign with>
 # MT_PUBKEY — FILL THIS IN. Fetch it now: curl {MT_BASE_URL}/api/mt-pubkey
 # Only the Coalition consumes it, to verify MT's inbound calls are really from MT.
 #
@@ -356,6 +359,11 @@ The Coalition runs as a **published Docker image** (`w2vy/coalition:0.2.7`) depl
 a Flux App. Config, secrets, and your signed manifest are all supplied as **Flux
 environment variables** — nothing to mount. Because Step 2 already gave you the real
 keys, this is a **single deploy**; there is no placeholder-then-re-import round trip.
+
+The generated `flux-app-spec.json` carries **no `owner`** on purpose. FluxOS sets it from
+the ZelID you are logged in as (it overwrites any value an imported spec supplies), and
+that identity is not necessarily your `OWNER_ADDRESS`. Registering through the Flux API
+directly rather than the UI is the one case where you must supply an owner yourself.
 
 **1. Assemble the secrets.** Alongside `config.env` keep a private **`secrets.env`**
 (never commit, `chmod 600`):
@@ -536,7 +544,7 @@ MANIFEST_KEY=<base64 of manifest-key.pem — see below>
 # `skip`, so a wrong key is not caught until MT rejects a signature.
 MANIFEST_PUBKEY=<contents of manifest-pubkey.txt>
 AGENT_KEY=<agentKey from /onboard>
-OWNER_ADDRESS=<your owner ZelID>
+OWNER_ADDRESS=<the wallet address you sign with>
 COALITION_URL=https://<your-coalition>
 AGENT_INVENTORY_PATH=/data/inventory.json
 # Local Proxmox — creds NEVER leave your host. Use an address the CONTAINER can reach:

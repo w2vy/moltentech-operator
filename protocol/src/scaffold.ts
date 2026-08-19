@@ -481,13 +481,27 @@ export function renderInventoryJson(a: Answers): string {
 export const COALITION_IMAGE = "w2vy/coalition:0.2.7";
 
 /** The Flux app spec. Every field already exists in the answers; hand-editing this
- * produced only JSON syntax errors on the pve30 run. */
+ * produced only JSON syntax errors on the pve30 run.
+ *
+ * ⚠️ **`owner` is deliberately ABSENT.** It is not `OWNER_ADDRESS`: that is the wallet
+ * that signs the MT manifest attestation, while a Flux app is owned by the **ZelID** the
+ * operator registers from — a different identity, and one this generator cannot know.
+ * FluxOS supplies it: `RegisterFluxApp.vue` assigns
+ * `appRegistrationSpecification.owner = auth.zelid` both on mount and after a spec is
+ * loaded, so an imported value is overwritten by the logged-in ZelID either way.
+ * Emitting `OWNER_ADDRESS` here produced a field that looked authoritative, was wrong,
+ * and was then silently ignored — the worst of the three.
+ *
+ * Note this holds for the UI registration path the runbook describes. The network layer
+ * still REQUIRES an owner (`appsService.js` rejects a non-string, and the broadcast
+ * signature is verified against `appSpec.owner`), so anyone registering through the API
+ * directly must supply their own.
+ */
 export function renderFluxAppSpec(a: Answers): string {
   const spec = {
     version: 8,
     name: a.fluxAppName,
     description: `MoltenTech Coalition for ${a.providerName}`,
-    owner: a.ownerAddress,
     compose: [
       {
         name: "coalition",
