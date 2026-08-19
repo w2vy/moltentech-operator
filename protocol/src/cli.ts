@@ -43,6 +43,7 @@ import { runDoctor, formatReport, fetchTierMinimums, TIER_FLOORS_CENTS } from ".
 import { probeStripeWiring } from "./stripe-wiring";
 import {
   generateAll,
+  fillManifestPubkey,
   validateAnswers,
   resolvedPrices,
   hasPaidTier,
@@ -66,6 +67,18 @@ import {
 function flag(args: string[], name: string): string | undefined {
   const i = args.indexOf(name);
   return i >= 0 ? args[i + 1] : undefined;
+}
+
+/**
+ * Fill `.env.operator`'s MANIFEST_PUBKEY with the key just generated. Returns what
+ * happened so `keygen` can report it — including "no-file", which is the normal case
+ * for an operator who runs keygen before init.
+ */
+function backfillManifestPubkey(path: string, pubkey: string): "filled" | "already-set" | "no-file" {
+  if (!existsSync(path)) return "no-file";
+  const { text, result } = fillManifestPubkey(readFileSync(path, "utf8"), pubkey);
+  if (result === "filled") writeFileSync(path, text, { mode: 0o644 });
+  return result;
 }
 
 function die(msg: string): never {
@@ -249,8 +262,22 @@ async function main() {
       const { publicKeyBase64, privateKey } = generateEd25519();
       writeFileSync(keyPath, exportPrivateKeyPem(privateKey), { mode: 0o600 });
       writeFileSync(join(dir, "manifest-pubkey.txt"), publicKeyBase64 + "\n");
+      // The documented order is init THEN keygen, so `init` cannot know this value —
+      // which is exactly why MANIFEST_PUBKEY stayed empty on every real onboarding and
+      // `mt-agent doctor`'s key check never did anything but `skip`. Fill the slot here,
+      // where the value first exists. Only ever fills an EMPTY slot: a non-empty one is
+      // a deliberate pin, and silently repointing it is how a rotation loses the old key.
+      const backfilled = backfillManifestPubkey(join(dir, ".env.operator"), publicKeyBase64);
       console.log(`Wrote ${keyPath} (KEEP SECRET — this signs your manifest).`);
       console.log(`Public key (manifest "pubkey", also saved to manifest-pubkey.txt):\n${publicKeyBase64}`);
+      if (backfilled === "filled") {
+        console.log("Also filled MANIFEST_PUBKEY in .env.operator (mt-agent doctor pins against it).");
+      } else if (backfilled === "already-set") {
+        console.log(
+          "note: .env.operator already pins a MANIFEST_PUBKEY — left as-is. If you are ROTATING, " +
+            "update it by hand and re-onboard: MT still holds the old public half."
+        );
+      }
       break;
     }
     case "init": {
@@ -289,7 +316,13 @@ async function main() {
       const problems = validateAnswers(answers, minimums);
       if (problems.length > 0) die(`answers are not usable:\n  - ${problems.join("\n  - ")}`);
 
-      const files = generateAll(answers);
+      // Usually absent (keygen comes after init), but an operator re-running `init`
+      // after a typo already has the key — reuse it rather than re-emptying the slot.
+      const pubkeyPath = join(dir, "manifest-pubkey.txt");
+      const manifestPubkey = existsSync(pubkeyPath)
+        ? readFileSync(pubkeyPath, "utf8").trim()
+        : undefined;
+      const files = generateAll(answers, { manifestPubkey });
       const existing = Object.keys(files).filter((f) => existsSync(join(dir, f)));
       if (existing.length > 0 && !force) {
         die(`refusing to overwrite existing file(s): ${existing.join(", ")} — pass --force to replace them.`);
@@ -303,6 +336,8 @@ async function main() {
       console.log(`Wrote ${Object.keys(files).join(", ")} to ${dir}\n`);
       console.log("Next, in order:");
       console.log("  1. mt-manifest keygen                     → manifest-key.pem (once, ever)");
+      console.log("     → also fills MANIFEST_PUBKEY in .env.operator, which is what makes");
+      console.log("       `mt-agent doctor`'s key check compare instead of skip");
       console.log("  2. paste base64 of that key into secrets.env AND .env.operator as MANIFEST_KEY");
       console.log(`  3. open ${answers.mtBaseUrl}/onboard, paste your manifest, sign with ${answers.ownerAddress}`);
       console.log("     → issues AGENT_KEY, COALITION_KEY, COALITION_SIGNING_KEY for secrets.env");

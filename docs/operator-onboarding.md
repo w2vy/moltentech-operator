@@ -465,11 +465,13 @@ $EDITOR agent-data/inventory.json
     "name": "pve25-lab",
     "nodeName": "pve25",
     "apiUrl": "https://pve25:8006",
+    "network": "vmbr0",
     "storageImages": "ssd",
     "storageIso": "shared-iso",
     "slots": [
       { "vmName": "mt-you-n1", "tier": "nimbus", "lanIp": "192.168.1.51/24",
-        "ipAddress": "203.0.113.51", "gateway": "192.168.1.1", "apiPort": 16197 }
+        "ipAddress": "203.0.113.51", "gateway": "192.168.1.1", "apiPort": 16197,
+        "network": "vmbr0", "storagePool": "ssd" }
     ]
   }
 ]
@@ -482,6 +484,13 @@ $EDITOR agent-data/inventory.json
   the VM comes up with no route to its gateway, and the node never reaches the network.
 - `storageImages` / `storageIso` override the agent's defaults per host — use them when
   hosts differ (see Step 0.2; this is where you keep VMs off the spinning disk).
+- ⚠️ **Repeat `network` and `storagePool` on every SLOT.** MT builds your `Slot` rows from
+  the per-slot fields only, so a host-level-only value leaves every Slot row with an empty
+  `storagePool`/`network` — silently, and `doctor` still passes because it checks the
+  host-level value you did write. Provisioning follows the same precedence
+  (`slot.storagePool ?? host.storageImages`, `slot.network ?? host.network`), so per-slot
+  values are also what let one machine carry slots on two bridges or two pools.
+  `mt-manifest init` writes both levels for you.
 - Omit optional fields like `vlan`/`rateLimit` rather than setting them `null`.
   `dns1`/`dns2` default to `8.8.8.8`/`1.1.1.1`.
 
@@ -522,6 +531,10 @@ PROVIDER_SLUG=your-slug
 # Auth. MANIFEST_KEY (asymmetric signing) is preferred; AGENT_KEY is the legacy bearer.
 # At least one must be set — keep both while you roll over.
 MANIFEST_KEY=<base64 of manifest-key.pem — see below>
+# The PUBLIC half, from manifest-pubkey.txt. Not a secret: it is the pin `mt-agent
+# doctor` compares MANIFEST_KEY against. Leave it out and that check can only report
+# `skip`, so a wrong key is not caught until MT rejects a signature.
+MANIFEST_PUBKEY=<contents of manifest-pubkey.txt>
 AGENT_KEY=<agentKey from /onboard>
 OWNER_ADDRESS=<your owner ZelID>
 COALITION_URL=https://<your-coalition>

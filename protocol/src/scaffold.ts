@@ -26,6 +26,12 @@ export interface SlotAnswer {
   lanIp: string;
   gateway: string;
   apiPort: number;
+  /** Bridge for THIS slot's NIC. Omitted = the host's `network`. Present so one
+   * machine can carry slots on different bridges, which inventory could not express
+   * while the value was written at host level only. */
+  network?: string;
+  /** Proxmox storage id for THIS slot's disk. Omitted = the host's `storageImages`. */
+  storagePool?: string;
 }
 
 export interface HostAnswer {
@@ -251,7 +257,14 @@ export function renderSecretsEnv(a: Answers, opts: { includeStripe: boolean }): 
 
 export function renderEnvOperator(
   a: Answers,
-  proxmox: { url?: string; tokenId?: string; storageImport?: string; arcaneIso?: string } = {}
+  proxmox: {
+    url?: string;
+    tokenId?: string;
+    storageImport?: string;
+    arcaneIso?: string;
+    /** Base64 pubkey from `manifest-pubkey.txt`, when keygen has already run. */
+    manifestPubkey?: string;
+  } = {}
 ): string {
   const host = a.hosts[0];
   if (!host) throw new Error(".env.operator needs at least one host");
@@ -271,6 +284,14 @@ export function renderEnvOperator(
     "# MANIFEST_KEY — the same base64 value as in secrets.env. Fill both.",
     "MANIFEST_KEY=",
     "",
+    "# MANIFEST_PUBKEY — the public half, from manifest-pubkey.txt (`mt-manifest keygen`).",
+    "# It is NOT a second secret: it is the pin `mt-agent doctor` compares MANIFEST_KEY",
+    "# against. Left empty, that check can only report `skip` — so the one failure it",
+    "# exists to catch (the agent loaded a DIFFERENT key from the one MT pinned at first",
+    "# ingest) stays invisible until the hub rejects a signature. `keygen` fills this in",
+    "# if .env.operator already exists.",
+    `MANIFEST_PUBKEY=${proxmox.manifestPubkey ?? ""}`,
+    "",
     `PROXMOX_URL=${proxmox.url ?? `https://${host.nodeName ?? host.name}:8006`}`,
     `PROXMOX_TOKEN_ID=${proxmox.tokenId ?? ""}`,
     "PROXMOX_TOKEN_SECRET=",
@@ -282,7 +303,7 @@ export function renderEnvOperator(
     "# The bridge slot NICs attach to. The agent's built-in default is vmbr0 — wrong",
     "# on any host whose Flux traffic rides a VLAN bridge, and the VM then boots fine",
     "# and is reachable by nobody.",
-    `PROXMOX_NETWORK=${host.network ?? "vmbr0"}`,
+    `PROXMOX_NETWORK=${host.network ?? DEFAULT_NETWORK}`,
     "",
     "# ArcaneOS image name. `arcane-mage refresh-iso` keeps this current; the value",
     "# is versioned, so a stale name here fails the provision outright.",
@@ -295,7 +316,71 @@ export function renderEnvOperator(
   ].join("\n");
 }
 
-/** inventory.json is a TOP-LEVEL ARRAY of hosts — matching the live known-good file. */
+/** What `fillManifestPubkey` did, so the caller can say so honestly. */
+export type PubkeyFillResult = "filled" | "already-set";
+
+/**
+ * Put the manifest pubkey into an existing `.env.operator`, without disturbing
+ * anything else in it. Pure string in, string out — the CLI owns the file IO.
+ *
+ * NEVER overwrites a non-empty value. A pinned pubkey that no longer matches the key
+ * in use is a real finding for `mt-agent doctor` to report; quietly rewriting it to
+ * match whatever key was just generated would delete the evidence and turn a rotation
+ * into a silent identity change.
+ */
+export function fillManifestPubkey(
+  envOperator: string,
+  pubkey: string
+): { text: string; result: PubkeyFillResult } {
+  const line = /^MANIFEST_PUBKEY=(.*)$/m;
+  const found = envOperator.match(line);
+  if (found) {
+    if (found[1]!.trim()) return { text: envOperator, result: "already-set" };
+    return { text: envOperator.replace(line, `MANIFEST_PUBKEY=${pubkey}`), result: "filled" };
+  }
+  // Written by an older `init`, which emitted no slot at all. Append one WITH its
+  // comment: an operator who later reads the file should find the same explanation a
+  // freshly generated file carries.
+  const suffix =
+    (envOperator.endsWith("\n") ? "" : "\n") +
+    [
+      "",
+      "# MANIFEST_PUBKEY — the public half, from manifest-pubkey.txt (`mt-manifest keygen`).",
+      "# `mt-agent doctor` compares MANIFEST_KEY against it; empty means that check can",
+      "# only report `skip`.",
+      `MANIFEST_PUBKEY=${pubkey}`,
+      "",
+    ].join("\n");
+  return { text: envOperator + suffix, result: "filled" };
+}
+
+/** The agent's own fallback when nothing is declared (`agent/src/config.ts`). Written
+ * out explicitly rather than relied on, so the value is visible in the file. */
+export const DEFAULT_NETWORK = "vmbr0";
+
+/** The bridge a slot actually provisions onto: `slot.network ?? host.network`, the
+ * same precedence `agent/src/executor.ts` applies. */
+export function slotNetwork(h: HostAnswer, s: SlotAnswer): string {
+  return s.network ?? h.network ?? DEFAULT_NETWORK;
+}
+
+/** The storage id a slot actually provisions onto: `slot.storagePool ?? host.storageImages`. */
+export function slotStoragePool(h: HostAnswer, s: SlotAnswer): string {
+  return s.storagePool ?? h.storageImages;
+}
+
+/**
+ * inventory.json is a TOP-LEVEL ARRAY of hosts — matching the live known-good file.
+ *
+ * ⚠️ `network` and `storagePool` are emitted on every SLOT as well as the host.
+ * MT's ingest materializes Slot rows from the per-slot fields only
+ * (`protocol/src/messages.ts` `InventorySlot`), so a host-level-only value produced
+ * Slot rows with EMPTY `storagePool` and `network` — silently, since `doctor` passes
+ * by checking the host-level value that was written. Provisioning agrees: the agent
+ * builds its YAML from `slot.storagePool ?? host.storageImages` and
+ * `slot.network ?? host.network`. Writing both levels makes the DB, the provision and
+ * the file say the same thing.
+ */
 export function renderInventoryJson(a: Answers): string {
   const hosts = a.hosts.map((h) => ({
     name: h.name,
@@ -303,6 +388,7 @@ export function renderInventoryJson(a: Answers): string {
     // ⚠️ apiUrl points at the CLUSTER endpoint the agent talks to, which by convention
     // is the same host for every entry — not a self-pointing URL per host.
     apiUrl: `https://${h.nodeName ?? h.name}:8006`,
+    network: h.network ?? DEFAULT_NETWORK,
     storageImages: h.storageImages,
     storageIso: h.storageIso,
     slots: h.slots.map((s) => ({
@@ -312,10 +398,25 @@ export function renderInventoryJson(a: Answers): string {
       lanIp: s.lanIp,
       gateway: s.gateway,
       apiPort: s.apiPort,
+      network: slotNetwork(h, s),
+      storagePool: slotStoragePool(h, s),
     })),
   }));
   return JSON.stringify(hosts, null, 2) + "\n";
 }
+
+/**
+ * The Coalition image the generated Flux app spec deploys, PINNED.
+ *
+ * `:latest` deploys correctly today and breaks reproducibility invisibly: a Flux app
+ * spec is a signed, on-chain artifact, so two operators registering "the same" spec
+ * weeks apart get different code with nothing recording that they differ. The doc
+ * pins for the same reason (docs/operator-onboarding.md, #49) — this is that decision
+ * applied to the generator, and `scaffold.test.ts` fails if the two drift apart.
+ *
+ * Bump this WITH the doc when a new Coalition version is published.
+ */
+export const COALITION_IMAGE = "w2vy/coalition:0.2.7";
 
 /** The Flux app spec. Every field already exists in the answers; hand-editing this
  * produced only JSON syntax errors on the pve30 run. */
@@ -329,7 +430,7 @@ export function renderFluxAppSpec(a: Answers): string {
       {
         name: "coalition",
         description: "MoltenTech operator Coalition",
-        repotag: "w2vy/coalition:latest",
+        repotag: COALITION_IMAGE,
         ports: [33001],
         domains: [""],
         environmentParameters: [] as string[],
@@ -360,12 +461,15 @@ export interface GeneratedFiles {
   "flux-app-spec.json": string;
 }
 
-export function generateAll(a: Answers): GeneratedFiles {
+export function generateAll(
+  a: Answers,
+  opts: { manifestPubkey?: string } = {}
+): GeneratedFiles {
   const prices = resolvedPrices(a);
   return {
     "config.env": renderConfigEnv(a),
     "secrets.env": renderSecretsEnv(a, { includeStripe: hasPaidTier(prices) }),
-    ".env.operator": renderEnvOperator(a),
+    ".env.operator": renderEnvOperator(a, { manifestPubkey: opts.manifestPubkey }),
     "inventory.json": renderInventoryJson(a),
     "flux-app-spec.json": renderFluxAppSpec(a),
   };
