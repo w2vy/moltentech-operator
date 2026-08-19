@@ -457,7 +457,40 @@ const SUPPLIED_BY: Record<string, string> = {
   SESSION_SECRET: "`openssl rand -hex 32`",
   STRIPE_SECRET_KEY: "the Stripe dashboard (Developers → API keys)",
   STRIPE_WEBHOOK_SECRET: "the Stripe dashboard, shown once when you create the endpoint",
+  PROXMOX_TOKEN_ID: "`pveum user token add` — the id, e.g. `mt-agent@pve!agent`",
+  PROXMOX_TOKEN_SECRET: "`pveum user token add`, printed ONCE when the token is created",
 };
+
+/**
+ * The Proxmox token pair is the agent's only way to authenticate — there is no
+ * password path in the agent at all. Both were EMPTY on the pve50 cold run while
+ * `doctor` reported 0 errors and 0 warnings, because `.env.operator` had no
+ * required-field check beyond the courier keys: the same skeleton state that
+ * `secrets.env` reports faithfully was silent one file over.
+ */
+export function lintProxmoxCreds(
+  operator: Record<string, string>,
+  operatorFile: string
+): Finding[] {
+  const found: Finding[] = [];
+  for (const key of ["PROXMOX_TOKEN_ID", "PROXMOX_TOKEN_SECRET"]) {
+    if (operator[key]) continue;
+    // Same three-state distinction as the courier keys: present-but-empty is the
+    // scaffold waiting on a later step, absent is a real misconfiguration.
+    const isSkeletonSlot = key in operator;
+    found.push({
+      rule: isSkeletonSlot ? "NOT_YET_FILLED" : "PROXMOX_CREDS_MISSING",
+      severity: isSkeletonSlot ? "warning" : "error",
+      file: operatorFile,
+      message: isSkeletonSlot
+        ? `${key} is empty — supplied by ${SUPPLIED_BY[key]}. The agent cannot make a ` +
+          `single Proxmox call until it is filled.`
+        : `${key} is missing — the agent authenticates to Proxmox by API token only, ` +
+          `so it cannot reach ${operator.PROXMOX_URL ?? "Proxmox"} at all.`,
+    });
+  }
+  return found;
+}
 
 export function lintCourier(operator: Record<string, string>, operatorFile: string): Finding[] {
   const found: Finding[] = [];
@@ -648,6 +681,7 @@ export function runDoctor(input: DoctorInput): DoctorReport {
     findings.push(...lintValueShape(entries, ".env.operator"));
     findings.push(...lintSecretPlacement(entries, ".env.operator", SECRET_KEYS_BANNED_IN_OPERATOR));
     findings.push(...lintCourier(operatorRec, ".env.operator"));
+    findings.push(...lintProxmoxCreds(operatorRec, ".env.operator"));
   }
 
   if (input.configEnv != null && input.envOperator != null) {

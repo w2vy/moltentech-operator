@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { classifyEndpoints } from "./stripe-wiring";
+import { classifyEndpoints, probeStripeWiring } from "./stripe-wiring";
 
 const MINE = "https://coalition-test1.app.runonflux.io";
 const rules = (fs: ReturnType<typeof classifyEndpoints>) => fs.map((f) => f.rule).sort();
@@ -62,5 +62,121 @@ test("a disabled rival Coalition is not flagged — Stripe delivers to enabled e
       )
     ),
     []
+  );
+});
+
+/** The impure half. Stubs `fetch` rather than mocking a Stripe client, because the bug
+ * being pinned here was in the control flow between two requests, not in either one. */
+function withStubbedFetch(
+  handler: (url: string) => { status: number; body: unknown },
+  run: () => Promise<void>
+): Promise<void> {
+  const real = globalThis.fetch;
+  const calls: string[] = [];
+  globalThis.fetch = (async (input: any) => {
+    const url = String(input);
+    calls.push(url);
+    const { status, body } = handler(url);
+    return {
+      ok: status >= 200 && status < 300,
+      status,
+      json: async () => body,
+    } as any;
+  }) as any;
+  (withStubbedFetch as any).calls = calls;
+  return run().finally(() => {
+    globalThis.fetch = real;
+  });
+}
+
+const MY_URL = "https://coalition-mine.app.runonflux.io";
+
+/** Key fixtures carry a hyphen straight after the `rk_test_` prefix on purpose: gitleaks'
+ * `stripe-access-token` rule needs 10+ alphanumerics after the prefix, so a fixture that
+ * runs ten or more straight past it fails the full-history scan. Keep them un-key-shaped
+ * rather than allowlisting a value — the scan stays strict for real keys. The value is
+ * never inspected here anyway: the mode check is guarded by `mtBaseUrl`, which these
+ * cases do not pass. */
+const FAKE_RESTRICTED_KEY = "rk_test_fake-restricted";
+
+/** Measured on the pve50 cold run 2026-08-19: a restricted key 403s on /v1/account
+ * because it lacks `accounts_kyc_basic_read`, and the probe used to stop right there —
+ * reporting a valid key as rejected AND skipping the endpoint rules, which on that run
+ * were the only thing that would have caught a stale webhook URL. */
+test("a 403 on /v1/account does not stop the probe — the endpoint checks still run", async () => {
+  await withStubbedFetch(
+    (url) =>
+      url.includes("/v1/account")
+        ? { status: 403, body: { error: { message: "Permission denied. …accounts_kyc_basic_read…" } } }
+        : {
+            status: 200,
+            body: {
+              data: [
+                { url: "https://coalition-someone-else.app.runonflux.io/webhook", status: "enabled" },
+              ],
+            },
+          },
+    async () => {
+      const findings = await probeStripeWiring({
+        stripeSecretKey: FAKE_RESTRICTED_KEY,
+        coalitionUrl: MY_URL,
+      });
+      const ruleNames = findings.map((f) => f.rule).sort();
+      assert.ok(
+        ruleNames.includes("STRIPE_ACCOUNT_UNREADABLE"),
+        "expected the account read to be reported as a warning"
+      );
+      assert.ok(
+        !ruleNames.includes("STRIPE_KEY_INVALID"),
+        "a working key must never be reported as rejected"
+      );
+      // The whole point: the endpoint rules executed.
+      assert.ok(ruleNames.includes("STRIPE_WEBHOOK_FOREIGN_COALITION"));
+      assert.ok(ruleNames.includes("STRIPE_WEBHOOK_NOT_REGISTERED"));
+      assert.equal(
+        findings.find((f) => f.rule === "STRIPE_ACCOUNT_UNREADABLE")?.severity,
+        "warning"
+      );
+    }
+  );
+});
+
+test("a 401 on /v1/account still fails hard, and never reaches the endpoint list", async () => {
+  let endpointsFetched = false;
+  await withStubbedFetch(
+    (url) => {
+      if (url.includes("/v1/webhook_endpoints")) endpointsFetched = true;
+      return url.includes("/v1/account")
+        ? { status: 401, body: { error: { message: "Invalid API Key provided" } } }
+        : { status: 200, body: { data: [] } };
+    },
+    async () => {
+      const findings = await probeStripeWiring({
+        stripeSecretKey: "rk_test_fake-bogus",
+        coalitionUrl: MY_URL,
+      });
+      assert.deepEqual(
+        findings.map((f) => f.rule),
+        ["STRIPE_KEY_INVALID"]
+      );
+      assert.equal(findings[0]!.severity, "error");
+      assert.equal(endpointsFetched, false);
+    }
+  );
+});
+
+test("a healthy account produces no account-level finding at all", async () => {
+  await withStubbedFetch(
+    (url) =>
+      url.includes("/v1/account")
+        ? { status: 200, body: { id: "acct_123" } }
+        : { status: 200, body: { data: [{ url: `${MY_URL}/webhook`, status: "enabled" }] } },
+    async () => {
+      const findings = await probeStripeWiring({
+        stripeSecretKey: "rk_test_fake-ok",
+        coalitionUrl: MY_URL,
+      });
+      assert.deepEqual(findings, []);
+    }
   );
 });

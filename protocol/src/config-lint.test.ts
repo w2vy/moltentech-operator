@@ -7,6 +7,7 @@ import {
   lintInventory,
   lintCrossFile,
   lintCourier,
+  lintProxmoxCreds,
   lintTierPrices,
   fetchTierMinimums,
   TIER_FLOORS_CENTS,
@@ -31,6 +32,7 @@ MT_BASE_URL=https://www.moltentech.us
 COALITION_URL=https://coalition-acme.app.runonflux.io
 OWNER_ADDRESS=1L1wz2wSomeOwnerAddressHere
 MANIFEST_KEY=LS0tLS1CRUdJTiBQUklWQVRFIEtFWS0tLS0t
+PROXMOX_TOKEN_ID=mt-agent@pve!agent
 PROXMOX_TOKEN_SECRET=aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee
 `;
 
@@ -358,6 +360,7 @@ test("doctor accepts a well-formed listing, and an absent one", () => {
     configEnv: 'PROVIDER_SLUG=acme\nTIER_PRICES_JSON={"cumulus":700}\n',
     envOperator:
       "COALITION_URL=https://c.example\nMANIFEST_KEY=x\nOWNER_ADDRESS=1abc\n" +
+      "PROXMOX_TOKEN_ID=mt-agent@pve!agent\nPROXMOX_TOKEN_SECRET=uuid\n" +
       'AGENT_LISTING_JSON=[{"tier":"cumulus","priceCents":700,"availableSlots":2}]\n',
   });
   assert.deepEqual(ok.findings.filter((f) => f.severity === "error"), []);
@@ -365,7 +368,58 @@ test("doctor accepts a well-formed listing, and an absent one", () => {
   // No listing at all is the self-hoster: valid, not a fault.
   const none = runDoctor({
     configEnv: "PROVIDER_SLUG=acme\nTIER_PRICES_JSON={}\n",
-    envOperator: "COALITION_URL=https://c.example\nMANIFEST_KEY=x\nOWNER_ADDRESS=1abc\n",
+    envOperator:
+      "COALITION_URL=https://c.example\nMANIFEST_KEY=x\nOWNER_ADDRESS=1abc\n" +
+      "PROXMOX_TOKEN_ID=mt-agent@pve!agent\nPROXMOX_TOKEN_SECRET=uuid\n",
   });
   assert.deepEqual(none.findings.filter((f) => f.severity === "error"), []);
+});
+
+/** The pve50 cold run shipped an .env.operator with BOTH Proxmox token fields empty and
+ * `doctor` said 0 errors, 0 warnings — the agent could not have made one API call. */
+test("empty Proxmox token fields are reported as not-yet-filled, like every other skeleton slot", () => {
+  const findings = lintProxmoxCreds(
+    { PROXMOX_URL: "https://192.168.102.50:8006", PROXMOX_TOKEN_ID: "", PROXMOX_TOKEN_SECRET: "" },
+    ".env.operator"
+  );
+  assert.deepEqual(
+    findings.map((f) => f.rule),
+    ["NOT_YET_FILLED", "NOT_YET_FILLED"]
+  );
+  assert.ok(findings.every((f) => f.severity === "warning"));
+  assert.match(findings[0]!.message, /pveum user token add/);
+});
+
+test("a Proxmox token field absent entirely is an error, not a skeleton slot", () => {
+  const findings = lintProxmoxCreds(
+    { PROXMOX_URL: "https://pve50:8006", PROXMOX_TOKEN_SECRET: "abc" },
+    ".env.operator"
+  );
+  assert.deepEqual(
+    findings.map((f) => f.rule),
+    ["PROXMOX_CREDS_MISSING"]
+  );
+  assert.equal(findings[0]!.severity, "error");
+});
+
+test("a filled Proxmox token pair produces nothing", () => {
+  assert.deepEqual(
+    lintProxmoxCreds(
+      { PROXMOX_TOKEN_ID: "mt-agent@pve!agent", PROXMOX_TOKEN_SECRET: "uuid" },
+      ".env.operator"
+    ),
+    []
+  );
+});
+
+test("runDoctor surfaces the empty Proxmox pair through the full report", () => {
+  const report = runDoctor({
+    envOperator: `COALITION_URL=https://coalition-acme.app.runonflux.io
+OWNER_ADDRESS=1L1wz2wSomeOwnerAddressHere
+MANIFEST_KEY=LS0tLS1CRUdJTiBQUklWQVRFIEtFWS0tLS0t
+PROXMOX_TOKEN_ID=
+PROXMOX_TOKEN_SECRET=
+`,
+  });
+  assert.deepEqual(rules(report), ["NOT_YET_FILLED", "NOT_YET_FILLED"]);
 });
