@@ -40,6 +40,7 @@ import { createInterface } from "node:readline/promises";
 import { ProviderManifest, ProviderManifestBody, manifestOwnerMessage, unwrapManifest } from "./manifest";
 import { renderManifestBodyFromConfig, parseConfigEnv } from "./manifest-config";
 import { runDoctor, formatReport, fetchTierMinimums, TIER_FLOORS_CENTS } from "./config-lint";
+import { probeStripeWiring } from "./stripe-wiring";
 import {
   generateAll,
   validateAnswers,
@@ -78,6 +79,40 @@ function die(msg: string): never {
  * derived, because the URL is deterministic (`https://<app>.app.runonflux.io`) and
  * asking for it directly is what created the chicken-and-egg in the old runbook.
  */
+/**
+ * MT's global signing pubkey, which the Coalition pins as `MT_PUBKEY` to verify that
+ * inbound /checkout + /manage calls are really from MT.
+ *
+ * Returns "" when MT has signing disabled (503) or is unreachable, and SAYS SO — the
+ * generated config.env still carries the key with an empty value, so the gap is visible
+ * in the file rather than being an absent line nobody can notice. It is per-MT: a
+ * Coalition moved between instances needs this changed as well as MT_BASE_URL.
+ */
+async function fetchMtPubkey(mtBaseUrl: string): Promise<string> {
+  const url = `${mtBaseUrl.replace(/\/$/, "")}/api/mt-pubkey`;
+  try {
+    const res = await fetch(url, { signal: AbortSignal.timeout(10_000) });
+    if (res.status === 503) {
+      console.log(`  → MT_PUBKEY: ${mtBaseUrl} has signing disabled (503) — leaving it blank.`);
+      return "";
+    }
+    if (!res.ok) {
+      console.log(`  ⚠ MT_PUBKEY: ${url} responded ${res.status} — leaving it blank, fill it in by hand.`);
+      return "";
+    }
+    const pubkey = ((await res.json()) as { pubkey?: unknown } | null)?.pubkey;
+    if (typeof pubkey !== "string" || !pubkey) {
+      console.log(`  ⚠ MT_PUBKEY: ${url} returned no pubkey — leaving it blank, fill it in by hand.`);
+      return "";
+    }
+    console.log(`  → MT_PUBKEY pinned from ${url}`);
+    return pubkey;
+  } catch (err) {
+    console.log(`  ⚠ MT_PUBKEY: could not reach ${url} (${(err as Error).message}) — leaving it blank.`);
+    return "";
+  }
+}
+
 async function askAnswers(minimums: Record<string, number> = TIER_FLOORS_CENTS): Promise<Answers> {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   const ask = async (q: string, def?: string): Promise<string> => {
@@ -105,6 +140,12 @@ async function askAnswers(minimums: Record<string, number> = TIER_FLOORS_CENTS):
     // half a deployment on staging and half on prod.
     const which = await ask("MoltenTech environment — 1) production  2) staging", "1");
     const mtBaseUrl = which.startsWith("2") ? "https://staging.moltentech.us" : "https://www.moltentech.us";
+
+    // DERIVED, never asked: MT publishes its signing pubkey, so making the operator
+    // fetch and paste it only adds a step they can skip. Skipping it is a DELAYED
+    // failure — onboarding, the agent and provisioning all succeed without it and
+    // only checkout/manage breaks, long after the step that caused it.
+    const mtPubkey = await fetchMtPubkey(mtBaseUrl);
 
     const fluxAppName = await ask("Flux app name for your Coalition", suggestFluxAppName(providerSlug));
     console.log(`  → COALITION_URL will be ${coalitionUrlFor(fluxAppName)}`);
@@ -138,7 +179,7 @@ async function askAnswers(minimums: Record<string, number> = TIER_FLOORS_CENTS):
 
     // Prices in DOLLARS, then multiplied — which deletes the extra-zero class of bug
     // rather than validating against it.
-    const draft: Answers = { providerSlug, providerName, ownerAddress, mtBaseUrl, fluxAppName, hosts };
+    const draft: Answers = { providerSlug, providerName, ownerAddress, mtBaseUrl, mtPubkey, fluxAppName, hosts };
     const tierPricesCents: Record<string, number> = {};
     const tiers = [...new Set(hosts.flatMap((h) => h.slots.map((s) => s.tier)))].sort();
     console.log("");
@@ -301,6 +342,28 @@ async function main() {
         inventoryJson: inventory,
         tierMinimums,
       });
+      // Opt-in, because it is the only check that puts a secret in memory and the only
+      // one that talks to a third party. Everything it does is a read-only GET. It
+      // catches what no file can: a well-formed config wired to the WRONG Stripe
+      // account, which fails only after a customer has paid.
+      if (args.includes("--check-stripe")) {
+        const secretsText = read("secrets.env");
+        const operatorText = read(".env.operator");
+        const secrets = secretsText ? parseConfigEnv(secretsText) : {};
+        const operator = operatorText ? parseConfigEnv(operatorText) : {};
+        const stripeSecretKey = secrets.STRIPE_SECRET_KEY || operator.STRIPE_SECRET_KEY;
+        const coalitionUrl = configText ? parseConfigEnv(configText).COALITION_URL : undefined;
+        if (!stripeSecretKey) {
+          console.log("--check-stripe: no STRIPE_SECRET_KEY in secrets.env or .env.operator — skipped.\n");
+        } else if (!coalitionUrl) {
+          console.log("--check-stripe: no COALITION_URL in config.env — skipped.\n");
+        } else {
+          report.findings.push(
+            ...(await probeStripeWiring({ stripeSecretKey, coalitionUrl, mtBaseUrl }))
+          );
+          report.filesChecked.push("stripe (live)");
+        }
+      }
       const { text, ok } = formatReport(report);
       console.log(text);
       if (!ok) process.exit(1);
