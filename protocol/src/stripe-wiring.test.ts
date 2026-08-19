@@ -33,7 +33,9 @@ test("reproduces the 2026-08-18 staging misroute: MT's platform account, my endp
 test("my endpoint registered but disabled is reported as not registered, and says so", () => {
   const findings = classifyEndpoints([{ url: `${MINE}/webhook`, status: "disabled" }], MINE);
   assert.deepEqual(rules(findings), ["STRIPE_WEBHOOK_NOT_REGISTERED"]);
-  assert.match(findings[0].message, /status is "disabled"/);
+  const only = findings[0];
+  assert.ok(only, "expected exactly one finding");
+  assert.match(only.message, /status is "disabled"/);
 });
 
 test("trailing slash and host case do not make my own endpoint look foreign", () => {
