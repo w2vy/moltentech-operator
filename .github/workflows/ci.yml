@@ -204,6 +204,16 @@ jobs:
           sed -i 's/^STRIPE_SECRET_KEY=$/STRIPE_SECRET_KEY=ci-dummy/' "$work/secrets.env"
           sed -i 's/^STRIPE_WEBHOOK_SECRET=$/STRIPE_WEBHOOK_SECRET=ci-dummy/' "$work/secrets.env"
           run keygen
+          # keygen runs AFTER init (the documented order), so it is what fills
+          # MANIFEST_PUBKEY — the pin `mt-agent doctor` compares MANIFEST_KEY against.
+          # Empty, that check can only report `skip`, which is what it did on every real
+          # onboarding.
+          pubkey="$(tr -d '\n' < "$work/manifest-pubkey.txt")"
+          grep -q "^MANIFEST_PUBKEY=${pubkey}$" "$work/.env.operator" || {
+            echo "keygen did not fill MANIFEST_PUBKEY in .env.operator"
+            grep '^MANIFEST_PUBKEY=' "$work/.env.operator" || echo "(no MANIFEST_PUBKEY line at all)"
+            exit 1
+          }
           run sign --key manifest-key.pem --from-config config.env --out manifest.json
           run verify --in manifest.json
           run env --from-config config.env --secrets secrets.env \
@@ -224,6 +234,22 @@ jobs:
           inv = json.loads((work / "inventory.json").read_text())
           assert isinstance(inv, list), "inventory.json must be a top-level array"
           assert inv[0]["name"] == "pve-01"
+
+          # MT materializes Slot rows from the PER-SLOT fields. Host-level-only values
+          # produced Slot rows with empty storagePool/network on a real onboarding, and
+          # nothing caught it — doctor passes by checking the host level.
+          for host in inv:
+              for slot in host["slots"]:
+                  assert slot.get("storagePool"), f"slot {slot['vmName']} has no storagePool"
+                  assert slot.get("network"), f"slot {slot['vmName']} has no network"
+
+          # The Flux app spec is a signed artifact: :latest makes two registrations of
+          # "the same" spec deploy different code with nothing recording the difference.
+          spec = json.load(open(work / "flux-app-spec.json"))
+          repotag = spec["compose"][0]["repotag"]
+          assert not repotag.endswith(":latest"), f"generated spec deploys {repotag}"
+          doc = pathlib.Path("docs/operator-onboarding.md").read_text()
+          assert repotag in doc, f"{repotag} is not the image docs/operator-onboarding.md pins"
 
           # Every price must clear the floor, same rule as the doc fixture.
           pairs = dict(p.split("=", 1) for p in json.load(open(work / "env.json")))

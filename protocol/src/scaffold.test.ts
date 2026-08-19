@@ -8,8 +8,12 @@ import {
   resolvedPrices,
   hasPaidTier,
   renderSecretsEnv,
+  fillManifestPubkey,
+  COALITION_IMAGE,
   type Answers,
 } from "./scaffold";
+import { existsSync, readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { renderManifestBodyFromConfig, parseConfigEnv } from "./manifest-config";
 import { runDoctor } from "./config-lint";
 import { generateEd25519, signManifestBody, verifyManifestObject, publicKeyBase64FromPrivate } from "./signing";
@@ -246,4 +250,99 @@ test("an explicit bridge overrides the vmbr0 default", () => {
   const vlan = structuredClone(ANSWERS);
   vlan.hosts[0]!.network = "vmbr187";
   assert.match(generateAll(vlan)[".env.operator"], /^PROXMOX_NETWORK=vmbr187$/m);
+});
+
+test("every generated slot carries its own network AND storagePool", () => {
+  // The defect this closes: both values were written at HOST level only, MT's ingest
+  // reads them PER SLOT, so every Slot row landed with empty `storagePool` and
+  // `network` — and nothing caught it, because `doctor` checks the host-level value
+  // that WAS written. Assert on the slot, not the host.
+  const inv = JSON.parse(generateAll(ANSWERS)["inventory.json"]) as Array<{
+    network?: string;
+    slots: Array<{ network?: string; storagePool?: string }>;
+  }>;
+  for (const host of inv) {
+    for (const slot of host.slots) {
+      assert.ok(slot.storagePool, "slot has no storagePool — the Slot row will be empty");
+      assert.ok(slot.network, "slot has no network — the Slot row will be empty");
+    }
+  }
+  assert.equal(inv[0]!.slots[0]!.storagePool, "ssd");
+  assert.equal(inv[0]!.slots[0]!.network, "vmbr0");
+});
+
+test("a slot inherits the host's bridge and storage, and can override both", () => {
+  // Per-slot precedence must match what the agent actually provisions with
+  // (`slot.storagePool ?? host.storageImages`, `slot.network ?? host.network`), or
+  // inventory describes a machine the provision does not build.
+  const mixed = structuredClone(ANSWERS);
+  mixed.hosts[0]!.network = "vmbr187";
+  mixed.hosts[0]!.slots.push({
+    ...mixed.hosts[0]!.slots[0]!,
+    vmName: "mt-187-c3",
+    network: "vmbr102",
+    storagePool: "nvme",
+  });
+  const [host] = JSON.parse(generateAll(mixed)["inventory.json"]) as Array<{
+    network?: string;
+    slots: Array<{ network?: string; storagePool?: string }>;
+  }>;
+  assert.equal(host!.network, "vmbr187");
+  assert.deepEqual(
+    host!.slots.map((s) => [s.network, s.storagePool]),
+    [
+      ["vmbr187", "ssd"],
+      ["vmbr102", "nvme"],
+    ]
+  );
+});
+
+test(".env.operator always carries a MANIFEST_PUBKEY slot, empty until keygen", () => {
+  // Empty-but-present, the same rule the other not-yet-issued values follow: an absent
+  // line is invisible, and its absence is why `mt-agent doctor`'s key check could only
+  // ever report `skip`.
+  assert.match(generateAll(ANSWERS)[".env.operator"], /^MANIFEST_PUBKEY=$/m);
+  assert.match(generateAll(ANSWERS, { manifestPubkey: "PUB" })[".env.operator"], /^MANIFEST_PUBKEY=PUB$/m);
+});
+
+test("fillManifestPubkey fills an empty slot and leaves a pinned one alone", () => {
+  const fresh = generateAll(ANSWERS)[".env.operator"];
+  const filled = fillManifestPubkey(fresh, "NEWPUB");
+  assert.equal(filled.result, "filled");
+  assert.match(filled.text, /^MANIFEST_PUBKEY=NEWPUB$/m);
+
+  // Rotating over an existing pin would erase the mismatch `mt-agent doctor` exists to
+  // report, so a non-empty value is never rewritten.
+  const again = fillManifestPubkey(filled.text, "OTHERPUB");
+  assert.equal(again.result, "already-set");
+  assert.equal(again.text, filled.text);
+});
+
+test("fillManifestPubkey appends a slot to a file written by an older init", () => {
+  const legacy = "PROVIDER_SLUG=acme-nodes\nMANIFEST_KEY=\n";
+  const { text, result } = fillManifestPubkey(legacy, "PUB");
+  assert.equal(result, "filled");
+  assert.match(text, /^MANIFEST_PUBKEY=PUB$/m);
+  assert.match(text, /^PROVIDER_SLUG=acme-nodes$/m, "existing keys must survive untouched");
+  // parseConfigEnv is what every consumer uses; the appended block must parse.
+  assert.equal(parseConfigEnv(text).MANIFEST_PUBKEY, "PUB");
+});
+
+test("the generated Flux app spec pins the Coalition image, and pins what the doc pins", () => {
+  // `:latest` deploys fine today and breaks reproducibility invisibly — a Flux app spec
+  // is a signed artifact, so two operators registering "the same" spec weeks apart get
+  // different code with nothing recording that they differ.
+  const spec = JSON.parse(generateAll(ANSWERS)["flux-app-spec.json"]) as {
+    compose: Array<{ repotag: string }>;
+  };
+  assert.equal(spec.compose[0]!.repotag, COALITION_IMAGE);
+  assert.doesNotMatch(COALITION_IMAGE, /:latest$/, "the generated spec must not deploy :latest");
+  assert.match(COALITION_IMAGE, /^w2vy\/coalition:\d+\.\d+\.\d+$/);
+
+  // The doc and the generator pin the SAME version, or an operator following the doc
+  // and an operator running `init` deploy different code from the same instructions.
+  const doc = fileURLToPath(new URL("../../docs/operator-onboarding.md", import.meta.url));
+  if (!existsSync(doc)) return; // running from a context without the repo docs
+  const pins = [...new Set(readFileSync(doc, "utf8").match(/w2vy\/coalition:[^\s`)]+/g) ?? [])];
+  assert.deepEqual(pins, [COALITION_IMAGE], "docs/operator-onboarding.md pins a different image");
 });
