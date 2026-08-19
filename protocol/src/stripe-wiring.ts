@@ -172,14 +172,36 @@ export async function probeStripeWiring(args: {
     });
     return findings;
   }
-  if (!account.ok) {
+  // 401 is the only status that means "this key is not accepted". Anything else —
+  // in practice a 403 — means the key WORKS and merely cannot read this endpoint, so
+  // the probe must carry on to the endpoint check rather than stop at the door.
+  //
+  // Measured on the pve50 cold run: a RESTRICTED key (`rk_…`), which is what the
+  // runbook tells operators to create, lacks `accounts_kyc_basic_read` by default, so
+  // `/v1/account` 403s. Treating that as a rejected key reported a FALSE error and
+  // returned early, skipping `classifyEndpoints` entirely — and on that run the skipped
+  // check was hiding a real defect (the webhook still pointed at a stale Coalition URL).
+  // Nothing below reads `account`; it was only ever a liveness probe.
+  if (account.status === 401) {
     findings.push({
       rule: "STRIPE_KEY_INVALID",
       severity: "error",
       file: "secrets.env",
-      message: `Stripe rejected STRIPE_SECRET_KEY (${account.status}: ${account.json?.error?.message ?? "no detail"}).`,
+      message: `Stripe rejected STRIPE_SECRET_KEY (401: ${account.json?.error?.message ?? "no detail"}).`,
     });
     return findings;
+  }
+  if (!account.ok) {
+    findings.push({
+      rule: "STRIPE_ACCOUNT_UNREADABLE",
+      severity: "warning",
+      file: "secrets.env",
+      message:
+        `could not read the Stripe account (${account.status}: ${account.json?.error?.message ?? "no detail"}) — ` +
+        "the key itself is accepted, so the endpoint checks below still ran. A restricted key " +
+        "needs the v1 \"Account\" read permission (`accounts_kyc_basic_read`) to silence this; " +
+        "Stripe's separate \"Account v2\" permission does NOT cover it.",
+    });
   }
 
   const eps = await stripeGet(stripeSecretKey, "/v1/webhook_endpoints?limit=100");
