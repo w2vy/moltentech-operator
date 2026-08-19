@@ -330,3 +330,42 @@ test("a live-minimums run does not print the stale-copy note", () => {
   );
   assert.ok(!text.includes("bundled copy"));
 });
+
+test("doctor catches the price MAP written where the listing ARRAY belongs", () => {
+  // The exact defect `mt-manifest init` shipped: the agent exits at startup with a
+  // ZodError and asserts nothing, so no later symptom points back here.
+  const report = runDoctor({
+    configEnv: 'PROVIDER_SLUG=acme\nTIER_PRICES_JSON={"cumulus":700}\n',
+    envOperator: 'COALITION_URL=https://c.example\nMANIFEST_KEY=x\nOWNER_ADDRESS=1abc\nAGENT_LISTING_JSON={"cumulus":700}\n',
+  });
+  const f = report.findings.find((x) => x.rule === "LISTING_NOT_AN_ARRAY");
+  assert.ok(f, `expected LISTING_NOT_AN_ARRAY, got ${report.findings.map((x) => x.rule).join(", ")}`);
+  assert.equal(f!.severity, "error");
+});
+
+test("doctor catches a listing price that disagrees with config.env", () => {
+  const report = runDoctor({
+    configEnv: 'PROVIDER_SLUG=acme\nTIER_PRICES_JSON={"cumulus":700}\n',
+    envOperator:
+      "COALITION_URL=https://c.example\nMANIFEST_KEY=x\nOWNER_ADDRESS=1abc\n" +
+      'AGENT_LISTING_JSON=[{"tier":"cumulus","priceCents":900,"availableSlots":1}]\n',
+  });
+  assert.ok(report.findings.some((x) => x.rule === "PRICE_DISAGREES_ACROSS_FILES"));
+});
+
+test("doctor accepts a well-formed listing, and an absent one", () => {
+  const ok = runDoctor({
+    configEnv: 'PROVIDER_SLUG=acme\nTIER_PRICES_JSON={"cumulus":700}\n',
+    envOperator:
+      "COALITION_URL=https://c.example\nMANIFEST_KEY=x\nOWNER_ADDRESS=1abc\n" +
+      'AGENT_LISTING_JSON=[{"tier":"cumulus","priceCents":700,"availableSlots":2}]\n',
+  });
+  assert.deepEqual(ok.findings.filter((f) => f.severity === "error"), []);
+
+  // No listing at all is the self-hoster: valid, not a fault.
+  const none = runDoctor({
+    configEnv: "PROVIDER_SLUG=acme\nTIER_PRICES_JSON={}\n",
+    envOperator: "COALITION_URL=https://c.example\nMANIFEST_KEY=x\nOWNER_ADDRESS=1abc\n",
+  });
+  assert.deepEqual(none.findings.filter((f) => f.severity === "error"), []);
+});

@@ -9,11 +9,14 @@ import {
   hasPaidTier,
   renderSecretsEnv,
   fillManifestPubkey,
+  slotCountsByTier,
+  resolvedListing,
   COALITION_IMAGE,
   type Answers,
 } from "./scaffold";
 import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { z } from "zod";
 import { renderManifestBodyFromConfig, parseConfigEnv } from "./manifest-config";
 import { runDoctor } from "./config-lint";
 import { generateEd25519, signManifestBody, verifyManifestObject, publicKeyBase64FromPrivate } from "./signing";
@@ -345,4 +348,73 @@ test("the generated Flux app spec pins the Coalition image, and pins what the do
   if (!existsSync(doc)) return; // running from a context without the repo docs
   const pins = [...new Set(readFileSync(doc, "utf8").match(/w2vy\/coalition:[^\s`)]+/g) ?? [])];
   assert.deepEqual(pins, [COALITION_IMAGE], "docs/operator-onboarding.md pins a different image");
+});
+
+test("AGENT_LISTING_JSON is an ARRAY the agent can parse, not the price map", () => {
+  // The defect: `init` wrote TIER_PRICES_JSON's map here verbatim, so every operator's
+  // agent died at startup with `ZodError: Expected array, received object`. Parse it
+  // with the agent's own schema shape rather than eyeballing the JSON.
+  const value = parseConfigEnv(generateAll(ANSWERS)[".env.operator"]).AGENT_LISTING_JSON!;
+  const listing = JSON.parse(value);
+  assert.ok(Array.isArray(listing), `AGENT_LISTING_JSON is not an array: ${value}`);
+  assert.deepEqual(listing, [{ tier: "cumulus", priceCents: 700, availableSlots: 1 }]);
+
+  const ListingTierConfig = z.object({
+    tier: z.string(),
+    priceCents: z.number().int().positive(),
+    availableSlots: z.number().int().nonnegative(),
+  });
+  assert.doesNotThrow(() => z.array(ListingTierConfig).parse(listing));
+});
+
+test("availableSlots defaults to every slot of that tier, across hosts", () => {
+  const two = structuredClone(ANSWERS);
+  two.hosts[0]!.slots.push({ ...two.hosts[0]!.slots[0]!, vmName: "mt-187-c3" });
+  two.hosts.push({
+    name: "pve40",
+    storageImages: "ssd",
+    storageIso: "pve55-shared",
+    slots: [{ ...two.hosts[0]!.slots[0]!, tier: "nimbus", vmName: "mt-187-n1" }],
+  });
+  assert.deepEqual(slotCountsByTier(two), { cumulus: 2, nimbus: 1 });
+  assert.deepEqual(resolvedListing(two), [
+    { tier: "cumulus", priceCents: 700, availableSlots: 2 },
+    { tier: "nimbus", priceCents: 2000, availableSlots: 1 },
+  ]);
+});
+
+test("an operator can hold slots back by offering fewer than they declared", () => {
+  const held = structuredClone(ANSWERS);
+  held.hosts[0]!.slots.push({ ...held.hosts[0]!.slots[0]!, vmName: "mt-187-c3" });
+  held.availableSlots = { cumulus: 1 };
+  assert.deepEqual(resolvedListing(held), [{ tier: "cumulus", priceCents: 700, availableSlots: 1 }]);
+  assert.deepEqual(validateAnswers(held), []);
+});
+
+test("offering MORE than you declared is rejected, even though MT would clamp it", () => {
+  // MT clamps to the live available count so this cannot oversell — but the number
+  // means the operator believes they declared hardware they did not.
+  const over = structuredClone(ANSWERS);
+  over.availableSlots = { cumulus: 5 };
+  assert.match(validateAnswers(over).join("\n"), /more than the 1 cumulus slot/);
+
+  const unknown = structuredClone(ANSWERS);
+  unknown.availableSlots = { stratus: 1 };
+  assert.match(validateAnswers(unknown).join("\n"), /which no slot uses/);
+});
+
+test("a self-hoster lists nothing at all — an empty array, not a zero-priced tier", () => {
+  const value = parseConfigEnv(generateAll({ ...ANSWERS, selling: false })[".env.operator"])
+    .AGENT_LISTING_JSON!;
+  assert.deepEqual(JSON.parse(value), []);
+});
+
+test("the listing price and TIER_PRICES_JSON cannot disagree", () => {
+  // Two files, one answer: if these ever diverge the Coalition and MT quote different
+  // numbers for the same tier.
+  const files = generateAll({ ...ANSWERS, tierPricesCents: { cumulus: 1200 } });
+  const prices = JSON.parse(parseConfigEnv(files["config.env"]).TIER_PRICES_JSON!);
+  for (const entry of JSON.parse(parseConfigEnv(files[".env.operator"]).AGENT_LISTING_JSON!)) {
+    assert.equal(entry.priceCents, prices[entry.tier], `price for ${entry.tier} disagrees across files`);
+  }
 });
