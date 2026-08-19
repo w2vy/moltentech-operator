@@ -170,7 +170,18 @@ export function renderConfigEnv(a: Answers): string {
     `COALITION_URL=${coalitionUrlFor(a.fluxAppName)}`,
     `OWNER_ADDRESS=${a.ownerAddress}`
   );
-  if (a.mtPubkey) lines.push(`MT_PUBKEY=${a.mtPubkey}`);
+  // ALWAYS emitted, even empty. An absent line is invisible: the operator has nothing
+  // to notice and nothing to fill in, and the omission only surfaces at the first
+  // customer checkout, as a 401 from their own Coalition.
+  lines.push(
+    "# MT_PUBKEY — the Coalition pins this to verify MT's inbound checkout/manage calls.",
+    "# Derived from {MT_BASE_URL}/api/mt-pubkey at init. If it is EMPTY below, fill it in",
+    "# by hand before deploying: an empty value means checkout returns 401 forever, and",
+    "# nothing else in onboarding will tell you. It is per-MT — moving a Coalition between",
+    "# instances needs this changed as well as MT_BASE_URL (neither is in the signed",
+    "# manifest, so changing both needs no re-sign).",
+    `MT_PUBKEY=${a.mtPubkey ?? ""}`
+  );
   lines.push(
     `HOSTS=${a.hosts.map((h) => h.name).join(",")}`,
     `TIER_PRICES_JSON=${JSON.stringify(resolvedPrices(a))}`,
