@@ -355,7 +355,7 @@ Your provider now exists at MT in status `pending`. Step 7 activates it.
 
 ## Step 4 — Deploy the Coalition on Flux
 
-The Coalition runs as a **published Docker image** (`w2vy/coalition:0.2.7`) deployed as
+The Coalition runs as a **published Docker image** (`w2vy/coalition:0.2.8`) deployed as
 a Flux App. Config, secrets, and your signed manifest are all supplied as **Flux
 environment variables** — nothing to mount. Because Step 2 already gave you the real
 keys, this is a **single deploy**; there is no placeholder-then-re-import round trip.
@@ -413,7 +413,7 @@ You never set a variable on the Flux app by hand: non-secret settings live in
 any variable with no value, so leaving `SESSION_SECRET=` in `secrets.env` is identical
 to never listing it, and the console will withhold the node dashboard.
 
-**2. Register the Flux App:** Docker image `w2vy/coalition:0.2.7`, container port
+**2. Register the Flux App:** Docker image `w2vy/coalition:0.2.8`, container port
 **8088**, then supply `env.json` as the app's environment.
 
 ⚠️ **Flux caps a plaintext environment parameter at 400 characters, and `MANIFEST_JSON`
@@ -443,7 +443,7 @@ predating a protocol change cannot complete onboarding — `coalition:0.2.4` was
 day before the protocol gained owner-attested `hardware[]`, and the hub 409s an unattested
 host, so that tag can never finish onboarding no matter how carefully you follow this.
 
-The versions above (`coalition:0.2.7`, `mt-agent:0.3.0`) are what production runs and are
+The versions above (`coalition:0.2.8`, `mt-agent:0.3.0`) are what production runs and are
 known to complete the whole flow. `:latest` also works and is what the fleet tracks, but
 pinning is what makes YOUR onboarding reproducible: if a run half-succeeds, you want to be
 able to say which image did it.
