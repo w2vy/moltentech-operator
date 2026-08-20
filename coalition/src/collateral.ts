@@ -33,8 +33,13 @@ export function getCollateralSnapshot(): LifecycleNodeStatus[] {
   return latest;
 }
 
-/** Fetch the provider's non-active (still-maturing) nodes from MT (authoritative). */
-async function fetchPendingNodes(cfg: CoalitionConfig, fetchImpl: typeof fetch): Promise<AgentNode[]> {
+/**
+ * Fetch the nodes MT wants measured (authoritative). Everything with a collateral txid,
+ * INCLUDING `active` slots: an active node is the only one that can suffer a lapsed
+ * registration, and MT's relist reaper needs it measured to notice. Filtering active out
+ * here is what previously made a lapse invisible to the whole system.
+ */
+async function fetchWatchedNodes(cfg: CoalitionConfig, fetchImpl: typeof fetch): Promise<AgentNode[]> {
   const res = await fetchImpl(`${cfg.mtBaseUrl}/api/agent/nodes`, {
     headers: { Authorization: `Bearer ${cfg.agentKey}` },
   });
@@ -42,7 +47,7 @@ async function fetchPendingNodes(cfg: CoalitionConfig, fetchImpl: typeof fetch):
   const body = (await res.json()) as { nodes?: unknown[] };
   return (body.nodes ?? [])
     .map((n) => AgentNode.parse(n))
-    .filter((n) => n.status && n.status !== "active" && n.collateralTxid);
+    .filter((n) => n.status && n.collateralTxid);
 }
 
 /** Poll one node's Flux benchmark API from outside the operator LAN (hairpin-proof). */
@@ -162,24 +167,35 @@ async function isOnDeterministicList(
   outputId: number,
   expectedEndpoint: string,
   fetchImpl: typeof fetch
-): Promise<boolean> {
+): Promise<boolean | null> {
+  let list: { txhash?: string; outidx?: unknown; ip?: unknown }[] | null;
   try {
-    const list = (await fluxApiGet(
+    list = (await fluxApiGet(
       cfg,
       `/daemon/viewdeterministiczelnodelist?filter=${txid}`,
       fetchImpl
     )) as { txhash?: string; outidx?: unknown; ip?: unknown }[] | null;
-    for (const n of Array.isArray(list) ? list : []) {
-      if (!n || n.txhash !== txid || String(n.outidx) !== String(outputId)) continue;
-      const listed = normalizeListEndpoint(n.ip);
-      if (listed === expectedEndpoint) return true;
-      console.warn(
-        `[collateral] ${txid}:${outputId} is listed at ${listed ?? String(n.ip)} but we expect ` +
-          `${expectedEndpoint} — reporting NOT on-list (node not yet serving at its assigned endpoint)`
-      );
-    }
   } catch (err) {
+    // 🔑 UNREADABLE, not absent. This used to `return false`, collapsing "the Flux API is
+    // down" into "this node is not registered". Harmless while the answer only ever
+    // withheld a promotion; actively dangerous now that MT demotes off `false`, where it
+    // would turn one bad API response into a fleet-wide demotion.
     console.error(`[collateral] deterministic-list check failed for ${txid}:`, (err as Error).message);
+    return null;
+  }
+  for (const n of Array.isArray(list) ? list : []) {
+    if (!n || n.txhash !== txid || String(n.outidx) !== String(outputId)) continue;
+    const listed = normalizeListEndpoint(n.ip);
+    if (listed === expectedEndpoint) return true;
+    console.warn(
+      `[collateral] ${txid}:${outputId} is listed at ${listed ?? String(n.ip)} but we expect ` +
+        `${expectedEndpoint} — reporting UNKNOWN (a move in flight, not a lapsed registration)`
+    );
+    // Listed, but somewhere else. For a promotion that is "not yet serving here" — null
+    // holds, exactly as false used to. For a lapse it is emphatically NOT evidence the
+    // registration is gone: the collateral is right there on the list. Reporting false
+    // would demote every node mid-move.
+    return null;
   }
   return false;
 }
@@ -206,12 +222,13 @@ async function postLifecycleReport(
 }
 
 /**
- * One pass: fetch the provider's still-maturing nodes from MT, measure each
- * (benchmark pass, collateral confs, deterministic-list membership), report
- * back to MT, and cache the snapshot for the /console visibility section.
+ * One pass: fetch the nodes MT is watching, measure each (benchmark pass, collateral
+ * confs, deterministic-list membership), report back to MT, and cache the snapshot for
+ * the /console visibility section. Covers both directions of the lifecycle — maturing
+ * nodes on their way to `active`, and active nodes that may have lapsed off the list.
  */
 export async function checkCollateralOnce(cfg: CoalitionConfig, fetchImpl: typeof fetch = fetch): Promise<void> {
-  const nodes = await fetchPendingNodes(cfg, fetchImpl);
+  const nodes = await fetchWatchedNodes(cfg, fetchImpl);
   const results = await Promise.all(
     nodes.map(async (node): Promise<LifecycleNodeStatus> => {
       const [benchmarkPassed, collateralConfs, onDeterministicList] = await Promise.all([

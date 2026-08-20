@@ -450,10 +450,12 @@ export type SlotLifecycleStatus = z.infer<typeof SlotLifecycleStatus>;
 // A live node the Coalition's collector should poll (public host:apiPort). MT is
 // the authoritative source (it knows the provider's slots); the Coalition fetches
 // this list via GET /api/agent/nodes, then polls each node's Flux API externally.
-// `status`/`collateralTxid`/`collateralVout` are present for non-active slots only
-// (bootstrap/benchmark/awaiting_start) — the fields the Coalition's collateral
-// lifecycle collector needs to measure + key its LifecycleNodeStatus reports by
-// `vmName`; absent (other than vmName/tier/host/apiPort) once a slot is `active`.
+// `status`/`collateralTxid`/`collateralVout` carry the fields the Coalition's collateral
+// lifecycle collector needs to measure + key its LifecycleNodeStatus reports by `vmName`.
+// They are present for EVERY status including `active` — an active node still has to be
+// checked for a lapsed registration (MT's relist reaper), and stripping its collateral
+// txid is what previously made that impossible. Still optional: a slot with no active
+// rental has no NodeConfig to read them from.
 export const AgentNode = z.object({
   vmName: z.string().min(1),
   tier: TierKey,
@@ -480,8 +482,29 @@ export const LifecycleNodeStatus = z.object({
   benchmarkPassed: z.boolean(),
   /** Collateral UTXO confirmations (getblockcount - tx.height + 1); null = unreadable (fail-closed upstream). */
   collateralConfs: z.number().int().nonnegative().nullable(),
-  /** True once the node's collateral appears on the Flux deterministic node list. */
-  onDeterministicList: z.boolean(),
+  /**
+   * Is the collateral on the Flux deterministic node list, AT the endpoint MT assigned
+   * this slot?
+   *
+   * true  — listed and serving where we expect
+   * false — genuinely absent from the list
+   * null  — UNREADABLE (Flux API error), or listed at some OTHER endpoint (a move in
+   *         flight).
+   *
+   * WIDENED to nullable for the relist reaper (lib/listing-lapse.ts), which demotes a
+   * lapsed ACTIVE node off `false` — so "we could not measure" has to be sayable and
+   * distinct, or one bad Flux API response demotes a whole healthy fleet. The forward
+   * lifecycle guard treats null exactly as it treats false (hold), which is what it
+   * already did before this widened.
+   *
+   * `SCHEMA_VERSION` deliberately does NOT change, same reasoning as `failureClass`
+   * above. Widening is safe in the old-agent direction (a boolean still parses). The
+   * NEW-agent-to-OLD-MT direction is not: an old MT 400s a `null`. That is a DEPLOY
+   * ORDER constraint, not a protocol one — ship MT before publishing the agent image.
+   * The blast radius if it is got wrong is one lifecycle report rejected and retried
+   * next tick, and only in the case where the Flux API was already unreadable.
+   */
+  onDeterministicList: z.boolean().nullable(),
 });
 export type LifecycleNodeStatus = z.infer<typeof LifecycleNodeStatus>;
 

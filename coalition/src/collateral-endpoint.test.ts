@@ -71,9 +71,15 @@ function cfg(): CoalitionConfig {
 async function reportedOnList(opts: {
   host: string;
   apiPort: number;
-  listedIp: unknown;
-}): Promise<boolean> {
-  let posted: { nodes?: { onDeterministicList?: boolean }[] } | undefined;
+  listedIp?: unknown;
+  /** Omit the node from the list entirely — a genuinely absent registration. */
+  absent?: boolean;
+  /** Make the deterministic-list call fail — unreadable, which is NOT absent. */
+  listUnreadable?: boolean;
+  /** The slot status MT hands out; `active` is what the relist reaper watches. */
+  status?: string;
+}): Promise<boolean | null> {
+  let posted: { nodes?: { onDeterministicList?: boolean | null }[] } | undefined;
 
   const fetchImpl = (async (url: string | URL, init?: RequestInit) => {
     const u = String(url);
@@ -90,7 +96,7 @@ async function reportedOnList(opts: {
             tier: "cumulus",
             host: opts.host,
             apiPort: opts.apiPort,
-            status: "awaiting_start",
+            status: opts.status ?? "awaiting_start",
             collateralTxid: TXID,
             collateralVout: 0,
           },
@@ -103,6 +109,8 @@ async function reportedOnList(opts: {
     if (u.includes("/daemon/getrawtransaction")) return ok({ status: "success", data: { height: 100 } });
     if (u.includes("/daemon/getblockcount")) return ok({ status: "success", data: 1000 });
     if (u.includes("/daemon/viewdeterministiczelnodelist")) {
+      if (opts.listUnreadable) return { ok: false, status: 502 } as unknown as Response;
+      if (opts.absent) return ok({ status: "success", data: [] });
       return ok({ status: "success", data: [{ txhash: TXID, outidx: 0, ip: opts.listedIp }] });
     }
     if (u.endsWith("/api/agent/lifecycle")) {
@@ -114,7 +122,7 @@ async function reportedOnList(opts: {
 
   await checkCollateralOnce(cfg(), fetchImpl);
   assert.ok(posted?.nodes?.[0], "a lifecycle report should have been posted");
-  return posted!.nodes![0].onDeterministicList === true;
+  return posted!.nodes![0].onDeterministicList ?? null;
 }
 
 test("listed AT the expected endpoint → on-list", async () => {
@@ -125,18 +133,43 @@ test("listed BARE while we expect the default port → still on-list", async () 
   assert.equal(await reportedOnList({ host: "1.2.3.4", apiPort: 16127, listedIp: "1.2.3.4" }), true);
 });
 
-test("listed at a DESTROYED VM's address → NOT on-list", async () => {
-  // The 90-minute stall: collateral matches, the endpoint is the old VM's.
-  assert.equal(await reportedOnList({ host: "1.2.3.4", apiPort: 16127, listedIp: "9.9.9.9:16127" }), false);
+test("listed at a DESTROYED VM's address → UNKNOWN, not off-list", async () => {
+  // The 90-minute stall: collateral matches, the endpoint is the old VM's. It still
+  // holds the promotion (null is falsy to the forward guard) but must never read as a
+  // lapsed registration — the collateral is right there on the list.
+  assert.equal(await reportedOnList({ host: "1.2.3.4", apiPort: 16127, listedIp: "9.9.9.9:16127" }), null);
 });
 
-test("same WAN IP, different PORT → NOT on-list", async () => {
+test("same WAN IP, different PORT → UNKNOWN, not off-list", async () => {
   // A move between two slots behind one WAN IP shows up as a port appearing, not an
   // address changing — the case most easily misread as "nothing happened".
-  assert.equal(await reportedOnList({ host: "1.2.3.4", apiPort: 16137, listedIp: "1.2.3.4" }), false);
+  assert.equal(await reportedOnList({ host: "1.2.3.4", apiPort: 16137, listedIp: "1.2.3.4" }), null);
 });
 
-test("a missing or unreadable ip field → NOT on-list (fail closed)", async () => {
-  assert.equal(await reportedOnList({ host: "1.2.3.4", apiPort: 16127, listedIp: undefined }), false);
-  assert.equal(await reportedOnList({ host: "1.2.3.4", apiPort: 16127, listedIp: "garbage" }), false);
+test("a missing or unreadable ip field → UNKNOWN (fail closed both ways)", async () => {
+  assert.equal(await reportedOnList({ host: "1.2.3.4", apiPort: 16127, listedIp: undefined }), null);
+  assert.equal(await reportedOnList({ host: "1.2.3.4", apiPort: 16127, listedIp: "garbage" }), null);
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// tri-state: the distinction MT's relist reaper demotes on
+// ───────────────────────────────────────────────────────────────────────────
+
+test("🔑 absent from the list is FALSE — the one input that may demote", async () => {
+  assert.equal(await reportedOnList({ host: "1.2.3.4", apiPort: 16127, absent: true }), false);
+});
+
+test("🔑 an unreadable Flux API is NULL, never false", async () => {
+  // Collapsed into `false` this is a fleet-wide demotion on one bad API response —
+  // which is exactly what the old `catch { return false }` would have produced.
+  assert.equal(await reportedOnList({ host: "1.2.3.4", apiPort: 16127, listUnreadable: true }), null);
+});
+
+test("🔑 ACTIVE slots are measured too, or a lapse is invisible", async () => {
+  // The collector used to filter `active` out entirely, so no active node was ever
+  // checked against the list and a lapsed registration could never be detected.
+  assert.equal(
+    await reportedOnList({ host: "1.2.3.4", apiPort: 16127, absent: true, status: "active" }),
+    false
+  );
 });
