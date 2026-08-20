@@ -478,7 +478,7 @@ export function renderInventoryJson(a: Answers): string {
  *
  * Bump this WITH the doc when a new Coalition version is published.
  */
-export const COALITION_IMAGE = "w2vy/coalition:0.2.7";
+export const COALITION_IMAGE = "w2vy/coalition:0.2.8";
 
 /** The Flux app spec. Every field already exists in the answers; hand-editing this
  * produced only JSON syntax errors on the pve30 run.
