@@ -666,8 +666,12 @@ MT reviews your `pending` provider and **activates** it; your cards then appear 
 `/providers`. Within a minute of activation the agent's heartbeat publishes your price
 and slots offered (admin → Providers shows `lastAsserted`).
 
-Owner authorization for privileged actions (delete / reprovision / move) is done in
-**your own** Coalition console — MT never prompts for it:
+Owner authorization for privileged actions (delete / reprovision / move) is a **wallet
+signature you make yourself**. There are two places you can make it, and they are
+equivalent — the same claim, the same signature, the same verification by your agent.
+
+**Your own Coalition console is the primary path**, and the only one that works without a
+MoltenTech login:
 
 1. A customer cancels → MT marks the slot `pending_delete`.
 2. Your **agent** fetches the pending list (`GET /api/agent/pending-auth`, signed) and
@@ -682,6 +686,27 @@ Owner authorization for privileged actions (delete / reprovision / move) is done
 ⚠️ **A failed relay destroys the signed blob.** The Coalition hands it over exactly
 once; if the handoff fails you must sign the action again. The courier log is the only
 place this is visible.
+
+### The alternative: signing at MoltenTech's `/operator`
+
+If you sign in at `{MT_BASE_URL}` with your `OWNER_ADDRESS` wallet, MoltenTech shows the
+same pending teardowns at **`/operator`** and lets you sign them there. Sign with SSP
+in-page, or "Open in Zelcore" — the deep link posts the signature back on its own and the
+page continues without you pasting anything. A paste box is there as a fallback for
+signing on a different machine.
+
+This is an **alternative to, not a replacement for**, your Coalition console. Use whichever
+is in front of you:
+
+- your console works with **no MoltenTech account at all** and is the one to rely on;
+- `/operator` is convenient when you are already signed in to MoltenTech, and it does not
+  depend on your Coalition being reachable.
+
+The trust model is identical either way. MoltenTech is a **dumb relay**: it shape-checks
+the signed claim, binds it to the slot it names, and stores it. **Your agent re-verifies
+the signature against its own pinned owner address before it deletes anything**, so a
+compromised MoltenTech still cannot destroy your nodes. The claim is bound to one action
+on one node and expires, so it cannot be replayed against another.
 
 The Coalition holds **no keys** for this and never calls MT — it is a UI + signature
 courier. The manifest key (agent↔console auth) stays on the agent; the owner key stays
@@ -701,7 +726,9 @@ console and the agent.
   `/providers` → you get a Stripe Checkout (your account) with a trial → MT records a
   rental → your agent provisions the node → result flows back.
 - **Authorization**: cancel that test rental and confirm the pending action shows up in
-  `<COALITION_URL>/console`.
+  `<COALITION_URL>/console` — and, if you have a MoltenTech login, at `/operator` too.
+  Signing in either place should complete the teardown; watch the slot return to
+  `available`.
 
 ## Which value must match where
 
