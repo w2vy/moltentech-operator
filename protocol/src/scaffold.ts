@@ -160,6 +160,21 @@ export function validateAnswers(
   return errs;
 }
 
+/**
+ * Does `init` still need to derive MT's signing pubkey, or did the operator pin one?
+ *
+ * An explicitly supplied `mtPubkey` always wins — someone pinning it by hand (an
+ * air-gapped run, or deliberately holding an older key) must not have it silently
+ * overwritten by whatever the live endpoint happens to serve.
+ *
+ * Kept here rather than in the CLI so BOTH init paths — the wizard and
+ * `--answers` — ask the same question of the same object. Deriving it inside the
+ * interactive prompts is exactly how the `--answers` path came to skip it entirely.
+ */
+export function needsMtPubkey(a: Answers): boolean {
+  return (a.mtPubkey ?? "").trim() === "";
+}
+
 /** Every tier actually in use, so prices default to the floor without being asked. */
 export function tiersInUse(a: Answers): string[] {
   const set = new Set<string>();
