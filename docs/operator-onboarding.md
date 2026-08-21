@@ -666,9 +666,23 @@ MT reviews your `pending` provider and **activates** it; your cards then appear 
 `/providers`. Within a minute of activation the agent's heartbeat publishes your price
 and slots offered (admin → Providers shows `lastAsserted`).
 
-Owner authorization for privileged actions (delete / reprovision / move) is a **wallet
-signature you make yourself**. There are two places you can make it, and they are
-equivalent — the same claim, the same signature, the same verification by your agent.
+Owner authorization for privileged actions is a **wallet signature you make yourself**.
+There are two places you can make it, and they are equivalent — the same claim, the same
+signature, the same verification by your agent.
+
+⚠️ **Which actions you can sign today.** Your agent enforces a signature on all three
+privileged actions — `delete`, `reprovision` and `move` — but only two of them have a
+place to sign:
+
+| action | signable | how |
+|---|---|---|
+| `delete` | ✅ | the flow below — a cancellation puts the slot in `pending_delete` |
+| `move` | ✅ | as a `delete`: moving a rental queues a teardown of the source slot, and that is what appears in your queue |
+| `reprovision` | ❌ **not yet** | no signing surface exists; the job is refused with `owner authorization refused: missing owner authorization` |
+
+**Nobody can authorize a reprovision right now — not you, and not MoltenTech.** If a node
+needs one, see "When to contact Flux Hub admin" at the end of this step. A job-driven signing
+queue that covers all three is the next piece of work on this.
 
 **Your own Coalition console is the primary path**, and the only one that works without a
 MoltenTech login:
@@ -712,6 +726,21 @@ The Coalition holds **no keys** for this and never calls MT — it is a UI + sig
 courier. The manifest key (agent↔console auth) stays on the agent; the owner key stays
 in your wallet. Wrong-owner, expired, and replayed signatures are refused at both the
 console and the agent.
+
+### When to contact Flux Hub admin
+
+You own the hardware, so most problems are yours to fix on your own Proxmox. Two are not,
+and improvising on them will leave Flux Hub's view of the slot out of step with reality:
+
+- **A node needs reprovisioning.** The usual reason is a rented node that boots but whose
+  ArcaneOS data crypt did not come up — the VM keeps running, so nothing looks obviously
+  dead from the outside. As above, there is no way to authorize a reprovision yet. Do not
+  rebuild the VM by hand: Flux Hub's record of the slot would still describe the old one.
+  Report it to Flux Hub admin instead.
+- **A slot is stuck in `provisioning` or `pending_delete`** and signing does not clear it.
+
+Include the **VM name** (e.g. `mt-187-c4`), your **provider slug**, and roughly **when** it
+happened — that is enough to find the job.
 
 ---
 
