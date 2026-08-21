@@ -681,7 +681,7 @@ place to sign:
 | `reprovision` | ❌ **not yet** | no signing surface exists; the job is refused with `owner authorization refused: missing owner authorization` |
 
 **Nobody can authorize a reprovision right now — not you, and not MoltenTech.** If a node
-needs one, see "When to contact MoltenTech" at the end of this step. A job-driven signing
+needs one, see "When to contact Flux Hub admin" at the end of this step. A job-driven signing
 queue that covers all three is the next piece of work on this.
 
 **Your own Coalition console is the primary path**, and the only one that works without a
@@ -727,7 +727,7 @@ courier. The manifest key (agent↔console auth) stays on the agent; the owner k
 in your wallet. Wrong-owner, expired, and replayed signatures are refused at both the
 console and the agent.
 
-### When to contact MoltenTech
+### When to contact Flux Hub admin
 
 You own the hardware, so most problems are yours to fix on your own Proxmox. Two are not,
 and improvising on them will leave MoltenTech's view of the slot out of step with reality:
@@ -736,7 +736,7 @@ and improvising on them will leave MoltenTech's view of the slot out of step wit
   ArcaneOS data crypt did not come up — the VM keeps running, so nothing looks obviously
   dead from the outside. As above, there is no way to authorize a reprovision yet. Do not
   rebuild the VM by hand: MoltenTech's record of the slot would still describe the old one.
-  Report it and it will be handled operator-side.
+  Report it to Flux Hub admin instead.
 - **A slot is stuck in `provisioning` or `pending_delete`** and signing does not clear it.
 
 Include the **VM name** (e.g. `mt-187-c4`), your **provider slug**, and roughly **when** it
