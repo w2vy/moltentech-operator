@@ -730,12 +730,12 @@ console and the agent.
 ### When to contact Flux Hub admin
 
 You own the hardware, so most problems are yours to fix on your own Proxmox. Two are not,
-and improvising on them will leave MoltenTech's view of the slot out of step with reality:
+and improvising on them will leave Flux Hub's view of the slot out of step with reality:
 
 - **A node needs reprovisioning.** The usual reason is a rented node that boots but whose
   ArcaneOS data crypt did not come up — the VM keeps running, so nothing looks obviously
   dead from the outside. As above, there is no way to authorize a reprovision yet. Do not
-  rebuild the VM by hand: MoltenTech's record of the slot would still describe the old one.
+  rebuild the VM by hand: Flux Hub's record of the slot would still describe the old one.
   Report it to Flux Hub admin instead.
 - **A slot is stuck in `provisioning` or `pending_delete`** and signing does not clear it.
 
