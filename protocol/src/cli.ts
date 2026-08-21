@@ -44,6 +44,7 @@ import { probeStripeWiring } from "./stripe-wiring";
 import {
   generateAll,
   fillManifestPubkey,
+  needsMtPubkey,
   slotCountsByTier,
   validateAnswers,
   resolvedPrices,
@@ -155,12 +156,6 @@ async function askAnswers(minimums: Record<string, number> = TIER_FLOORS_CENTS):
     const which = await ask("MoltenTech environment — 1) production  2) staging", "1");
     const mtBaseUrl = which.startsWith("2") ? "https://staging.moltentech.us" : "https://www.moltentech.us";
 
-    // DERIVED, never asked: MT publishes its signing pubkey, so making the operator
-    // fetch and paste it only adds a step they can skip. Skipping it is a DELAYED
-    // failure — onboarding, the agent and provisioning all succeed without it and
-    // only checkout/manage breaks, long after the step that caused it.
-    const mtPubkey = await fetchMtPubkey(mtBaseUrl);
-
     const fluxAppName = await ask("Flux app name for your Coalition", suggestFluxAppName(providerSlug));
     console.log(`  → COALITION_URL will be ${coalitionUrlFor(fluxAppName)}`);
 
@@ -193,7 +188,7 @@ async function askAnswers(minimums: Record<string, number> = TIER_FLOORS_CENTS):
 
     // Prices in DOLLARS, then multiplied — which deletes the extra-zero class of bug
     // rather than validating against it.
-    const draft: Answers = { providerSlug, providerName, ownerAddress, mtBaseUrl, mtPubkey, fluxAppName, hosts };
+    const draft: Answers = { providerSlug, providerName, ownerAddress, mtBaseUrl, fluxAppName, hosts };
     const tierPricesCents: Record<string, number> = {};
     const tiers = [...new Set(hosts.flatMap((h) => h.slots.map((s) => s.tier)))].sort();
     console.log("");
@@ -328,6 +323,23 @@ async function main() {
 
       const problems = validateAnswers(answers, minimums);
       if (problems.length > 0) die(`answers are not usable:\n  - ${problems.join("\n  - ")}`);
+
+      // DERIVED, never asked: MT publishes its signing pubkey, so making the operator
+      // fetch and paste it only adds a step they can skip. Skipping it is a DELAYED
+      // failure — onboarding, the agent and provisioning all succeed without it and
+      // only checkout/manage breaks, long after the step that caused it.
+      //
+      // ⭐ This runs for BOTH paths on purpose. It used to live inside `askAnswers`, so
+      // `init --answers` — the path CI drives, and the one a second operator is most
+      // likely to use — silently wrote `MT_PUBKEY=` empty and shipped that delayed
+      // failure by default. One call site is the fix; two is how it broke.
+      //
+      // After validateAnswers, so `mtBaseUrl` is known to be a usable https URL before
+      // it is fetched: a garbage URL should produce the clear validation error, not a
+      // confusing network warning ahead of it.
+      if (needsMtPubkey(answers)) {
+        answers.mtPubkey = await fetchMtPubkey(answers.mtBaseUrl);
+      }
 
       // Usually absent (keygen comes after init), but an operator re-running `init`
       // after a typo already has the key — reuse it rather than re-emptying the slot.
