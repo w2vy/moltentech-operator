@@ -1,9 +1,34 @@
-# Flux Hub Operator Onboarding
+# Flux Hub Onboarding
 
-This is the runbook to join the Flux Hub marketplace as an **operator**: you host
-Flux nodes on your own Proxmox, customers rent them through Flux Hub (FH), and they
-**pay you directly** on your own Stripe account. FH never holds your Proxmox or Stripe
-credentials and never opens an inbound connection to you.
+This is the runbook to join Flux Hub: you run Flux nodes on your own Proxmox, and — if
+you choose to — customers rent them through Flux Hub (FH) and **pay you directly** on
+your own Stripe account. FH never holds your Proxmox or Stripe credentials and never
+opens an inbound connection to you.
+
+## Which are you?
+
+| | **Flux Hub Supporter** | **Flux Hub Operator** |
+|---|---|---|
+| Runs their own nodes | yes | yes |
+| Runs **Foundation nodes** on idle capacity | yes | yes |
+| Rents hardware out through the marketplace | no | yes |
+| Stripe account | **not needed** | required — you are merchant of record |
+
+A **Supporter** lends the capacity they are not using: Flux Hub places Foundation nodes
+on their spare slots, alongside their own. Nothing is listed for sale, so there is no
+price to set, no Stripe account to create, and three of the steps below do not apply.
+
+An **Operator** does all of that and also offers hardware for rent.
+
+`mt-manifest init` asks which you are as its first question, and the answer is published
+in your signed manifest (`PROVIDER_LEVEL`), so FH has an explicit answer rather than
+guessing from whether you happened to list a tier. You can change it later by re-signing
+and re-pasting your manifest — nothing else about you changes.
+
+> Steps marked **(Operator only)** can be skipped by a Supporter.
+
+Either way you can still *receive* nodes: a rental an admin **assigns** to you involves
+no payment method at all. Stripe is what lets strangers buy from you.
 
 > **Rewritten 2026-08-08 from the first from-zero onboarding ever performed.** The
 > previous revision documented a CLI ownership ceremony (`mt-manifest authorize` →
@@ -37,7 +62,7 @@ customer ─buy──▶ │ storefront → calls your Coalition /checkout → S
 Step 0  Proxmox: token, storage, ISO          ← on your Proxmox
 Step 1  keygen + config.env  ─────────────┐   ← on your agent host
 Step 2  /onboard: paste + wallet-sign      ├─▶ THREE KEYS, issued once
-Step 3  Stripe: restricted key + webhook  ─┘   (webhook needs your Coalition URL, which
+Step 3  Stripe (Operator only)  ──────────┘   (webhook needs your Coalition URL, which
 Step 4  Deploy the Coalition on Flux            you already chose in Step 1 — see below)
 Step 5  Declare inventory.json
 Step 6  Run the agent
@@ -362,7 +387,7 @@ Your provider now exists at FH in status `pending`. Step 7 activates it.
 
 ---
 
-## Step 3 — Stripe setup
+## Step 3 — Stripe setup *(Operator only)*
 
 1. Create a **restricted API key** (Stripe Dashboard → Developers → API keys →
    **Create restricted key**). This must be a *restricted* key (`rk_…`), **not** a

@@ -152,6 +152,19 @@ async function askAnswers(minimums: Record<string, number> = TIER_FLOORS_CENTS):
   try {
     console.log("mt-manifest init — this writes every onboarding file from your answers.\n");
 
+    // Asked FIRST because it decides which of the later questions exist at all. A
+    // Supporter is not a degenerate operator — it is the level most participants will
+    // hold, and it has no Stripe account to ask about, no prices to set, and nothing
+    // listed for sale.
+    console.log("Which are you?");
+    console.log("  1) Flux Hub Supporter — your own nodes, plus Foundation nodes on your idle");
+    console.log("     capacity. Nothing for sale, no Stripe account needed.");
+    console.log("  2) Flux Hub Operator  — the above, plus hardware rented out through the");
+    console.log("     marketplace. You are merchant of record on your own Stripe account.");
+    const levelAnswer = await ask("  choose 1 or 2", "2");
+    const level: "supporter" | "operator" = levelAnswer.startsWith("1") ? "supporter" : "operator";
+    console.log(`  → Flux Hub ${level === "supporter" ? "Supporter" : "Operator"}\n`);
+
     const providerSlug = await ask("Provider slug (lowercase, PERMANENT once ingested)");
     const providerName = await ask("Display name", providerSlug);
     const providerLocation = await ask("Location (shown on your marketplace card)", "");
@@ -256,9 +269,13 @@ async function askAnswers(minimums: Record<string, number> = TIER_FLOORS_CENTS):
 
     // Prices in DOLLARS, then multiplied — which deletes the extra-zero class of bug
     // rather than validating against it.
-    const draft: Answers = { providerSlug, providerName, ownerAddress, mtBaseUrl, fluxAppName, hosts };
+    const draft: Answers = { providerSlug, providerName, ownerAddress, mtBaseUrl, fluxAppName, hosts, level };
     const tierPricesCents: Record<string, number> = {};
-    const tiers = [...new Set(hosts.flatMap((h) => h.slots.map((s) => s.tier)))].sort();
+    // A Supporter lists nothing, so there is no price to ask for. Selling nothing is an
+    // EMPTY price list, never a tier priced at zero: FH enforces a per-tier minimum and
+    // 422s anything under it, so a 0 is not even expressible.
+    const tiers =
+      level === "supporter" ? [] : [...new Set(hosts.flatMap((h) => h.slots.map((s) => s.tier)))].sort();
     console.log("");
     for (const tier of tiers) {
       const floor = minimums[tier] ?? 0;
@@ -296,6 +313,7 @@ async function askAnswers(minimums: Record<string, number> = TIER_FLOORS_CENTS):
       ...draft,
       providerLocation: providerLocation || undefined,
       providerContact: providerContact || undefined,
+      selling: level === "operator",
       tierPricesCents,
       availableSlots,
       proxmoxUrl: proxmoxUrl || undefined,

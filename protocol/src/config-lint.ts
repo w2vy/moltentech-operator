@@ -534,10 +534,19 @@ export function lintCourier(operator: Record<string, string>, operatorFile: stri
   return found;
 }
 
-/** Report every empty slot in secrets.env as "not yet filled", naming its source. */
-function lintSkeletonSlots(entries: EnvEntry[], file: string): Finding[] {
+/**
+ * Report every empty slot in secrets.env as "not yet filled", naming its source.
+ *
+ * ⚠️ A Flux Hub SUPPORTER sells nothing and has no Stripe account, so an empty Stripe
+ * pair is not a pending step for them — it is the correct final state. `init` does not
+ * even write those lines for a supporter; this covers the hand-written file. Warning
+ * about something that will never be filled teaches the operator to skim the list, and
+ * the three warnings that DO matter are in that same list.
+ */
+function lintSkeletonSlots(entries: EnvEntry[], file: string, opts: { supporter?: boolean } = {}): Finding[] {
   return entries
     .filter((e) => e.value === "")
+    .filter((e) => !(opts.supporter && e.key.startsWith("STRIPE_")))
     .map((e) => ({
       rule: "NOT_YET_FILLED",
       severity: "warning" as const,
@@ -679,7 +688,11 @@ export function runDoctor(input: DoctorInput): DoctorReport {
     // naming the step that issues it: a fresh scaffold must not look broken.
     const secretEntries = parseEnvLines(input.secretsEnv);
     findings.push(...lintValueShape(secretEntries, "secrets.env"));
-    findings.push(...lintSkeletonSlots(secretEntries, "secrets.env"));
+    findings.push(
+      ...lintSkeletonSlots(secretEntries, "secrets.env", {
+        supporter: configRec.PROVIDER_LEVEL === "supporter",
+      })
+    );
   }
 
   let operatorRec: Record<string, string> = {};

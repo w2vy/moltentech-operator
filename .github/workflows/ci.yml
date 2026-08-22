@@ -323,7 +323,7 @@ jobs:
             "ownerAddress": "t1exampleOwnerWalletAddress",
             "mtBaseUrl": "https://www.moltentech.us",
             "fluxAppName": "coalition-ci-selfhost",
-            "selling": false,
+            "level": "supporter",
             "hosts": [{
               "name": "pve-01", "storageImages": "ssd", "storageIso": "iso-store",
               "slots": [{
@@ -338,6 +338,7 @@ jobs:
           run keygen
           run init --answers answers.json
           grep -q '^TIER_PRICES_JSON={}$' "$work/config.env" || { echo "expected an empty price list"; exit 1; }
+          grep -q '^PROVIDER_LEVEL=supporter$' "$work/config.env" || { echo "level did not reach config.env"; exit 1; }
           grep -q 'STRIPE' "$work/secrets.env" && { echo "Stripe leaked into a sell-nothing scaffold"; exit 1; }
           # Selling nothing is an EMPTY listing, not a zero-priced tier.
           grep -q '^AGENT_LISTING_JSON=\[\]$' "$work/.env.operator" || {
@@ -352,6 +353,7 @@ jobs:
           }
           sed -i 's/^AGENT_KEY=$/AGENT_KEY=ci-dummy/;s/^COALITION_KEY=$/COALITION_KEY=ci-dummy/' "$work/secrets.env"
           run sign --key manifest-key.pem --from-config config.env --out manifest.json
+          python3 -c "import json,sys; m=json.load(open('$work/manifest.json')); assert m['level']=='supporter', m.get('level'); print('manifest declares level=supporter')"
           run env --from-config config.env --secrets secrets.env \
                   --manifest manifest.json --out env.json
           echo "sell-nothing env.json built with no Stripe keys"

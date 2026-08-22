@@ -79,6 +79,20 @@ export interface Answers {
    */
   selling?: boolean;
   /**
+   * Which kind of participant this is (see `ProviderManifestBody.level`).
+   *
+   *   supporter — runs their own nodes, lends idle capacity for Foundation nodes,
+   *               sells nothing, needs no Stripe account
+   *   operator  — also rents hardware out through the marketplace
+   *
+   * `selling` is DERIVED from this when it is not stated, so the two cannot disagree.
+   * Kept separate rather than collapsed into one field because they answer different
+   * questions: `level` is what you signed up as and is published in the manifest;
+   * `selling` is whether this particular scaffold lists anything, which a supporter
+   * who later adds a tier can change without re-declaring who they are.
+   */
+  level?: "supporter" | "operator";
+  /**
    * Tier → how many slots to OFFER for sale. Defaults to every slot of that tier in
    * `hosts`, which is what an operator almost always means.
    *
@@ -210,7 +224,7 @@ export function tiersInUse(a: Answers): string[] {
 
 export function resolvedPrices(a: Answers): Record<string, number> {
   const out: Record<string, number> = {};
-  if (a.selling === false) return out;
+  if (!isSelling(a)) return out;
   for (const tier of tiersInUse(a)) {
     // An unknown tier has no floor to fall back on; validateAnswers rejects it, and
     // defaulting to 0 here would quietly produce an unlistable price.
@@ -250,6 +264,16 @@ export function resolvedListing(
   }));
 }
 
+/**
+ * Does this operator sell? Explicit `selling` wins; otherwise a Supporter sells nothing
+ * and everyone else does. One place, so the price list, the Stripe scaffolding and the
+ * doctor's warnings can never disagree about it.
+ */
+export function isSelling(a: Answers): boolean {
+  if (typeof a.selling === "boolean") return a.selling;
+  return a.level !== "supporter";
+}
+
 /** Whether anything is listed for sale — the gate for whether Stripe is needed.
  * Any listed tier is a paid tier, because every price must clear the platform floor. */
 export function hasPaidTier(prices: Record<string, number>): boolean {
@@ -269,7 +293,13 @@ export function renderConfigEnv(a: Answers): string {
   lines.push(
     `MT_BASE_URL=${a.mtBaseUrl}`,
     `COALITION_URL=${coalitionUrlFor(a.fluxAppName)}`,
-    `OWNER_ADDRESS=${a.ownerAddress}`
+    `OWNER_ADDRESS=${a.ownerAddress}`,
+    "",
+    "# PROVIDER_LEVEL — what you signed up as, published in your signed manifest.",
+    "#   supporter = your own nodes + Foundation nodes on idle capacity; nothing for sale",
+    "#   operator  = the above, plus hardware rented out through the marketplace",
+    "# A supporter needs no Stripe account at all.",
+    `PROVIDER_LEVEL=${a.level ?? (isSelling(a) ? "operator" : "supporter")}`
   );
   // ALWAYS emitted, even empty. An absent line is invisible: the operator has nothing
   // to notice and nothing to fill in, and the omission only surfaces at the first
