@@ -47,14 +47,20 @@ const ANSWERS = {
   ],
 };
 
+function runCli(dir: string, args: string[]): string {
+  return execFileSync(process.execPath, ["--import", "tsx", CLI, ...args], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+}
+
+// `init` now REQUIRES manifest-key.pem, so every run keygens first — which is the order
+// the runbook has always taught and the only one that fills MANIFEST_PUBKEY.
 function runInit(answers: Record<string, unknown>): { dir: string; stdout: string } {
   const dir = mkdtempSync(join(tmpdir(), "mt-init-pubkey-"));
   writeFileSync(join(dir, "answers.json"), JSON.stringify(answers));
-  const stdout = execFileSync(
-    process.execPath,
-    ["--import", "tsx", CLI, "init", "--out", dir, "--answers", join(dir, "answers.json")],
-    { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }
-  );
+  runCli(dir, ["keygen", "--out", dir]);
+  const stdout = runCli(dir, ["init", "--out", dir, "--answers", join(dir, "answers.json")]);
   return { dir, stdout };
 }
 

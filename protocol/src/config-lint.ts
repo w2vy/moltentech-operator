@@ -449,15 +449,24 @@ export function lintListing(
 /** Rule 8: the courier fails OPEN and SILENT — `courier=off` in one startup line and
  * nothing else, ever. No authorization request will reach the operator. */
 /** Which onboarding step issues each value, so "not yet filled" can say what to do. */
+/**
+ * Where each empty value comes from.
+ *
+ * ⚠️ `init` now FILLS MANIFEST_KEY (from the key it requires) and GENERATES
+ * SESSION_SECRET, and asks for the Proxmox pair. Seeing any of those four empty no
+ * longer means "a later step issues it" — it means the file predates that change or
+ * was hand-edited, so each says how to get it back rather than describing a step that
+ * no longer exists.
+ */
 const SUPPLIED_BY: Record<string, string> = {
-  MANIFEST_KEY: "`mt-manifest keygen`, then paste the base64 of manifest-key.pem",
+  MANIFEST_KEY: "`mt-manifest init`, from manifest-key.pem — re-run it, or paste `base64 -w0 manifest-key.pem`",
   OWNER_ADDRESS: "your wallet address — the one you sign with at /onboard",
   AGENT_KEY: "the /onboard web flow, after you sign",
   COALITION_KEY: "the /onboard web flow, after you sign",
-  SESSION_SECRET: "`openssl rand -hex 32`",
+  SESSION_SECRET: "`mt-manifest init` — any long random string, e.g. `openssl rand -hex 32`",
   STRIPE_SECRET_KEY: "the Stripe dashboard (Developers → API keys)",
   STRIPE_WEBHOOK_SECRET: "the Stripe dashboard, shown once when you create the endpoint",
-  PROXMOX_TOKEN_ID: "`pveum user token add` — the id, e.g. `mt-agent@pve!agent`",
+  PROXMOX_TOKEN_ID: "`pveum user token add` — the id, e.g. `fluxhub@pve!agent`",
   PROXMOX_TOKEN_SECRET: "`pveum user token add`, printed ONCE when the token is created",
 };
 

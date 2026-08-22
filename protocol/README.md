@@ -48,7 +48,9 @@ or Node — it's secret-free (your key is generated into the mounted workdir, ne
 baked in):
 
 ```sh
-alias mt-manifest='docker run --rm -v "$PWD:/work" -u "$(id -u):$(id -g)" ghcr.io/w2vy/mt-manifest'
+# A shell FUNCTION, not an alias: an alias does not expand as an argument to another
+# command. The -i is required — without stdin, `init` prints one prompt and exits at EOF.
+mt-manifest() { docker run --rm -i -v "$PWD:/work" -u "$(id -u):$(id -g)" ghcr.io/w2vy/mt-manifest "$@"; }
 mt-manifest keygen                                                       # -> manifest-key.pem (KEEP SECRET) + pubkey
 mt-manifest sign --key manifest-key.pem --from-config config.env --out manifest.json
 mt-manifest verify --in manifest.json

@@ -137,9 +137,18 @@ appears as an argument to another command, so wrapping it (in a script, a `time`
 capture harness, `sudo`, `watch`) fails with `command not found`.
 
 ```sh
-mt-manifest() { docker run --rm -v "$PWD:/work" -u "$(id -u):$(id -g)" ghcr.io/w2vy/mt-manifest "$@"; }
+mt-manifest() { docker run --rm -i -v "$PWD:/work" -u "$(id -u):$(id -g)" ghcr.io/w2vy/mt-manifest "$@"; }
 mt-manifest keygen             # writes manifest-key.pem (KEEP SECRET, 0600) + prints your pubkey
 ```
+
+⚠️ **The `-i` is load-bearing.** Without it the container gets no stdin, and `init` — the
+only subcommand that asks questions — prints its first prompt and exits at EOF, with no
+error. Every other subcommand works fine, so the tool looks half-broken rather than
+mis-invoked.
+
+**Run `keygen` before `init`, in that order.** `init` requires the key: it fills
+`MANIFEST_KEY` in both env files from it and pins `MANIFEST_PUBKEY`, and it refuses to
+run without it rather than writing files with three holes in them.
 
 Every `mt-manifest` command below reads and writes the **current directory** — run them
 all from the same folder.
@@ -170,9 +179,15 @@ If you are running nodes only for yourself, answer that you are **not selling**:
 scaffold then lists no tiers and skips Stripe entirely. You can still be given nodes —
 a rental an admin **assigns** to you involves no payment method at all. Stripe is what
 lets strangers buy from you.
-- `secrets.env` is written with every value **empty** and each comment on its own
-  line. Fill them in as later steps issue them; a comment after `=` becomes part of
-  the value, which is why the file is generated rather than described.
+- **`init` finishes what it can.** `MANIFEST_KEY` is derived from `manifest-key.pem`
+  and written to both files, `MANIFEST_PUBKEY` is pinned, `SESSION_SECRET` is generated,
+  and you are asked for the Proxmox token pair (Step 0.1 already printed it) and — if
+  you are selling — your Stripe keys.
+- So an empty value in the generated `secrets.env` means **another system has to issue
+  it**, not that a question was skipped. On a self-hoster's first run exactly three are
+  empty: `AGENT_KEY`, `COALITION_KEY`, `COALITION_SIGNING_KEY`, all minted by `/onboard`.
+  Each comment stays on its own line, because a comment after `=` becomes part of the
+  value — which is why the file is generated rather than described.
 
 Re-runnable and scriptable: `mt-manifest init --answers answers.json` takes the same
 answers as a file and runs the same generator, so you can fix one typo without
@@ -569,9 +584,17 @@ AGENT_LISTING_JSON='[{"tier":"nimbus","priceCents":2200,"availableSlots":8}]'
 it survives an env var. Encoding it twice gives the identical string; if it ever changes,
 your key changed, and that is a problem.
 
+**`mt-manifest init` already wrote it into both files**, so there is normally nothing to
+do here. To produce it by hand (an env file you maintain yourself, or a value you
+emptied):
+
 ```sh
 base64 -w0 manifest-key.pem       # paste the output as the literal value
 ```
+
+🔴 **If `MANIFEST_KEY` is empty, do NOT run `keygen` to "get it back".** `keygen` mints a
+NEW identity, and MT still holds the public half of the old one — every signature you
+then produce is rejected. The value comes from the key you already have.
 
 ⚠️ **`docker --env-file` performs no shell expansion.** Writing
 `MANIFEST_KEY=$(base64 -w0 manifest-key.pem)` into `.env.operator` stores and transmits
