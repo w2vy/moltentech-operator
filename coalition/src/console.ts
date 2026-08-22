@@ -177,10 +177,35 @@ export function handleAgentPending(cfg: CoalitionConfig, rawBody: Buffer, header
   const parsed = PendingAuthPush.safeParse(JSON.parse(rawBody.toString() || "{}"));
   if (!parsed.success) return json(400, { error: "Invalid pending payload" });
   pending.clear();
+  let collapsed = 0;
   for (const item of parsed.data.items) {
-    if (item.providerSlug === cfg.providerSlug) pending.set(item.slotId, item);
+    if (item.providerSlug !== cfg.providerSlug) continue;
+    // 🔴 FIRST wins, not last.
+    //
+    // MT sends its two populations in PRECEDENCE ORDER — cancel-driven deletes first, then
+    // outstanding requests — and documents that a cancellation OUTRANKS a request
+    // (`listPendingAuth`: "the customer's decision to stop paying beats an operational
+    // request"). `Map.set` keeps the LAST write, so a duplicate slotId did not merely collapse
+    // two items into one: it inverted that rule, presenting the operator a `reprovision` for a
+    // node the customer is cancelling and hiding the teardown they actually needed to sign.
+    //
+    // MT dedupes today, so this is a backstop against a hub-side regression — and it has to
+    // live here, because the collapse is structurally invisible from MT (the map just holds
+    // fewer entries; nothing errors) and invisible here too without the check (the count is
+    // whatever it is). The DB constraint cannot cover it: only one `awaiting_auth` row ever
+    // exists per slot, and the other population has no row at all.
+    if (pending.has(item.slotId)) {
+      collapsed++;
+      console.warn(
+        `[console] pending push carried TWO items for slot ${item.slotId} — kept ` +
+          `${pending.get(item.slotId)!.action}, DROPPED ${item.action}. MT must dedupe these; ` +
+          `see listPendingAuth's precedence note.`
+      );
+      continue;
+    }
+    pending.set(item.slotId, item);
   }
-  return json(200, { ok: true, pending: pending.size });
+  return json(200, { ok: true, pending: pending.size, ...(collapsed ? { collapsed } : {}) });
 }
 
 /** POST /agent/state — replace the dashboard's slot-state snapshot. */
