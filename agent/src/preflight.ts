@@ -12,52 +12,39 @@
  * Everything is read-only. No VM is created, nothing is written to Proxmox.
  */
 
-import https from "node:https";
 import { existsSync } from "node:fs";
 import { createPublicKey } from "node:crypto";
+import {
+  classifyRotational,
+  proxmoxGet as probeGet,
+  type DiskInfo,
+  type LvmNode,
+  type ProbeResult,
+  type ProbeStatus,
+  type ProxmoxCreds,
+} from "@moltentech/protocol/proxmox-probe";
 import type { AgentConfig } from "./config";
 
-const insecureAgent = new https.Agent({ rejectUnauthorized: false });
+// One implementation, two callers: `mt-manifest init` runs these same checks the moment
+// the operator types the token, five steps before the agent exists. Re-exported because
+// this module's consumers (and its tests) already import them from here.
+export { classifyRotational, type DiskInfo, type LvmNode };
 
-export type CheckStatus = "pass" | "fail" | "skip";
+export type CheckStatus = ProbeStatus;
+export type CheckResult = ProbeResult;
 
-export interface CheckResult {
-  name: string;
-  status: CheckStatus;
-  detail: string;
-}
-
-/** GET a Proxmox path, surfacing the status code — preflight needs to tell a 401
- * (bad token) apart from a 404 (wrong storage id) apart from a connection refusal. */
+/**
+ * GET a Proxmox path using the agent's config. The transport lives in `protocol`
+ * (`proxmox-probe`) so the scaffolder and the agent cannot drift on it; this is only
+ * the adapter from AgentConfig to the credentials that module takes.
+ */
 export function proxmoxGet<T>(cfg: AgentConfig, path: string): Promise<T> {
-  return new Promise((resolve, reject) => {
-    const url = new URL(`${cfg.proxmox.url}${path}`);
-    const req = https.request(
-      url,
-      {
-        method: "GET",
-        agent: insecureAgent,
-        headers: { Authorization: `PVEAPIToken=${cfg.proxmox.tokenId}=${cfg.proxmox.tokenSecret}` },
-      },
-      (res) => {
-        let data = "";
-        res.on("data", (c) => (data += c));
-        res.on("end", () => {
-          if (res.statusCode && res.statusCode >= 400) {
-            return reject(new Error(`HTTP ${res.statusCode}`));
-          }
-          try {
-            resolve((JSON.parse(data).data ?? []) as T);
-          } catch (e) {
-            reject(e as Error);
-          }
-        });
-      }
-    );
-    req.on("error", (e) => reject(e));
-    req.setTimeout(10_000, () => req.destroy(new Error("timed out after 10s")));
-    req.end();
-  });
+  const creds: ProxmoxCreds = {
+    url: cfg.proxmox.url ?? "",
+    tokenId: cfg.proxmox.tokenId ?? "",
+    tokenSecret: cfg.proxmox.tokenSecret ?? "",
+  };
+  return probeGet<T>(creds, path);
 }
 
 interface StorageStatus {
@@ -69,78 +56,6 @@ interface StorageStatus {
 
 interface StorageContent {
   volid?: string;
-}
-
-export interface LvmNode {
-  name?: string;
-  children?: LvmNode[];
-}
-
-export interface DiskInfo {
-  devpath?: string;
-  type?: string;
-  /** ⚠️ Proxmox returns this as a STRING for spinning disks ("5400") and the number 0
-   * for solid state. Coerce before comparing, or every HDD reads as 0 rpm. */
-  rpm?: number | string;
-}
-
-/**
- * Resolve a storage id to its physical media and decide whether it spins.
- *
- * `DOC_DEFAULT_STORAGE_IS_HDD` is the worst failure in the onboarding set: silent,
- * costs a full provision plus benchmark cycle, and reports no cause. Proxmox does not
- * expose rotational-ness on the storage object, so this walks the real chain:
- *
- *   storage id ──vgname──▶ LVM volume group ──children──▶ /dev/sdaN ──▶ disk rpm/type
- *
- * Verified against pve30, the host that proved the failure: `ssd` → VG `ssd` →
- * /dev/sdb (WD Blue SSD, rpm 0) and `local-lvm` → VG `pve` → /dev/sda3 → /dev/sda
- * (WD Red, rpm 5400). Returns null only when the chain genuinely cannot be followed —
- * an honest "cannot tell" beats a confident wrong answer here.
- */
-export function classifyRotational(
-  disks: DiskInfo[],
-  storageName: string,
-  vgname?: string,
-  lvmTree?: LvmNode
-): { rotational: boolean | null; why: string } {
-  const spins = (d: DiskInfo): boolean => Number(d.rpm ?? 0) > 0 || d.type === "hdd";
-
-  // Preferred path: follow vgname through the LVM tree to the actual PVs.
-  const vg = vgname
-    ? (lvmTree?.children ?? []).find((c) => c.name === vgname)
-    : undefined;
-  if (vg) {
-    const pvPaths = (vg.children ?? []).map((c) => c.name ?? "").filter(Boolean);
-    // A PV is a PARTITION (/dev/sda3); the disk list reports whole devices (/dev/sda).
-    const backing = disks.filter((d) => pvPaths.some((pv) => pv.startsWith(d.devpath ?? "\u0000")));
-    if (backing.length > 0) {
-      const spinning = backing.filter(spins);
-      if (spinning.length > 0) {
-        return {
-          rotational: true,
-          why: `${storageName} → VG ${vgname} → ${spinning.map((d) => d.devpath).join(", ")} (rotational)`,
-        };
-      }
-      return {
-        rotational: false,
-        why: `${storageName} → VG ${vgname} → ${backing.map((d) => d.devpath).join(", ")} (solid state)`,
-      };
-    }
-  }
-
-  // Fallback: no VG mapping available (dir/zfs storage, or an API that did not answer).
-  const spinning = disks.filter(spins);
-  if (spinning.length === 0) return { rotational: false, why: "no rotational devices reported on this node" };
-  const named = spinning.find((d) => (d.devpath ?? "").includes(storageName));
-  if (named) return { rotational: true, why: `${storageName} matches spinning device ${named.devpath}` };
-  if (disks.length > 0 && spinning.length === disks.length) {
-    return { rotational: true, why: "every device on this node is rotational" };
-  }
-  return {
-    rotational: null,
-    why: `node has both spinning and solid-state devices; could not resolve "${storageName}" to one of them`,
-  };
 }
 
 /** MANIFEST_KEY must decode to a PEM whose public half is what MT pinned. This one

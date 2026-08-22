@@ -98,6 +98,10 @@ export interface Answers {
    * split is what shipped `MT_PUBKEY=` empty for every scripted onboarding
    * (operator#54); it is not repeated here.
    */
+  /** Base URL of the Proxmox API, e.g. `https://192.168.1.10:8006`. An IP beats a
+   * hostname: `mt-manifest` and the agent both run in containers, which resolve names
+   * themselves and often cannot see the LAN's DNS. */
+  proxmoxUrl?: string;
   proxmoxTokenId?: string;
   proxmoxTokenSecret?: string;
   /** Stripe restricted key + webhook signing secret. Only ever asked of an operator
@@ -629,6 +633,7 @@ export function generateAll(
     ".env.operator": renderEnvOperator(a, {
       manifestPubkey: opts.manifestPubkey,
       manifestKey: opts.manifestKey,
+      url: a.proxmoxUrl,
       tokenId: a.proxmoxTokenId,
       tokenSecret: a.proxmoxTokenSecret,
     }),

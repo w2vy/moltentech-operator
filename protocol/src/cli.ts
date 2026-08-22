@@ -11,9 +11,12 @@
  *                                       ~8 questions -> config.env, secrets.env (skeleton),
  *                                       .env.operator, inventory.json and the Flux app spec.
  *                                       --answers runs the SAME generator non-interactively.
- *   doctor [--dir <dir>]                check that the generated files agree with each other
- *                                       (file-level only; the credential checks live in
- *                                        `mt-agent doctor`, where the credentials are)
+ *   doctor [--dir <dir>] [--check-stripe] [--check-proxmox]
+ *                                       check that the generated files agree with each other.
+ *                                       File-level and offline unless a --check-* flag asks
+ *                                       otherwise: --check-stripe proves the webhook is on
+ *                                       YOUR account, --check-proxmox proves the token works
+ *                                       and the image storage does not spin. Both read-only.
  *   sign   --key <pem> (--from-config <config.env> | --in <body.json>) [--out <manifest.json>]
  *                                       render body (from config.env) or read body.json,
  *                                       fill pubkey + publishedAt, sign, emit full manifest
@@ -42,6 +45,13 @@ import { ProviderManifest, ProviderManifestBody, manifestOwnerMessage, unwrapMan
 import { renderManifestBodyFromConfig, parseConfigEnv } from "./manifest-config";
 import { runDoctor, formatReport, fetchTierMinimums, TIER_FLOORS_CENTS } from "./config-lint";
 import { probeStripeWiring } from "./stripe-wiring";
+import {
+  probeProxmox,
+  formatProbe,
+  ssdImageStorages,
+  isoStorages,
+  type ProxmoxSurvey,
+} from "./proxmox-probe";
 import {
   generateAll,
   fillManifestPubkey,
@@ -168,21 +178,67 @@ async function askAnswers(minimums: Record<string, number> = TIER_FLOORS_CENTS):
     // later meant the agent could not make a single Proxmox call until the operator
     // hand-edited .env.operator. Asked, not derived — init holds no cluster to ask.
     console.log("\nProxmox API token (from `pveum user token add` in Step 0.1):");
+    const proxmoxUrl = await ask("  Proxmox URL (an IP is safest — this runs inside a container)", "https://192.168.1.10:8006");
     const proxmoxTokenId = await ask("  token id, e.g. fluxhub@pve!agent");
     const proxmoxTokenSecret = await ask("  token secret (printed once when you created it)");
 
+    // ⭐ Proved HERE, not five steps later in `mt-agent doctor`. A mistyped secret, a
+    // path-scoped token, a URL the container cannot resolve — all of them used to
+    // surface long after the step that caused them, in a different tool.
+    //
+    // Never fatal: this is a scaffolder, and an operator whose hypervisor is behind a
+    // VPN or momentarily down must still be able to generate their files.
+    let survey: ProxmoxSurvey | undefined;
+    if (proxmoxUrl && proxmoxTokenId && proxmoxTokenSecret) {
+      const probe = await probeProxmox({
+        url: proxmoxUrl,
+        tokenId: proxmoxTokenId,
+        tokenSecret: proxmoxTokenSecret,
+      });
+      console.log(formatProbe(probe.checks));
+      survey = probe.survey;
+      if (!probe.ok) {
+        console.log("  → continuing anyway; fix the above, then re-run `mt-manifest doctor --check-proxmox`.");
+      }
+    }
+
     const hosts: HostAnswer[] = [];
-    const hostNames = (await ask("Proxmox host name(s), comma-separated"))
+    // Defaulted to what the cluster actually reports, so the names cannot be mistyped
+    // and an operator who forgot a node sees it listed.
+    const hostNames = (await ask("Proxmox host name(s), comma-separated", survey?.nodes.join(",")))
       .split(",")
       .map((s) => s.trim())
       .filter(Boolean);
     for (const name of hostNames) {
       console.log(`\n— host ${name} —`);
-      // The highest-value question in the list: a spinning-disk default wastes an
-      // entire provision + benchmark cycle and reports no cause. `mt-agent doctor`
-      // is what actually proves ROTA=0; here we just make it a deliberate answer.
-      const storageImages = await ask(`  storage pool for VM images on ${name} (must NOT be a spinning disk)`);
-      const storageIso = await ask(`  storage holding the ArcaneOS ISO on ${name}`, "pve55-shared");
+      // The highest-value question in the list: a spinning-disk default wastes an entire
+      // provision + benchmark cycle and reports NO cause. When the probe answered, the
+      // safe options are printed and the default is one of them — the operator has to go
+      // out of their way to pick a spinning disk instead of having to know not to.
+      const options = survey?.storages[name] ?? [];
+      const ssd = ssdImageStorages(options);
+      const iso = isoStorages(options);
+      if (options.length > 0) {
+        console.log(
+          `  storages on ${name}: ` +
+            options
+              .map((o) => `${o.id}(${o.rotational === true ? "HDD" : o.rotational === false ? "SSD" : "?"})`)
+              .join(" ")
+        );
+        if (ssd.length === 0) {
+          console.log("  ⚠ no storage on this host resolved to solid state — check the answer you give below.");
+        }
+      }
+      const storageImages = await ask(
+        `  storage pool for VM images on ${name} (must NOT be a spinning disk)`,
+        ssd[0]?.id
+      );
+      const chosen = options.find((o) => o.id === storageImages);
+      if (chosen?.rotational === true) {
+        console.log(`  ⚠ ${storageImages} is ROTATIONAL: ${chosen.why}`);
+        console.log("    Nodes on it provision fine and then fail every benchmark, with no visible cause.");
+      }
+      const storageIso = await ask(`  storage holding the ArcaneOS ISO on ${name}`, iso[0]?.id ?? "pve55-shared");
       const slots: SlotAnswer[] = [];
       const count = Number(await ask(`  how many slots on ${name}?`, "1"));
       for (let i = 0; i < count; i++) {
@@ -242,6 +298,7 @@ async function askAnswers(minimums: Record<string, number> = TIER_FLOORS_CENTS):
       providerContact: providerContact || undefined,
       tierPricesCents,
       availableSlots,
+      proxmoxUrl: proxmoxUrl || undefined,
       proxmoxTokenId: proxmoxTokenId || undefined,
       proxmoxTokenSecret: proxmoxTokenSecret || undefined,
       stripeSecretKey: stripeSecretKey || undefined,
@@ -437,9 +494,11 @@ async function main() {
       break;
     }
     case "doctor": {
-      // The runbook's "which value must match where" table, executed. File-level
-      // only: no network, no secrets held, no Proxmox credentials. The checks that
-      // need credentials live in `mt-agent doctor`, where they already exist.
+      // The runbook's "which value must match where" table, executed. File-level by
+      // DEFAULT: no network, no secrets held. Two opt-in flags cross that line on
+      // purpose — `--check-stripe` and `--check-proxmox` — because the two failures
+      // that cost the most (wrong Stripe account, spinning storage) are invisible to
+      // any amount of file comparison. Without a flag, nothing here leaves the disk.
       const dir = flag(args, "--dir") ?? ".";
       const read = (f: string): string | undefined => {
         const p = join(dir, f);
@@ -481,6 +540,52 @@ async function main() {
             ...(await probeStripeWiring({ stripeSecretKey, coalitionUrl, mtBaseUrl }))
           );
           report.filesChecked.push("stripe (live)");
+        }
+      }
+      // Same opt-in bargain as --check-stripe: file-level doctor stays credential-free
+      // and offline, and this flag is how you ask for the one thing no file can answer —
+      // whether the token in .env.operator actually works, and whether the storage it
+      // names spins. `init` runs these at the moment the token is typed; this is for
+      // re-runs, and for an operator who filled the files in by hand.
+      if (args.includes("--check-proxmox")) {
+        const operatorText = read(".env.operator");
+        const operator = operatorText ? parseConfigEnv(operatorText) : {};
+        const url = operator.PROXMOX_URL;
+        const tokenId = operator.PROXMOX_TOKEN_ID;
+        const tokenSecret = operator.PROXMOX_TOKEN_SECRET;
+        if (!url || !tokenId || !tokenSecret) {
+          console.log("--check-proxmox: .env.operator is missing PROXMOX_URL / _TOKEN_ID / _TOKEN_SECRET — skipped.\n");
+        } else {
+          const probe = await probeProxmox({ url, tokenId, tokenSecret });
+          console.log(`proxmox (live) — ${url}`);
+          console.log(formatProbe(probe.checks) + "\n");
+          for (const check of probe.checks) {
+            if (check.status !== "fail") continue;
+            report.findings.push({
+              severity: "error",
+              rule: "PROXMOX_CHECK_FAILED",
+              file: ".env.operator",
+              message: `${check.name}: ${check.detail}`,
+            });
+          }
+          // The storage the operator actually configured, judged. This is the check that
+          // exists because a `local-lvm` default on a WD Red provisions fine and then
+          // fails every benchmark with nothing in any log to say why.
+          const images = operator.PROXMOX_STORAGE_IMAGES;
+          for (const [node, options] of Object.entries(probe.survey?.storages ?? {})) {
+            const chosen = options.find((o) => o.id === images);
+            if (chosen?.rotational === true) {
+              report.findings.push({
+                severity: "error",
+                rule: "DOC_DEFAULT_STORAGE_IS_HDD",
+                file: ".env.operator",
+                message:
+                  `PROXMOX_STORAGE_IMAGES="${images}" is ROTATIONAL on ${node} (${chosen.why}) — ` +
+                  `nodes provision fine and then fail every benchmark, with no visible cause.`,
+              });
+            }
+          }
+          report.filesChecked.push("proxmox (live)");
         }
       }
       const { text, ok } = formatReport(report);

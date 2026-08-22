@@ -94,7 +94,8 @@ pveum user token add fluxhub@pve agent --privsep 0     # prints the secret ONCE
 `--privsep 0` makes the token inherit the user's privileges; with privilege separation
 on you must grant the ACL to the *token* as well. Copy the secret immediately — Proxmox
 never shows it again. The token ID is `fluxhub@pve!agent`; `mt-manifest init` asks for it
-and its secret, so keep both to hand.
+and its secret, so keep both to hand — and **proves them on the spot**, so a mistyped
+secret or a token that cannot allocate is caught here rather than five steps later.
 
 ⚠️ **Already onboarded under the old names? Keep them.** Operators set up before this
 rename have a `MoltenTechAgent` role and a `moltentech@pve!agent` token. That token id is
@@ -216,13 +217,35 @@ Reads whichever of the files exist and reports anything that disagrees — value
 differ between two files, an inventory host missing from `HOSTS`, a `lanIp` with no
 `/NN`, a `$(…)` that will ship literally, a trailing comment swallowed into a value, a
 secret sitting in a non-secret file, a price under the platform floor, or a courier
-that will start silently disabled. It holds no credentials and touches no network.
+that will start silently disabled. By default it holds no credentials and touches no
+network.
 
 Empty values in a fresh `secrets.env` are reported as **not yet filled**, naming the
-step that issues each one — that is expected on first run, not an error.
+step that issues each one — that is expected on first run, not an error. After `init`
+there should be exactly three of them (five if you are selling and have not created the
+Stripe endpoint yet); anything else is worth looking at.
 
-⚠️ `doctor` checks that your FILES agree. The checks that need your Proxmox token —
-including whether your storage pool is a spinning disk — run in the agent image as
+Two opt-in flags cross the file boundary deliberately, because the two costliest
+failures are invisible to any amount of file comparison. Both are read-only:
+
+```sh
+mt-manifest doctor --check-proxmox   # the token really works; your image storage really is an SSD
+mt-manifest doctor --check-stripe    # the webhook endpoint is on YOUR Stripe account
+```
+
+`--check-proxmox` connects with the credentials in `.env.operator`, proves the token,
+checks the role holds the privileges the agent uses on every provision — naming any that
+are missing, with the `pveum role modify` line that adds them — and resolves
+`PROXMOX_STORAGE_IMAGES` through LVM to the physical device to see whether it spins.
+`init` runs these same checks the moment you type the token; this is for re-runs and for
+files you filled in by hand.
+
+⚠️ **Prefer an IP address in `PROXMOX_URL`.** `mt-manifest` runs in a container, so a
+hostname is resolved by the *container*, not by your shell — `pve30` can work at your
+prompt and fail inside. The probe tells those apart rather than blaming your token.
+
+⚠️ The deeper agent-side checks (CA trust store, the ISO actually present in the ISO
+storage, `MANIFEST_KEY` matching the pinned pubkey) still run in the agent image as
 `mt-agent doctor` (Step 6).
 
 ⚠️ **`keygen` is a once-ever act.** `manifest-key.pem` *is* your provider identity: FH
