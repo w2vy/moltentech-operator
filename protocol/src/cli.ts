@@ -158,7 +158,7 @@ async function askAnswers(minimums: Record<string, number> = TIER_FLOORS_CENTS):
 
     // Offered as a choice, never free text by default: free-typing this is what put
     // half a deployment on staging and half on prod.
-    const which = await ask("MoltenTech environment — 1) production  2) staging", "1");
+    const which = await ask("Flux Hub environment — 1) production  2) staging", "1");
     const mtBaseUrl = which.startsWith("2") ? "https://staging.moltentech.us" : "https://www.moltentech.us";
 
     const fluxAppName = await ask("Flux app name for your Coalition", suggestFluxAppName(providerSlug));
@@ -231,7 +231,7 @@ async function askAnswers(minimums: Record<string, number> = TIER_FLOORS_CENTS):
     let stripeSecretKey = "";
     let stripeWebhookSecret = "";
     if (Object.values(tierPricesCents).some((c) => c > 0)) {
-      console.log("\nStripe — you are merchant of record; MT never holds these.");
+      console.log("\nStripe — you are merchant of record; Flux Hub never holds these.");
       stripeSecretKey = await ask("  restricted secret key (rk_… / sk_…), blank to fill in later", "");
       stripeWebhookSecret = await ask("  webhook signing secret (whsec_…), blank if the endpoint does not exist yet", "");
     }
@@ -331,7 +331,7 @@ async function main() {
         process.env.MT_BASE_URL ?? "https://www.moltentech.us"
       );
       if (!liveMinimums) {
-        console.error("note: could not reach MT for live tier minimums — using this tool's bundled copy.");
+        console.error("note: could not reach Flux Hub for live tier minimums — using this tool's bundled copy.");
       }
       const minimums = liveMinimums ?? TIER_FLOORS_CENTS;
 

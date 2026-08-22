@@ -428,7 +428,7 @@ export function lintListing(
         file,
         message:
           `AGENT_LISTING_JSON: ${tier} needs availableSlots — how many to OFFER. ` +
-          "MT clamps it to your live available slots, so it cannot oversell.",
+          "Flux Hub clamps it to your live available slots, so it cannot oversell.",
       });
     }
     const configured = prices[tier];
@@ -439,7 +439,7 @@ export function lintListing(
         file,
         message:
           `${tier} is ${entry.priceCents} in AGENT_LISTING_JSON but ${configured} in ` +
-          "config.env's TIER_PRICES_JSON — MT and your Coalition would quote different prices.",
+          "config.env's TIER_PRICES_JSON — Flux Hub and your Coalition would quote different prices.",
       });
     }
   }
@@ -729,7 +729,7 @@ export function formatReport(report: DoctorReport): { text: string; ok: boolean 
   );
   if (report.minimumsSource === "bundled") {
     lines.push(
-      "note: could not reach MT for live tier minimums; price rules used this tool's " +
+      "note: could not reach Flux Hub for live tier minimums; price rules used this tool's " +
         "bundled copy, which may be out of date."
     );
   }

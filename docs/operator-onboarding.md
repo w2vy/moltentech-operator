@@ -1,8 +1,8 @@
-# MoltenTech Operator Onboarding
+# Flux Hub Operator Onboarding
 
-This is the runbook to join the MoltenTech marketplace as an **operator**: you host
-Flux nodes on your own Proxmox, customers rent them through MoltenTech (MT), and they
-**pay you directly** on your own Stripe account. MT never holds your Proxmox or Stripe
+This is the runbook to join the Flux Hub marketplace as an **operator**: you host
+Flux nodes on your own Proxmox, customers rent them through Flux Hub (FH), and they
+**pay you directly** on your own Stripe account. FH never holds your Proxmox or Stripe
 credentials and never opens an inbound connection to you.
 
 > **Rewritten 2026-08-08 from the first from-zero onboarding ever performed.** The
@@ -20,14 +20,14 @@ Two small components (both in the `moltentech-operator` repo):
 | Component | Where it runs | Direction | Holds |
 |---|---|---|---|
 | **Agent** | on/beside your Proxmox (Docker + LAN reach to `:8006`) | **outbound only** | your Proxmox API token + your manifest key |
-| **Coalition** | on Flux (ArcaneOS) | **inbound** (manifest/stats/payments) | your restricted Stripe key + webhook secret |
+| **Coalition** | on the Flux Network (RunOnFlux.com) | **inbound** (manifest/stats/payments) | your restricted Stripe key + webhook secret |
 
 ```
-                 ┌────────────── MoltenTech (the only inbound-facing side) ──────────────┐
-customer ─buy──▶ │ storefront → calls your Coalition /checkout → Stripe session           │
-                 │ Stripe webhook → your Coalition → relays to MT /api/agent/payment       │
-                 │ MT enqueues a job ──▶ your AGENT pulls it ──▶ provisions YOUR Proxmox   │
-                 │ MT pulls your Coalition /stats + /.well-known/mt-provider.json           │
+                 ┌─────────────── Flux Hub (the only inbound-facing side) ───────────────┐
+customer ─buy──▶ │ storefront → calls your Coalition /checkout → Stripe session          │
+                 │ Stripe webhook → your Coalition → relays to FH /api/agent/payment     │
+                 │ FH enqueues a job ──▶ your AGENT pulls it ──▶ provisions YOUR Proxmox │
+                 │ FH pulls your Coalition /stats + /.well-known/mt-provider.json        │
                  └───────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -41,7 +41,7 @@ Step 3  Stripe: restricted key + webhook  ─┘   (webhook needs your Coalition
 Step 4  Deploy the Coalition on Flux            you already chose in Step 1 — see below)
 Step 5  Declare inventory.json
 Step 6  Run the agent
-Step 7  MT activates you → you are live
+Step 7  FH activates you → you are live
 ```
 
 The one ordering constraint that used to be circular: **your Coalition URL is
@@ -52,8 +52,8 @@ app exists.
 
 ## Prerequisites
 
-- **Proxmox** host(s) with an API **token** (not the root password) and the ArcaneOS ISO
-  in a shared ISO storage. Step 0 creates the token.
+- **Proxmox** host(s) with an API **token** (not the root password) and an ISO storage
+  every host can read. Step 0 creates the token; the agent stages the ISO for you.
 - A trusted, always-on host with **Docker** and LAN line-of-sight to Proxmox `:8006`
   and outbound 443 (a sidecar VM/LXC is the clean default). The agent image bundles
   Node + Python + `arcane-mage`, so nothing else is needed on that host.
@@ -64,7 +64,7 @@ app exists.
   `OWNER_ADDRESS`. This wallet signs onboarding and every privileged node action
   forever after — use one you will still control in a year.
 - Public reachability for your Coalition URL (Flux provides it) and your nodes' public
-  `apiPort`s, so MT can pull stats from outside your LAN.
+  `apiPort`s, so FH can pull stats from outside your LAN.
 
 ---
 
@@ -80,23 +80,30 @@ cluster, understand that this token can allocate VMs on any node in it.
 
 ```sh
 # On a Proxmox node, as root:
-pveum role add MoltenTechAgent -privs \
+pveum role add FluxHubAgent -privs \
   "VM.Allocate,VM.Clone,VM.Audit,VM.Config.CDROM,VM.Config.CPU,VM.Config.Disk,\
 VM.Config.HWType,VM.Config.Memory,VM.Config.Network,VM.Config.Options,\
 VM.Console,VM.Monitor,VM.PowerMgmt,\
 Datastore.Allocate,Datastore.AllocateSpace,Datastore.AllocateTemplate,Datastore.Audit,\
 Sys.Audit"
-pveum user add moltentech@pve
-pveum acl modify / --users moltentech@pve --roles MoltenTechAgent
-pveum user token add moltentech@pve agent --privsep 0     # prints the secret ONCE
+pveum user add fluxhub@pve
+pveum acl modify / --users fluxhub@pve --roles FluxHubAgent
+pveum user token add fluxhub@pve agent --privsep 0     # prints the secret ONCE
 ```
 
 `--privsep 0` makes the token inherit the user's privileges; with privilege separation
 on you must grant the ACL to the *token* as well. Copy the secret immediately — Proxmox
-never shows it again. The token ID is `moltentech@pve!agent`.
+never shows it again. The token ID is `fluxhub@pve!agent`; `mt-manifest init` asks for it
+and its secret, so keep both to hand.
+
+⚠️ **Already onboarded under the old names? Keep them.** Operators set up before this
+rename have a `MoltenTechAgent` role and a `moltentech@pve!agent` token. That token id is
+baked into the `PROXMOX_TOKEN_ID` your agent authenticates with — it is a credential, not
+a label. Renaming it breaks every Proxmox call the agent makes; there is nothing to gain
+by changing it.
 
 If a provision later fails with a 403 naming a privilege, add it to the role
-(`pveum role modify MoltenTechAgent -privs "…"`) rather than escalating to `PVEAdmin`.
+(`pveum role modify FluxHubAgent -privs "…"`) rather than escalating to `PVEAdmin`.
 
 ### 0.2 Pick the right storage — this one fails silently
 
@@ -117,12 +124,18 @@ into `.env.operator` in Step 6.
 ⚠️ **`PROXMOX_STORAGE_IMAGES` wants a storage *ID*, not a volume group name.** If
 `pvesm status` lists `ssd`, the value is `ssd` — not the underlying VG.
 
-### 0.3 Stage the ArcaneOS ISO
+### 0.3 Choose an ISO storage — you do not download the ISO
 
-Put the ArcaneOS/FluxLive ISO in an ISO storage every attested host can read (a shared
-NFS/CIFS storage if you have more than one host). Note its storage ID and filename;
-they become `PROXMOX_STORAGE_ISO` / `ARCANE_ISO`. Once you declare inventory (Step 5)
-the agent keeps the ISO current automatically.
+Pick an ISO storage every attested host can read (a shared NFS/CIFS storage if you have
+more than one host) and note its **storage ID**; it becomes `PROXMOX_STORAGE_ISO`. That
+is the whole step: the agent downloads the ArcaneOS/FluxLive ISO itself, checksum-verifies
+it, uploads it to that storage on every declared host at startup and every 6h, and adopts
+the new name into `ARCANE_ISO` in-process (Step 5's *ISO auto-refresh*).
+
+⚠️ The auto-staging is scoped to **declared inventory**. Skip Step 5 and the agent has no
+record of your node names: `ARCANE_ISO` then stays whatever you set by hand, and a
+provision against a stale build fails outright. If you are staging an ISO manually for
+that reason, note its filename too.
 
 ---
 
@@ -173,7 +186,7 @@ than merely being checked for:
 - `HOSTS` and the host names in `inventory.json` come from the same answer, so the
   unattested-host rejection cannot happen.
 - Prices are asked in **dollars** and converted, so an extra zero cannot slip in.
-  Each tier has a minimum MT will accept; `init` defaults to it and refuses less.
+  Each tier has a minimum FH will accept; `init` defaults to it and refuses less.
 
 If you are running nodes only for yourself, answer that you are **not selling**: the
 scaffold then lists no tiers and skips Stripe entirely. You can still be given nodes —
@@ -212,7 +225,7 @@ step that issues each one — that is expected on first run, not an error.
 including whether your storage pool is a spinning disk — run in the agent image as
 `mt-agent doctor` (Step 6).
 
-⚠️ **`keygen` is a once-ever act.** `manifest-key.pem` *is* your provider identity: MT
+⚠️ **`keygen` is a once-ever act.** `manifest-key.pem` *is* your provider identity: FH
 pins its public half as `Provider.manifestPubkey` at onboarding, and re-running `keygen`
 silently overwrites it, after which every signature you produce is rejected. Back it up
 before you go further. Recovery is possible — re-paste a manifest signed with the new
@@ -224,7 +237,7 @@ the signed manifest and the Coalition's runtime config, so the two can never dri
 
 > ⚠️ **Comments must be on their own line.** The parser only strips *full-line* `#`
 > comments; a trailing `KEY=value   # note` keeps `value   # note` as the value. A
-> stray inline comment on `COALITION_URL` breaks MT's ability to reach your Coalition.
+> stray inline comment on `COALITION_URL` breaks FH's ability to reach your Coalition.
 
 ```sh
 PROVIDER_SLUG=your-slug
@@ -243,26 +256,26 @@ COALITION_URL=https://<your-coalition>
 # will sign with at /onboard.
 OWNER_ADDRESS=<the wallet address you sign with>
 # MT_PUBKEY — FILL THIS IN. Fetch it now: curl {MT_BASE_URL}/api/mt-pubkey
-# Only the Coalition consumes it, to verify MT's inbound calls are really from MT.
+# Only the Coalition consumes it, to verify FH's inbound calls are really from FH.
 #
 # ⚠️ Leaving it blank is a DELAYED failure, not a deferred decision. Onboarding, the
 # agent and node provisioning all work without it; what breaks later is the
 # checkout/manage leg, and it breaks quietly — so the symptom shows up long after the
 # step that caused it.
 #
-# ⚠️ It is PER-MT. Each MoltenTech instance has its own signing key, so a Coalition
+# ⚠️ It is PER-FH. Each Flux Hub instance has its own signing key, so a Coalition
 # moved between instances (e.g. staging -> production) needs MT_PUBKEY changed as well
 # as MT_BASE_URL; repointing the URL alone leaves it pinned to the old instance's key.
 # Neither field is in the signed manifest, so changing both needs NO re-sign — edit
 # config.env, re-run `mt-manifest env`, re-import.
-MT_PUBKEY=<your MT pubkey>
+MT_PUBKEY=<your FH pubkey>
 # HOSTS — the Proxmox hosts you attest, as a comma-separated list of ProxmoxHost.name.
-# This is the owner-signed hardware list: MT rejects any inventory host not named here,
+# This is the owner-signed hardware list: FH rejects any inventory host not named here,
 # so adding a machine later means re-signing the manifest (see "Ongoing operations").
 HOSTS=pve-01,pve-02
 # TIER_PRICES_JSON — runtime price in integer CENTS per tier. NOT in the signed manifest,
 # so you can change price without re-signing. Must be >= the platform floor for the tier
-# (cumulus $7, nimbus $20, stratus $40) — MT rejects a listing below it with a 422.
+# (cumulus $7, nimbus $20, stratus $40) — FH rejects a listing below it with a 422.
 # CHECK YOUR ZEROS: these are CENTS, so nimbus at $20 is 2000, not 20000.
 TIER_PRICES_JSON={"cumulus":700,"nimbus":2000}
 TRIAL_DAYS=1
@@ -280,7 +293,7 @@ mt-manifest verify --in manifest.json
 ⚠️ **"bare manifest, no owner authorization" is the correct and expected result.** Under
 the old flow you then ran `mt-manifest authorize` to wrap it in a wallet signature. You
 do not any more — the wallet signature happens in your browser in Step 2 and is retained
-by MT. **The bare `manifest.json` is what you submit and what your Coalition publishes.**
+by FH. **The bare `manifest.json` is what you submit and what your Coalition publishes.**
 
 `manifest.json` carries `HOSTS` (the hardware you attest, owner-signed) and your
 identity. It does **not** carry price — `TIER_PRICES_JSON` feeds runtime pricing only —
@@ -294,30 +307,30 @@ asserts, constrained to the attested hosts.
 Open **`{MT_BASE_URL}/onboard`** in a browser on a machine with your wallet. You do
 **not** need a login, a Coalition, or anything deployed — only `manifest.json`.
 
-1. **Paste the whole of `manifest.json`** into the box and press **Continue**. MT
+1. **Paste the whole of `manifest.json`** into the box and press **Continue**. FH
    verifies the ed25519 signature and shows you the slug you are claiming and the owner
    address the manifest declares. Check that address — it is the wallet you must sign
    with, and it is taken from the bytes you signed, not from anything you can change now.
 2. **Sign with your wallet.** SSP signs in-browser; "Sign with Zelcore" opens a deep
    link and posts the signature back automatically. The page holds your manifest the
-   whole time — MT never stores an unverified manifest server-side.
+   whole time — FH never stores an unverified manifest server-side.
 3. **You are handed three keys, shown once.** Copy all three immediately (the page has a
    "Copy all three (`secrets.env`)" button):
 
    | Key | Direction | Where it goes |
    |---|---|---|
-   | `AGENT_KEY` | your agent + Coalition → MT | Coalition env (Step 4); optional on the agent (Step 6) |
-   | `COALITION_KEY` | MT → your Coalition (`/checkout`, `/manage`) | Coalition env only |
-   | `COALITION_SIGNING_KEY` | signs your Coalition's outbound reports to MT | **store it; nothing reads it yet** |
+   | `AGENT_KEY` | your agent + Coalition → FH | Coalition env (Step 4); optional on the agent (Step 6) |
+   | `COALITION_KEY` | FH → your Coalition (`/checkout`, `/manage`) | Coalition env only |
+   | `COALITION_SIGNING_KEY` | signs your Coalition's outbound reports to FH | **store it; nothing reads it yet** |
 
 ⚠️ **`COALITION_SIGNING_KEY` has no consumer today.** It is issued ahead of the Phase D
-verifier so nobody onboarded in the meantime has to be re-opened. MT keeps only the
+verifier so nobody onboarded in the meantime has to be re-opened. FH keeps only the
 public half, which means **the copy you were just shown is the only one that exists** —
 if you lose it, the only recovery is an admin key re-issue that rotates all three, and
 that means a fresh `env.json` import plus an agent restart. Put it somewhere durable
 alongside `manifest-key.pem` and forget about it until Phase D ships.
 
-Your provider now exists at MT in status `pending`. Step 7 activates it.
+Your provider now exists at FH in status `pending`. Step 7 activates it.
 
 > **Re-running `/onboard` later is safe and is the supported path** for refreshing your
 > attested `HOSTS` or rotating your manifest key: paste the newly signed manifest, sign
@@ -343,8 +356,8 @@ Your provider now exists at MT in status `pending`. Step 7 activates it.
 
    Do **not** grant Refunds, Balance, or Payouts. The free-trial model means every
    failure path is a *cancel*, never a refund — the key never needs to move money.
-   It's safe on ArcaneOS (the hosting node can't read it), but least privilege is
-   good hygiene.
+   Least privilege matters here more than it looks: this key lives in your Coalition's
+   Flux app environment, and how you deploy that app decides who can read it (Step 4).
 
 2. Create a **webhook endpoint** pointing at `<COALITION_URL>/webhook`, subscribed to:
    `customer.subscription.created`, `customer.subscription.deleted`,
@@ -384,7 +397,7 @@ directly rather than the UI is the one case where you must supply an owner yours
 (never commit, `chmod 600`):
 
 Same rule as `config.env`: **comments on their own line only** — a trailing comment
-after `AGENT_KEY`/`COALITION_KEY` becomes part of the key and MT will reject it (401).
+after `AGENT_KEY`/`COALITION_KEY` becomes part of the key and FH will reject it (401).
 
 ```sh
 # secrets.env
@@ -436,12 +449,15 @@ is far longer than that.** Pasting `env.json` straight into **Environment Variab
 Import** fails validation with *"App component coalition environment MANIFEST_JSON=… is
 too long. Maximum of 400 characters is allowed"*. Two supported ways past it:
 
-- **Flux Cloud storage** (what a normal operator should do): upload `env.json` to Flux
-  Cloud storage and reference it from the app spec. This is a standard option in the
-  registration UI; the size cap does not apply.
-- **An enterprise app**, whose environment is encrypted into a single `enterprise` blob
-  with `environmentParameters: []`. Both existing production Coalitions are deployed
-  this way.
+- 🔒 **An enterprise app — do this one.** The environment is encrypted into a single
+  `enterprise` blob with `environmentParameters: []`. Both production Coalitions are
+  deployed this way. A Flux app's plaintext environment is **world-readable**, and
+  `env.json` holds your Stripe secret key: anything that leaves it in the clear hands
+  your merchant credentials to anyone who looks.
+- **Flux Cloud storage**: upload `env.json` and reference it from the app spec. The
+  size cap does not apply — but the reference is a **capability URL**, so anyone who
+  obtains it reads your secrets. Acceptable only for a Coalition with no Stripe key
+  (a Flux Hub Supporter), never for one taking payments.
 
 **3. Verify:** `<COALITION_URL>/health` → `{"ok":true,"provider":"…","coalitionVersion":"…"}`
 and `<COALITION_URL>/.well-known/mt-provider.json` returns your manifest.
@@ -473,7 +489,7 @@ reproducibility today.
 
 ## Step 5 — Declare your inventory (no DB hand-edits)
 
-Your agent-managed hosts and slots are **declared by you**, not inserted into MT's
+Your agent-managed hosts and slots are **declared by you**, not inserted into FH's
 database by an admin. Create a **dedicated subdirectory** for it — the agent mounts that
 directory, and nothing else in it should be readable by the container:
 
@@ -502,12 +518,12 @@ $EDITOR agent-data/inventory.json
 
 - `name` is the globally-unique host label (`ProxmoxHost.name`), distinct from
   `nodeName` (the Proxmox node). Every `name` here **must** appear in `HOSTS` in
-  `config.env` — MT rejects the *whole* assert with a 409 naming any unattested host.
+  `config.env` — FH rejects the *whole* assert with a 409 naming any unattested host.
 - ⚠️ **`lanIp` needs its CIDR suffix.** A bare `192.168.1.51` is interpreted as `/32`,
   the VM comes up with no route to its gateway, and the node never reaches the network.
 - `storageImages` / `storageIso` override the agent's defaults per host — use them when
   hosts differ (see Step 0.2; this is where you keep VMs off the spinning disk).
-- ⚠️ **Repeat `network` and `storagePool` on every SLOT.** MT builds your `Slot` rows from
+- ⚠️ **Repeat `network` and `storagePool` on every SLOT.** FH builds your `Slot` rows from
   the per-slot fields only, so a host-level-only value leaves every Slot row with an empty
   `storagePool`/`network` — silently, and `doctor` still passes because it checks the
   host-level value you did write. Provisioning follows the same precedence
@@ -517,12 +533,12 @@ $EDITOR agent-data/inventory.json
 - Omit optional fields like `vlan`/`rateLimit` rather than setting them `null`.
   `dns1`/`dns2` default to `8.8.8.8`/`1.1.1.1`.
 
-The agent asserts this to MT (`PUT /api/agent/inventory`) on startup and each heartbeat,
-**provider-scoped**: MT upserts your `ProxmoxHost`/`Slot` rows, never touches another
+The agent asserts this to FH (`PUT /api/agent/inventory`) on startup and each heartbeat,
+**provider-scoped**: FH upserts your `ProxmoxHost`/`Slot` rows, never touches another
 operator's inventory, and never hard-deletes a rented slot.
 
 ⚠️ **The assert is upsert-only.** Deleting a host or slot from this file removes
-*nothing* at MT — the rows stay, and the slots stay sellable. Retiring hardware is an
+*nothing* at FH — the rows stay, and the slots stay sellable. Retiring hardware is an
 admin action, not a file edit.
 
 Because the agent **re-reads the file every heartbeat**, edits apply without a restart —
@@ -556,7 +572,7 @@ PROVIDER_SLUG=your-slug
 MANIFEST_KEY=<base64 of manifest-key.pem — see below>
 # The PUBLIC half, from manifest-pubkey.txt. Not a secret: it is the pin `mt-agent
 # doctor` compares MANIFEST_KEY against. Leave it out and that check can only report
-# `skip`, so a wrong key is not caught until MT rejects a signature.
+# `skip`, so a wrong key is not caught until FH rejects a signature.
 MANIFEST_PUBKEY=<contents of manifest-pubkey.txt>
 AGENT_KEY=<agentKey from /onboard>
 OWNER_ADDRESS=<the wallet address you sign with>
@@ -566,13 +582,13 @@ AGENT_INVENTORY_PATH=/data/inventory.json
 # your Proxmox LAN IP (not 127.0.0.1, which is the container's own loopback), or run with
 # `--network host` if the agent runs on the Proxmox host itself.
 PROXMOX_URL=https://<proxmox-lan-ip>:8006
-PROXMOX_TOKEN_ID='moltentech@pve!agent'
+PROXMOX_TOKEN_ID='fluxhub@pve!agent'
 PROXMOX_TOKEN_SECRET=<secret from Step 0.1>
 PROXMOX_NETWORK=vmbr0
 PROXMOX_STORAGE_IMAGES=<a ROTA=0 storage ID — see Step 0.2>
 PROXMOX_STORAGE_ISO=<your ISO storage ID>
 ARCANE_ISO=<your ArcaneOS ISO name>
-# Price + how many slots to offer for sale (re-asserted to MT each heartbeat).
+# Price + how many slots to offer for sale (re-asserted to FH each heartbeat).
 # How much hardware you HAVE comes from your inventory, not from here.
 AGENT_LISTING_JSON='[{"tier":"nimbus","priceCents":2200,"availableSlots":8}]'
 ```
@@ -593,7 +609,7 @@ base64 -w0 manifest-key.pem       # paste the output as the literal value
 ```
 
 🔴 **If `MANIFEST_KEY` is empty, do NOT run `keygen` to "get it back".** `keygen` mints a
-NEW identity, and MT still holds the public half of the old one — every signature you
+NEW identity, and FH still holds the public half of the old one — every signature you
 then produce is rejected. The value comes from the key you already have.
 
 ⚠️ **`docker --env-file` performs no shell expansion.** Writing
@@ -603,7 +619,7 @@ cause. The same applies to `${VAR}` and to wrapping quotes — `--env-file` valu
 taken verbatim, quotes included.
 
 To confirm the key is the right one, decode it and compare the derived pubkey with the
-`Provider.manifestPubkey` MT pinned for you at onboarding.
+`Provider.manifestPubkey` FH pinned for you at onboarding.
 
 ### Mount the directory, not the file
 
@@ -630,7 +646,7 @@ It exits non-zero if anything fails, so it works as a gate. It checks that Proxm
 reachable and your token is accepted, that the CA trust store is present, that each
 `storageImages` id exists **and is not a spinning disk**, that `storageIso` actually
 holds the ArcaneOS ISO, and that `MANIFEST_KEY` decodes to a key whose public half is
-the one MT pinned.
+the one FH pinned.
 
 ⚠️ **The storage check is the one that pays for this step.** A pool on rotational media
 provisions fine and then fails benchmarks with no visible cause — the single most
@@ -645,7 +661,7 @@ FAIL  pve30: storageImages "local-lvm" is not rotational
 If it reports `could not resolve …`, the storage is not LVM-backed and you must confirm
 the media yourself; an honest "cannot tell" is deliberate rather than a guess.
 
-Validate connectivity/auth to MT first, **without touching Proxmox**:
+Validate connectivity/auth to FH first, **without touching Proxmox**:
 
 ```sh
 docker run --rm --env-file .env.operator -v "$PWD/agent-data:/data:ro" \
@@ -678,14 +694,14 @@ its CA store — it is not a middlebox on your network and not a Proxmox cert pr
 ⚠️ The compose files hardcode a project name, so a second stack on the same host **must**
 pass `-p <name>` or the two will fight over the same containers.)
 
-`priceCents` must be ≥ the MT platform floor and should match `TIER_PRICES_JSON` in the
+`priceCents` must be ≥ the FH platform floor and should match `TIER_PRICES_JSON` in the
 Coalition.
 
 ---
 
 ## Step 7 — Activation and the operator console
 
-MT reviews your `pending` provider and **activates** it; your cards then appear on
+FH reviews your `pending` provider and **activates** it; your cards then appear on
 `/providers`. Within a minute of activation the agent's heartbeat publishes your price
 and slots offered (admin → Providers shows `lastAsserted`).
 
@@ -703,14 +719,14 @@ place to sign:
 | `move` | ✅ | as a `delete`: moving a rental queues a teardown of the source slot, and that is what appears in your queue |
 | `reprovision` | ❌ **not yet** | no signing surface exists; the job is refused with `owner authorization refused: missing owner authorization` |
 
-**Nobody can authorize a reprovision right now — not you, and not MoltenTech.** If a node
+**Nobody can authorize a reprovision right now — not you, and not Flux Hub.** If a node
 needs one, see "When to contact Flux Hub admin" at the end of this step. A job-driven signing
 queue that covers all three is the next piece of work on this.
 
 **Your own Coalition console is the primary path**, and the only one that works without a
-MoltenTech login:
+Flux Hub login:
 
-1. A customer cancels → MT marks the slot `pending_delete`.
+1. A customer cancels → FH marks the slot `pending_delete`.
 2. Your **agent** fetches the pending list (`GET /api/agent/pending-auth`, signed) and
    **pushes it to your Coalition console**.
 3. You open `<COALITION_URL>/console`, click the pending action, and **sign it in your
@@ -718,15 +734,15 @@ MoltenTech login:
    back automatically). The console verifies the signature recovers to `OWNER_ADDRESS`
    before queueing it — that per-action signature **is** the login.
 4. Your agent **polls the console**, re-verifies the signature locally, and relays it to
-   MT (`POST /api/agent/authorize`) → MT enqueues the job → the agent executes it.
+   FH (`POST /api/agent/authorize`) → FH enqueues the job → the agent executes it.
 
 ⚠️ **A failed relay destroys the signed blob.** The Coalition hands it over exactly
 once; if the handoff fails you must sign the action again. The courier log is the only
 place this is visible.
 
-### The alternative: signing at MoltenTech's `/operator`
+### The alternative: signing at Flux Hub's `/operator`
 
-If you sign in at `{MT_BASE_URL}` with your `OWNER_ADDRESS` wallet, MoltenTech shows the
+If you sign in at `{MT_BASE_URL}` with your `OWNER_ADDRESS` wallet, Flux Hub shows the
 same pending teardowns at **`/operator`** and lets you sign them there. Sign with SSP
 in-page, or "Open in Zelcore" — the deep link posts the signature back on its own and the
 page continues without you pasting anything. A paste box is there as a fallback for
@@ -735,17 +751,17 @@ signing on a different machine.
 This is an **alternative to, not a replacement for**, your Coalition console. Use whichever
 is in front of you:
 
-- your console works with **no MoltenTech account at all** and is the one to rely on;
-- `/operator` is convenient when you are already signed in to MoltenTech, and it does not
+- your console works with **no Flux Hub account at all** and is the one to rely on;
+- `/operator` is convenient when you are already signed in to Flux Hub, and it does not
   depend on your Coalition being reachable.
 
-The trust model is identical either way. MoltenTech is a **dumb relay**: it shape-checks
+The trust model is identical either way. Flux Hub is a **dumb relay**: it shape-checks
 the signed claim, binds it to the slot it names, and stores it. **Your agent re-verifies
 the signature against its own pinned owner address before it deletes anything**, so a
-compromised MoltenTech still cannot destroy your nodes. The claim is bound to one action
+compromised Flux Hub still cannot destroy your nodes. The claim is bound to one action
 on one node and expires, so it cannot be replayed against another.
 
-The Coalition holds **no keys** for this and never calls MT — it is a UI + signature
+The Coalition holds **no keys** for this and never calls FH — it is a UI + signature
 courier. The manifest key (agent↔console auth) stays on the agent; the owner key stays
 in your wallet. Wrong-owner, expired, and replayed signatures are refused at both the
 console and the agent.
@@ -769,16 +785,16 @@ happened — that is enough to find the job.
 
 ## Verify it works end to end
 
-- **Manifest**: MT admin shows your provider with the right `Coalition URL`, attested
+- **Manifest**: FH admin shows your provider with the right `Coalition URL`, attested
   hosts, and freshness once it pulls stats/listing.
 - **Inventory**: your hosts appear with the slots you declared, in `available`.
-- **Listing**: your price + slots offered land at MT within a heartbeat.
-- **Stats**: MT pulls `/stats`; benchmarks/uptime appear on your card.
+- **Listing**: your price + slots offered land at FH within a heartbeat.
+- **Stats**: FH pulls `/stats`; benchmarks/uptime appear on your card.
 - **Checkout (test)**: with Stripe in test mode, rent one of your tiers from
-  `/providers` → you get a Stripe Checkout (your account) with a trial → MT records a
+  `/providers` → you get a Stripe Checkout (your account) with a trial → FH records a
   rental → your agent provisions the node → result flows back.
 - **Authorization**: cancel that test rental and confirm the pending action shows up in
-  `<COALITION_URL>/console` — and, if you have a MoltenTech login, at `/operator` too.
+  `<COALITION_URL>/console` — and, if you have a Flux Hub login, at `/operator` too.
   Signing in either place should complete the teardown; watch the slot return to
   `available`.
 
@@ -801,13 +817,13 @@ Nothing compares these for you, and each pair has bitten a real onboarding:
 
 A freshly-provisioned node doesn't go live immediately. Flux rejects a fluxnode START
 whose collateral UTXO has under ~100 confirmations and applies a DoS-score cooldown, so
-MT withholds the customer's "go start your node" email until the node's benchmarks pass
+FH withholds the customer's "go start your node" email until the node's benchmarks pass
 **and** its collateral clears 100 confirmations (typically ~50 minutes after the
 collateral funding tx is mined).
 
 **Your Coalition owns this check, not the agent.** Every ~2 minutes it polls each of
 your still-maturing nodes' benchmark endpoint plus the public Flux blockchain API and
-reports the measurements to MT, which decides when to flip the node's status and email
+reports the measurements to FH, which decides when to flip the node's status and email
 the customer. You can see the live state — which nodes are still held, and why — on your
 own `/console` page. This is why the Coalition must stay running after a node
 provisions, not just during checkout.
@@ -817,16 +833,16 @@ provisions, not just during checkout.
 | Secret | Generated by | Lives | Shared with |
 |---|---|---|---|
 | `manifest-key.pem` | you (`keygen`) | your machine + agent (`MANIFEST_KEY`) | **nobody** |
-| manifest `pubkey` | derived | in the manifest, pinned at MT | public |
+| manifest `pubkey` | derived | in the manifest, pinned at FH | public |
 | owner wallet key | you | your wallet only | **nobody** |
-| `agentKey` | MT (`/onboard`) | agent **and** Coalition env | you (once) |
-| `coalitionKey` | MT (`/onboard`) | Coalition env | you (once) |
-| `coalitionSigningKey` | MT (`/onboard`) | your safe keeping — no consumer yet | you (once, only copy) |
+| `agentKey` | FH (`/onboard`) | agent **and** Coalition env | you (once) |
+| `coalitionKey` | FH (`/onboard`) | Coalition env | you (once) |
+| `coalitionSigningKey` | FH (`/onboard`) | your safe keeping — no consumer yet | you (once, only copy) |
 | Stripe restricted key | you (Stripe) | Coalition env | nobody |
 | Stripe webhook secret | you (Stripe) | Coalition env | nobody |
 | Proxmox API token | you (Proxmox) | agent env | nobody |
 
-MT stores only a **hash** of `agentKey`, an **encrypted** copy of `coalitionKey`, and
+FH stores only a **hash** of `agentKey`, an **encrypted** copy of `coalitionKey`, and
 the **public** half of `coalitionSigningKey`. It stores **none** of your Stripe or
 Proxmox credentials, and never the private half of anything you generated.
 
@@ -838,7 +854,7 @@ Proxmox credentials, and never the private half of anything you generated.
   env` → re-import `env.json` (free) so the Coalition's prices match. No re-signing.
 - **Add or remove a host**: add its `ProxmoxHost.name` to `HOSTS` in `config.env`,
   re-`sign`, re-paste at `/onboard` and sign with your pinned owner wallet, then re-run
-  `mt-manifest env` and re-import `env.json`. Until MT re-ingests, it **rejects the
+  `mt-manifest env` and re-import `env.json`. Until FH re-ingests, it **rejects the
   whole inventory assert** with a 409 naming the unattested host — that is the point of
   the attestation, so plan a host addition around a signing session, not a config edit.
   (Removing a host from `HOSTS` narrows what the agent may declare; it does **not**
@@ -851,10 +867,10 @@ Proxmox credentials, and never the private half of anything you generated.
   and sign with the pinned owner wallet — that is the only accepted rotation path. Then
   update `MANIFEST_KEY` on the agent and recreate the container. Your issued keys are
   unaffected and are not re-issued.
-- **Rotate the issued keys**: an MT admin re-issues all three at once (the old ones stop
+- **Rotate the issued keys**: an FH admin re-issues all three at once (the old ones stop
   working immediately); update `secrets.env`, re-import `env.json`, and recreate the
   agent container.
-- **Staleness**: if MT stops seeing fresh stats *and* listing past the TTL, your
+- **Staleness**: if FH stops seeing fresh stats *and* listing past the TTL, your
   provider auto-hides from the marketplace (data retained) and auto-re-lists on the next
   fresh update — so keep the agent and Coalition running.
 - **Customer cancel/refund**: cancellation is free during the trial; afterward you are
@@ -862,13 +878,15 @@ Proxmox credentials, and never the private half of anything you generated.
 
 ## Trust model (why this is safe)
 
-- You hold **all** your own secrets; MT holds none of them. The agent is outbound-only
+- You hold **all** your own secrets; FH holds none of them. The agent is outbound-only
   with no inbound ports. The Coalition's only secrets are a restricted Stripe key +
-  webhook secret, and ArcaneOS prevents the hosting node from reading them.
-- Ownership is proven by a wallet signature over your own manifest's bytes. MT can
+  webhook secret — and they are protected by deploying the Coalition as a Flux
+  **enterprise app**, whose environment is encrypted (Step 4). Nothing about ArcaneOS
+  is involved: ArcaneOS is what the rented node VMs boot, not what the Coalition runs on.
+- Ownership is proven by a wallet signature over your own manifest's bytes. FH can
   neither forge it nor change your owner address without a deliberate admin recovery
   action.
-- Jobs MT sends your agent carry slot/network params + the customer's Flux identity key
+- Jobs FH sends your agent carry slot/network params + the customer's Flux identity key
   over TLS, but **never** Proxmox credentials — the agent injects its own. That identity
   key is node-scoped and cannot touch collateral.
 - Collateral is a wallet UTXO, safe on any host; the residual risk (node identity-key
