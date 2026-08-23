@@ -176,7 +176,19 @@ appears as an argument to another command, so wrapping it (in a script, a `time`
 capture harness, `sudo`, `watch`) fails with `command not found`.
 
 ```sh
-mt-manifest() { docker run --rm -i -v "$PWD:/work" -u "$(id -u):$(id -g)" ghcr.io/w2vy/mt-manifest "$@"; }
+mt-manifest() {
+  local img=ghcr.io/w2vy/mt-manifest:latest
+  local stamp="${XDG_CACHE_HOME:-$HOME/.cache}/mt-manifest.pulled"
+  # Refresh the image at most once every 48h, tracked by a stamp file.
+  if [ ! -e "$stamp" ] || [ -n "$(find "$stamp" -mmin +2880 2>/dev/null)" ]; then
+    if docker pull -q "$img" >/dev/null 2>&1; then
+      mkdir -p "$(dirname "$stamp")" && touch "$stamp"
+    else
+      echo "note: could not refresh $img — using the cached image" >&2
+    fi
+  fi
+  docker run --rm -i -v "$PWD:/work" -u "$(id -u):$(id -g)" "$img" "$@"
+}
 mt-manifest keygen             # writes manifest-key.pem (KEEP SECRET, 0600) + prints your pubkey
 ```
 
@@ -184,6 +196,16 @@ mt-manifest keygen             # writes manifest-key.pem (KEEP SECRET, 0600) + p
 only subcommand that asks questions — prints its first prompt and exits at EOF, with no
 error. Every other subcommand works fine, so the tool looks half-broken rather than
 mis-invoked.
+
+⚠️ **`docker run` never re-pulls**, so without the refresh above you keep running whatever
+image you first pulled — for as long as that is, while the docs describe a newer one. That
+is what the stamp file is for: one pull every 48 hours, roughly a second when the image is
+already current (it is a digest check; no layers move). If the registry is unreachable it
+says so once and runs the cached image rather than blocking you.
+
+`find -mmin +2880` is deliberate: `-mtime +2` rounds to whole days and would mean *older
+than 72h*, which you would only notice as a refresh that did not happen. To pull on every
+invocation instead, drop the whole block and add `--pull always` to the `docker run`.
 
 **Run `keygen` before `init`, in that order.** `init` requires the key: it fills
 `MANIFEST_KEY` in both env files from it and pins `MANIFEST_PUBKEY`, and it refuses to
