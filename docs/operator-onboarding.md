@@ -559,6 +559,14 @@ Then build the Flux import blob from config + secrets + your signed manifest, re
 the same `mt-manifest` function from Step 1 (same shell / same directory):
 
 ```sh
+mt-manifest env          # in the scaffold directory: reads config.env, secrets.env,
+                         # manifest.json and writes env.json beside them
+```
+
+Every path defaults to the name `init` wrote, so there is nothing to type. Override any
+of them if your layout differs, or add `--stdout` to print instead of writing a file:
+
+```sh
 mt-manifest env --from-config config.env --secrets secrets.env \
   --manifest manifest.json --out env.json
 ```

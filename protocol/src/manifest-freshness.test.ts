@@ -134,3 +134,40 @@ test("doctor with no manifest.json says nothing about it — mid-onboarding is n
     []
   );
 });
+
+/**
+ * `env` is the last command between a finished scaffold and a deployable Flux app, and
+ * it used to be the longest to type: three required paths, all naming files `init` had
+ * just written into the directory you were standing in. The runbook's own instruction —
+ * "run `mt-manifest env`" — did not work as written.
+ */
+
+test("⭐ `env` needs no arguments in a scaffold directory", () => {
+  const dir = scaffold();
+  // Fill the three keys /onboard issues; env legitimately requires them.
+  writeFileSync(
+    join(dir, "secrets.env"),
+    read(dir, "secrets.env")
+      .replace(/^AGENT_KEY=$/m, "AGENT_KEY=ak_test")
+      .replace(/^COALITION_KEY=$/m, "COALITION_KEY=ck_test")
+      .replace(/^STRIPE_SECRET_KEY=$/m, "STRIPE_SECRET_KEY=rk_test")
+      .replace(/^STRIPE_WEBHOOK_SECRET=$/m, "STRIPE_WEBHOOK_SECRET=whsec_test")
+  );
+  cli(["env", "--dir", dir]);
+  const pairs = JSON.parse(read(dir, "env.json")) as string[];
+  assert.ok(Array.isArray(pairs) && pairs.length > 0);
+  assert.ok(pairs.some((p) => p.startsWith("MANIFEST_JSON=")), "the signed manifest must ship");
+  assert.ok(pairs.some((p) => p === "AGENT_KEY=ak_test"));
+});
+
+test("a missing file names WHICH file and where env expected it", () => {
+  const dir = mkdtempSync(join(tmpdir(), "mt-env-empty-"));
+  assert.throws(
+    () => cli(["env", "--dir", dir]),
+    (err: Error & { stderr?: string }) => {
+      assert.match(err.stderr ?? "", /config\.env not found/);
+      assert.match(err.stderr ?? "", /--dir/);
+      return true;
+    }
+  );
+});

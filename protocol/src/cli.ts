@@ -20,7 +20,10 @@
  *   sign   --key <pem> (--from-config <config.env> | --in <body.json>) [--out <manifest.json>]
  *                                       render body (from config.env) or read body.json,
  *                                       fill pubkey + publishedAt, sign, emit full manifest
- *   env    --from-config <config.env> --secrets <secrets.env> --manifest <manifest.json> [--out <env.json>]
+ *   env    [--dir <dir>] [--from-config <config.env>] [--secrets <secrets.env>]
+ *          [--manifest <manifest.json>] [--out <env.json>] [--stdout]
+ *                                       every path defaults to the file `init` wrote in <dir>,
+ *                                       so a finished scaffold needs no arguments at all.
  *                                       assemble the Flux "Import Environment Variables" blob (JSON array of
  *                                       "KEY=value"): non-secret config + secrets + the signed manifest as
  *                                       MANIFEST_JSON; passes TIER_PRICES_JSON through from config.env. --manifest may
@@ -719,8 +722,17 @@ async function main() {
       } else {
         console.log("  2. Stripe: not needed — you are not listing anything for sale.");
       }
-      console.log(`  3. deploy Flux app "${answers.fluxAppName}" → ${coalitionUrlFor(answers.fluxAppName)}`);
-      console.log("\nThen run `mt-manifest doctor` here to check every file agrees.");
+      // The step that used to be missing entirely. "deploy Flux app" is not something an
+      // operator can act on: the app needs an environment, and nothing here said where it
+      // comes from or that a command builds it. It is also the LAST thing that reads
+      // secrets.env, so it belongs after /onboard has filled it in.
+      console.log("  3. `mt-manifest doctor`   ← run it here; it checks every file agrees");
+      console.log("  4. `mt-manifest env`      → env.json, the Flux \"Import Environment Variables\" blob");
+      console.log("     built from config.env + secrets.env + manifest.json. CONTAINS SECRETS.");
+      console.log(`  5. deploy Flux app "${answers.fluxAppName}" as an ENTERPRISE app, import env.json`);
+      console.log(`     → ${coalitionUrlFor(answers.fluxAppName)}`);
+      console.log("     ⚠️  enterprise, not standard: a standard Flux app's environment is");
+      console.log("         WORLD-READABLE, and yours holds your Stripe key.");
       break;
     }
     case "doctor": {
@@ -856,10 +868,28 @@ async function main() {
       break;
     }
     case "env": {
-      const fromConfig = flag(args, "--from-config") ?? die("--from-config <config.env> required");
-      const secretsPath = flag(args, "--secrets") ?? die("--secrets <secrets.env> required");
-      const manifestPath = flag(args, "--manifest") ?? die("--manifest <manifest.json> required");
-      const outPath = flag(args, "--out");
+      // ⭐ Defaults, because `init` writes all four of these files under exactly these
+      // names into one directory. Requiring three explicit paths meant the one command
+      // standing between a finished scaffold and a deployable Flux app was also the
+      // longest to type — and the runbook's own instruction ("run `mt-manifest env`")
+      // did not actually work as written.
+      const dir = flag(args, "--dir") ?? ".";
+      const fromConfig = flag(args, "--from-config") ?? join(dir, "config.env");
+      const secretsPath = flag(args, "--secrets") ?? join(dir, "secrets.env");
+      const manifestPath = flag(args, "--manifest") ?? join(dir, "manifest.json");
+      const outPath = flag(args, "--out") ?? (args.includes("--stdout") ? undefined : join(dir, "env.json"));
+      for (const [what, path] of [
+        ["config.env", fromConfig],
+        ["secrets.env", secretsPath],
+        ["manifest.json", manifestPath],
+      ] as const) {
+        if (!existsSync(path)) {
+          die(
+            `${path} not found. \`env\` assembles the Flux environment from the files \`init\` wrote ` +
+              `(${what} among them) — run it in that directory, or pass --dir <dir>.`
+          );
+        }
+      }
 
       const config = parseConfigEnv(readFileSync(fromConfig, "utf8"));
       const secrets = parseConfigEnv(readFileSync(secretsPath, "utf8"));
@@ -1068,7 +1098,9 @@ async function main() {
       console.log("  init      [--out <dir>] [--answers <answers.json>] [--force]");
       console.log("  doctor    [--dir <dir>]");
       console.log("  sign      --key <pem> (--from-config <config.env> | --in <body.json>) [--out <manifest.json>]");
-      console.log("  env       --from-config <config.env> --secrets <secrets.env> --manifest <manifest|signed-manifest.json> [--out <env.json>]");
+      console.log("  env       [--dir <dir>] [--from-config <config.env>] [--secrets <secrets.env>]");
+      console.log("            [--manifest <manifest|signed-manifest.json>] [--out <env.json>] [--stdout]");
+      console.log("            defaults to the files `init` wrote in the current directory");
       console.log("  verify    --in <manifest.json>");
       console.log("  authorize --in <manifest.json> [--signature <b64> --out <signed-manifest.json>]");
       process.exit(cmd ? 1 : 0);
