@@ -191,16 +191,21 @@ export async function probeStripeWiring(args: {
     });
     return findings;
   }
-  if (!account.ok) {
+  // A 403 here is the EXPECTED answer for a key built to the runbook, which grants no
+  // account-read permission at all — and nothing below reads `account`; it exists only to
+  // separate "key rejected" (401) from "key works". Warning about it asked the operator to
+  // widen a key's permissions to silence a check whose result is discarded, which is how a
+  // report teaches people to skim it. Anything OTHER than 403 is still worth surfacing,
+  // because then the call failed for a reason nobody has accounted for.
+  if (!account.ok && account.status !== 403) {
     findings.push({
       rule: "STRIPE_ACCOUNT_UNREADABLE",
       severity: "warning",
       file: "secrets.env",
       message:
         `could not read the Stripe account (${account.status}: ${account.json?.error?.message ?? "no detail"}) — ` +
-        "the key itself is accepted, so the endpoint checks below still ran. A restricted key " +
-        "needs the v1 \"Account\" read permission (`accounts_kyc_basic_read`) to silence this; " +
-        "Stripe's separate \"Account v2\" permission does NOT cover it.",
+        "the key was not rejected, so the webhook checks below still ran. This call is only a " +
+        "liveness probe; nothing depends on its result.",
     });
   }
 
@@ -210,9 +215,15 @@ export async function probeStripeWiring(args: {
       rule: "STRIPE_ENDPOINTS_UNREADABLE",
       severity: "warning",
       file: "secrets.env",
+      summary:
+        "the webhook check DID NOT RUN — grant this key Webhook Endpoints: Read, then re-run",
       message:
-        `could not list webhook endpoints (${eps.status}: ${eps.json?.error?.message ?? "no detail"}) — ` +
-        "a restricted key needs read access to Webhook Endpoints for this check.",
+        `could not list webhook endpoints (${eps.status}: ${eps.json?.error?.message ?? "no detail"}). ` +
+        "This is the check --check-stripe exists for, and it did NOT run: nothing here " +
+        "verified that your webhook endpoint is on YOUR Stripe account rather than someone " +
+        "else's. Grant this key the read-only \"Webhook Endpoints\" permission " +
+        "(`webhook_read`) in the Stripe dashboard, then run it again. Until then the wiring " +
+        "is UNVERIFIED — not verified-good.",
     });
     return findings;
   }

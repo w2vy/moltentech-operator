@@ -122,9 +122,13 @@ test("a 403 on /v1/account does not stop the probe — the endpoint checks still
         coalitionUrl: MY_URL,
       });
       const ruleNames = findings.map((f) => f.rule).sort();
+      // ⭐ NOT reported (changed 2026-08-23). A 403 here is the expected answer for a key
+      // built to the runbook, and nothing below reads `account` — the call only separates
+      // 401 from "key works". Warning about it told the operator to widen a key's
+      // permissions to silence a check whose result is thrown away.
       assert.ok(
-        ruleNames.includes("STRIPE_ACCOUNT_UNREADABLE"),
-        "expected the account read to be reported as a warning"
+        !ruleNames.includes("STRIPE_ACCOUNT_UNREADABLE"),
+        "an expected 403 on a discarded liveness probe must not become a warning"
       );
       assert.ok(
         !ruleNames.includes("STRIPE_KEY_INVALID"),
@@ -133,10 +137,7 @@ test("a 403 on /v1/account does not stop the probe — the endpoint checks still
       // The whole point: the endpoint rules executed.
       assert.ok(ruleNames.includes("STRIPE_WEBHOOK_FOREIGN_COALITION"));
       assert.ok(ruleNames.includes("STRIPE_WEBHOOK_NOT_REGISTERED"));
-      assert.equal(
-        findings.find((f) => f.rule === "STRIPE_ACCOUNT_UNREADABLE")?.severity,
-        "warning"
-      );
+
     }
   );
 });
@@ -177,6 +178,65 @@ test("a healthy account produces no account-level finding at all", async () => {
         coalitionUrl: MY_URL,
       });
       assert.deepEqual(findings, []);
+    }
+  );
+});
+
+test("⭐ a 403 on the ENDPOINT list says the check DID NOT RUN — not that wiring is fine", async () => {
+  // Measured on prod 2026-08-23 with the runbook's own restricted key, which grants no
+  // `webhook_read`: the endpoint comparison — the entire reason this flag exists, and the
+  // only defence against the 08-18 misroute — was skipped, and the report ended "1
+  // error(s), 2 warning(s)" as though the wiring had been looked at. Unverified must never
+  // be presentable as verified-good.
+  await withStubbedFetch(
+    (url) =>
+      url.includes("/v1/webhook_endpoints")
+        ? { status: 403, body: { error: { message: "Permission denied. …webhook_read…" } } }
+        : { status: 200, body: {} },
+    async () => {
+      const findings = await probeStripeWiring({
+        stripeSecretKey: FAKE_RESTRICTED_KEY,
+        coalitionUrl: MY_URL,
+      });
+      const only = findings.find((f) => f.rule === "STRIPE_ENDPOINTS_UNREADABLE")!;
+      assert.ok(only, "expected the unreadable-endpoints warning");
+      assert.match(only.summary!, /DID NOT RUN/);
+      assert.match(only.summary!, /Webhook Endpoints: Read/);
+      assert.match(only.message, /UNVERIFIED/);
+      // and it must not have silently claimed anything about the wiring
+      assert.equal(findings.some((f) => f.rule.startsWith("STRIPE_WEBHOOK_")), false);
+    }
+  );
+});
+
+test("a 403 on /v1/account is silent, because its result is discarded", async () => {
+  await withStubbedFetch(
+    (url) =>
+      url.includes("/v1/account")
+        ? { status: 403, body: { error: { message: "Permission denied. …accounts_kyc_basic_read…" } } }
+        : { status: 200, body: { data: [{ url: `${MY_URL}/webhook`, status: "enabled" }] } },
+    async () => {
+      const findings = await probeStripeWiring({
+        stripeSecretKey: FAKE_RESTRICTED_KEY,
+        coalitionUrl: MY_URL,
+      });
+      assert.deepEqual(findings, [], "a correctly wired restricted key reports nothing at all");
+    }
+  );
+});
+
+test("a NON-403 account failure is still surfaced — that one nobody has accounted for", async () => {
+  await withStubbedFetch(
+    (url) =>
+      url.includes("/v1/account")
+        ? { status: 500, body: { error: { message: "internal" } } }
+        : { status: 200, body: { data: [{ url: `${MY_URL}/webhook`, status: "enabled" }] } },
+    async () => {
+      const findings = await probeStripeWiring({
+        stripeSecretKey: FAKE_RESTRICTED_KEY,
+        coalitionUrl: MY_URL,
+      });
+      assert.deepEqual(findings.map((f) => f.rule), ["STRIPE_ACCOUNT_UNREADABLE"]);
     }
   );
 });

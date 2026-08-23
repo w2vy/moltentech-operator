@@ -111,3 +111,39 @@ test("ok tracks errors only — warnings are not failures", () => {
   assert.equal(formatReport(report([WARN])).ok, true);
   assert.equal(formatReport(report([ERR])).ok, false);
 });
+
+test("⭐ a headline never truncates inside brackets, leaving an unbalanced '('", () => {
+  // Observed on prod 2026-08-23. Stripe quotes its own error verbatim inside our
+  // parenthetical, so the first period landed mid-quote:
+  //   "could not read the Stripe account (403: Permission denied."
+  // — an unbalanced "(" that also cut off the half naming the permission to grant. A
+  // headline that reads as a truncation bug costs more than the length it saved.
+  const { text } = formatReport({
+    filesChecked: ["secrets.env"],
+    minimumsSource: "api",
+    findings: [
+      {
+        rule: "STRIPE_ENDPOINTS_UNREADABLE",
+        severity: "warning",
+        file: "secrets.env",
+        message:
+          "could not list webhook endpoints (403: Permission denied. The provided key does " +
+          "not have webhook_read). Grant it and re-run.",
+      },
+    ],
+  });
+  const headline = text.split("\n")[0]!;
+  assert.doesNotMatch(headline, /\(403: Permission denied\.$/, "cut inside the parenthetical");
+  assert.match(headline, /webhook_read\)\./, "the bracket closes before the headline ends");
+});
+
+test("brackets do not stop a headline that legitimately ends after them", () => {
+  const { text } = formatReport({
+    filesChecked: ["config.env"],
+    minimumsSource: "api",
+    findings: [
+      { rule: "R", severity: "error", file: "config.env", message: "bad value (see above). More detail here." },
+    ],
+  });
+  assert.match(text.split("\n")[0]!, /bad value \(see above\)\.$/);
+});

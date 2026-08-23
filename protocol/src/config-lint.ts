@@ -825,6 +825,17 @@ export function runDoctor(input: DoctorInput): DoctorReport {
  * is wrong, so this is a real headline rather than a truncation — and a message that is
  * already one sentence is simply itself, which is why such findings are not printed twice.
  */
+/** Is a bracket still open at the end of this slice? Cheap, and enough: report messages
+ * quote third-party errors inside parentheses and never nest exotically. */
+function unclosed(head: string): boolean {
+  let depth = 0;
+  for (const ch of head) {
+    if (ch === "(" || ch === "[") depth++;
+    else if (ch === ")" || ch === "]") depth = Math.max(0, depth - 1);
+  }
+  return depth > 0;
+}
+
 function firstSentence(message: string): string {
   // "e.g." and friends end in a period followed by a space and are not sentence ends.
   // Getting this wrong truncates a headline mid-clause ("supplied by `pveum user token
@@ -834,6 +845,12 @@ function firstSentence(message: string): string {
     const end = m.index! + 1;
     const head = message.slice(0, end);
     if (ABBREV.test(head)) continue;
+    // A period INSIDE brackets does not end the sentence. Stripe quotes its own error
+    // verbatim inside our parenthetical — "(403: Permission denied. The provided key …" —
+    // so the first period landed mid-quote and produced a headline with an unbalanced "("
+    // that also cut off the half naming the permission to grant. Any headline that reads
+    // as a truncation bug costs more than the length it saved.
+    if (unclosed(head)) continue;
     return head.trim();
   }
   return message;
