@@ -13,6 +13,7 @@
  * writes what comes back — so the interactive and non-interactive paths run the exact
  * same generator, and the tests drive the same one the operator does.
  */
+import { FOUNDATION_VM_PREFIX } from "./messages";
 
 import { TIER_FLOORS_CENTS } from "./config-lint";
 
@@ -143,7 +144,41 @@ export function suggestFluxAppName(providerSlug: string): string {
   return `coalition-${providerSlug}`;
 }
 
-const SLUG_RE = /^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$/;
+export const SLUG_RE = /^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$/;
+
+/**
+ * A plain IPv4 address — the shape a WAN IP and a full LAN address have to be.
+ *
+ * Checked at the PROMPT, not only in `validateAnswers`: a hostname or a typo'd octet
+ * accepted at the prompt survives until the end of the wizard, and the operator loses
+ * every answer to a `die()` that names one field.
+ */
+export function isIPv4(value: string): boolean {
+  const parts = value.trim().split(".");
+  return (
+    parts.length === 4 &&
+    parts.every((p) => /^\d{1,3}$/.test(p) && Number(p) <= 255)
+  );
+}
+
+/**
+ * A VM name Proxmox will accept as a hostname, and that does not reach into the
+ * Foundation's reserved namespace.
+ *
+ * The reserved-prefix rule is enforced at INGEST by the hub, which means a name chosen
+ * here surfaces as a rejected manifest much later, with the operator holding a scaffold
+ * they have to redo. Same rule, applied where the name is typed.
+ */
+export function vmNameProblem(name: string): string | undefined {
+  if (!name) return "a VM name is required.";
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9-]{0,61}[a-zA-Z0-9]$/.test(name)) {
+    return `"${name}" is not a usable hostname — letters, digits and hyphens, not starting or ending with one.`;
+  }
+  if (name.toLowerCase().startsWith(FOUNDATION_VM_PREFIX)) {
+    return `"${name}" starts with "${FOUNDATION_VM_PREFIX}", which is reserved for Foundation nodes — the hub rejects the whole manifest.`;
+  }
+  return undefined;
+}
 
 export function validateAnswers(
   a: Answers,

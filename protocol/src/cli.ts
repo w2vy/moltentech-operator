@@ -67,6 +67,9 @@ import {
   isFluxApiPort,
   parseLanNetwork,
   slotLanIp,
+  isIPv4,
+  vmNameProblem,
+  SLUG_RE,
   type LanNetwork,
   generateAll,
   GENERATED_PATHS,
@@ -165,6 +168,26 @@ async function askAnswers(minimums: Record<string, number> = TIER_FLOORS_CENTS):
     const a = (await rl.question(def ? `${q} [${def}]: ` : `${q}: `)).trim();
     return a || def || "";
   };
+  /**
+   * Ask until the answer is usable, printing WHY each time.
+   *
+   * Every rule here also exists in `validateAnswers`, which runs after the last question
+   * and `die()`s — so a mistyped tier used to cost the whole wizard, thirty answers back.
+   * Checking at the prompt is the same rule applied where the mistake is made, while the
+   * operator is still looking at the question that caused it.
+   */
+  const askUntil = async (
+    q: string,
+    problem: (answer: string) => string | undefined,
+    def?: string
+  ): Promise<string> => {
+    for (;;) {
+      const answer = await ask(q, def);
+      const why = problem(answer);
+      if (!why) return answer;
+      console.log(`    ${why}`);
+    }
+  };
   try {
     console.log("mt-manifest init — this writes every onboarding file from your answers.\n");
 
@@ -181,7 +204,11 @@ async function askAnswers(minimums: Record<string, number> = TIER_FLOORS_CENTS):
     const level: "supporter" | "operator" = levelAnswer.startsWith("1") ? "supporter" : "operator";
     console.log(`  → Flux Hub ${level === "supporter" ? "Supporter" : "Operator"}\n`);
 
-    const providerSlug = await ask("Provider slug (lowercase, PERMANENT once ingested)");
+    const providerSlug = await askUntil("Provider slug (lowercase, PERMANENT once ingested)", (v) =>
+      SLUG_RE.test(v)
+        ? undefined
+        : "lowercase letters, digits and hyphens, 3-40 characters, not starting or ending with a hyphen."
+    );
     const providerName = await ask("Display name", providerSlug);
     const providerLocation = await ask("Location (shown on your marketplace card)", "");
     const providerContact = await ask("Contact email", "");
@@ -244,8 +271,18 @@ async function askAnswers(minimums: Record<string, number> = TIER_FLOORS_CENTS):
     // slot picks from it instead of inventing tier names the price map then has to chase.
     const tierPricesCents: Record<string, number> = {};
     if (level === "operator") {
+      const known = Object.keys(minimums);
       const offered = (
-        await ask(`Which tiers will you offer? (${Object.keys(minimums).join("/")}, comma-separated)`, "cumulus")
+        await askUntil(
+          `Which tiers will you offer? (${known.join("/")}, comma-separated)`,
+          (v) => {
+            const picked = v.split(",").map((t) => t.trim()).filter(Boolean);
+            if (picked.length === 0) return "name at least one tier.";
+            const bad = picked.filter((t) => !known.includes(t));
+            return bad.length > 0 ? `unknown tier(s): ${bad.join(", ")}. FH knows ${known.join(", ")}.` : undefined;
+          },
+          "cumulus"
+        )
       )
         .split(",")
         .map((t) => t.trim())
@@ -254,11 +291,18 @@ async function askAnswers(minimums: Record<string, number> = TIER_FLOORS_CENTS):
       // rather than validating against it.
       for (const tier of offered) {
         const floor = minimums[tier] ?? 0;
-        const dollars = await ask(
+        const dollars = await askUntil(
           `  monthly price for ${tier} in DOLLARS (floor $${(floor / 100).toFixed(2)})`,
+          (v) => {
+            const cents = Math.round(Number(v) * 100);
+            if (!/^\$?\d+(\.\d{1,2})?$/.test(v.trim())) return `"${v}" is not an amount in dollars.`;
+            // FH 422s anything under the floor, so accepting it here only moves the
+            // failure to a place with less context.
+            return cents < floor ? `$${(cents / 100).toFixed(2)} is below the $${(floor / 100).toFixed(2)} floor FH enforces.` : undefined;
+          },
           (floor / 100).toFixed(2)
         );
-        tierPricesCents[tier] = Math.round(Number(dollars) * 100);
+        tierPricesCents[tier] = Math.round(Number(dollars.replace("$", "")) * 100);
       }
     }
     const tiers = Object.keys(tierPricesCents);
@@ -347,7 +391,11 @@ async function askAnswers(minimums: Record<string, number> = TIER_FLOORS_CENTS):
       // WAN IP + port pair with an error that names neither.
       const slots: SlotAnswer[] = [];
       while (slots.length < capacity) {
-        const ipAddress = await ask(`  WAN IP (blank when done — ${slots.length}/${capacity} placed)`, "");
+        const ipAddress = await askUntil(
+          `  WAN IP (blank when done — ${slots.length}/${capacity} placed)`,
+          (v) => (v === "" || isIPv4(v) ? undefined : `"${v}" is not an IPv4 address. Flux needs the address itself, not a hostname.`),
+          ""
+        );
         if (!ipAddress) break;
 
         // ⭐ ONE answer for the whole LAN: gateway AND prefix. Asked separately, the prefix
@@ -409,11 +457,20 @@ async function askAnswers(minimums: Record<string, number> = TIER_FLOORS_CENTS):
           }
 
           console.log(`    · slot ${slots.length + 1} of ${capacity}`);
-          const tier =
-            tiers.length > 0
-              ? await ask(`      tier (${tiers.join("/")})`, tiers[0])
-              : await ask(`      tier (${Object.keys(minimums).join("/")})`, "cumulus");
-          const vmName = await ask("      VM name");
+          // Offered tiers when the operator priced some; otherwise every tier FH knows.
+          // A tier that is not on the list is not a tier — it used to be accepted here and
+          // rejected by validateAnswers after the last question.
+          const allowed = tiers.length > 0 ? tiers : Object.keys(minimums);
+          const tier = await askUntil(
+            `      tier (${allowed.join("/")})`,
+            (v) => (allowed.includes(v) ? undefined : `"${v}" is not one of: ${allowed.join(", ")}.`),
+            allowed[0]
+          );
+          const vmName = await askUntil("      VM name", (v) =>
+            slots.some((s) => s.vmName === v) || hosts.some((h) => h.slots.some((s) => s.vmName === v))
+              ? `"${v}" is already used by another slot.`
+              : vmNameProblem(v)
+          );
           let lanIp = "";
           while (!lanIp) {
             const answer = await ask(`      LAN address — host number (e.g. 5 for ${net.base}5) or a full IP`);
