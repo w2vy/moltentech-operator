@@ -111,6 +111,14 @@ export interface Finding {
    * Set it explicitly when the useful headline is the FIX rather than the diagnosis.
    */
   summary?: string;
+  /**
+   * The command that resolves this finding, when one command does.
+   *
+   * A finding with a `fix` is printed LAST — after the counts — because that is where the
+   * eye lands when the report ends, and because it is the line the operator is about to
+   * act on. Everything above it is diagnosis; this is the instruction.
+   */
+  fix?: string;
 }
 
 /**
@@ -696,6 +704,7 @@ export function lintManifestFreshness(manifestJson: string, configEnv: string): 
         file: "manifest.json",
         message: `manifest.json is not valid JSON (${(e as Error).message}) — re-run \`mt-manifest sign\`.`,
         summary: "not valid JSON — re-run `mt-manifest sign`",
+        fix: "mt-manifest sign",
       },
     ];
   }
@@ -712,6 +721,7 @@ export function lintManifestFreshness(manifestJson: string, configEnv: string): 
           "manifest.json does not verify against its own pubkey — it was edited by hand after " +
           "signing. Change config.env instead and re-run `mt-manifest sign`.",
         summary: "edited by hand after signing — re-run `mt-manifest sign`",
+        fix: "mt-manifest sign",
       },
     ];
   }
@@ -737,6 +747,7 @@ export function lintManifestFreshness(manifestJson: string, configEnv: string): 
         `manifest.json was signed from an older config.env (differs at: ${changed.join(", ")}). ` +
         "Pasting it at /onboard would ingest the OLD values, correctly signed.",
       summary: `signed from an older config.env (${changed.join(", ")}) — re-run \`mt-manifest sign\``,
+      fix: "mt-manifest sign",
     },
   ];
 }
@@ -856,7 +867,11 @@ export function formatReport(report: DoctorReport): { text: string; ok: boolean 
   // the deployment — exactly the report that sent tom looking for a message he could not
   // see. Severity is the only ordering the reader cares about.
   const ranked = [...errors, ...warnings];
-  for (const f of ranked) {
+  // A finding with a one-command fix is held back for the END of the report — after the
+  // counts, where the eye lands and where nothing scrolls past it. In the middle of a
+  // headline list it is one line among nine; last, it is the next thing you type.
+  const actionable = ranked.filter((f) => f.fix);
+  for (const f of ranked.filter((f) => !f.fix)) {
     lines.push(`${label(f)}  ${where(f)}  [${f.rule}] ${headline(f)}`);
   }
   // Only worth printing twice when the detail actually says more than the headline did.
@@ -878,5 +893,11 @@ export function formatReport(report: DoctorReport): { text: string; ok: boolean 
     );
   }
   if (errors.length === 0 && warnings.length === 0) lines.push("everything agrees.");
+  if (actionable.length > 0) {
+    lines.push("");
+    for (const f of actionable) {
+      lines.push(`${label(f)}  ${where(f)}  [${f.rule}] ${headline(f)}`);
+    }
+  }
   return { text: lines.join("\n"), ok: errors.length === 0 };
 }
