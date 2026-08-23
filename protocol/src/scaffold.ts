@@ -714,6 +714,181 @@ export const COALITION_IMAGE = "w2vy/coalition:0.2.8";
 export const AGENT_IMAGE = "w2vy/mt-agent:0.3.0";
 
 /**
+ * `README.txt` — the directory explaining itself, in the words of someone who has never
+ * seen it before.
+ *
+ * The runbook is 1000 lines and assumes you are mid-onboarding when you read it. This is
+ * what you want three weeks later when a node is down and you have forgotten which
+ * command reloads the environment. Plain text on purpose: it opens in anything, on a
+ * machine with no browser, over ssh.
+ *
+ * ⚠️ It carries NO secrets — it is the one generated file that is safe to paste into a
+ * support thread, and it stays that way. Values interpolated here must all be public:
+ * slug, app name, URLs, host names.
+ */
+export function renderReadme(a: Answers): string {
+  const selling = isSelling(a);
+  const url = coalitionUrlFor(a.fluxAppName);
+  const hosts = a.hosts.map((h) => h.name).join(", ");
+  const slots = a.hosts.reduce((n, h) => n + h.slots.length, 0);
+  const L: string[] = [];
+  const rule = (): void => void L.push("-".repeat(70));
+
+  L.push(`FLUX HUB — ${a.providerName}`);
+  rule();
+  L.push("");
+  L.push(`You are a Flux Hub ${selling ? "Operator" : "Supporter"}.`);
+  L.push(
+    selling
+      ? "  You rent hardware out through the marketplace, and Flux Hub may also run"
+      : "  You run your own nodes, and Flux Hub may also run"
+  );
+  L.push("  Foundation nodes on your idle capacity.");
+  L.push("");
+  L.push(`  provider slug   ${a.providerSlug}     (permanent — Flux Hub knows you by this)`);
+  L.push(`  your Coalition  ${url}`);
+  L.push(`  your hardware   ${slots} slot(s) on ${hosts}`);
+  L.push("");
+  L.push("");
+  L.push("WHAT IS IN THIS DIRECTORY");
+  rule();
+  L.push("");
+  L.push("  manifest-key.pem     YOUR IDENTITY. Flux Hub pinned the public half of this");
+  L.push("                       key the first time you onboarded. If you lose it you");
+  L.push("                       cannot prove you are you. Back it up. Never share it.");
+  L.push("  manifest.json        Who you are and what hardware you attest to, signed");
+  L.push("                       with that key. This is what you paste at /onboard.");
+  L.push("  config.env           Settings that are NOT secret. Safe to keep in git.");
+  L.push("  secrets.env          Settings that ARE secret. Never commit this.");
+  L.push("  .env.operator        What the agent on this machine reads.");
+  L.push("  data/inventory.json  Your hosts and slots. Edit this to add or remove nodes.");
+  L.push("  compose.yaml         How the agent runs. See EVERYDAY COMMANDS below.");
+  L.push("  flux-app-spec.json   The Coalition, ready to register on the Flux Network.");
+  L.push("  env.json             Everything the Coalition needs, as one importable blob.");
+  L.push("                       CONTAINS SECRETS. Created by `mt-manifest env`.");
+  L.push("");
+  L.push("");
+  L.push("THE TWO HALVES");
+  rule();
+  L.push("");
+  L.push("  Flux Hub is two programs and they are easy to mix up.");
+  L.push("");
+  L.push("  THE AGENT runs HERE, on your own machine. It talks to your Proxmox and");
+  L.push("  builds VMs. It only ever dials out, so nothing can reach it from the");
+  L.push("  internet — which is why it is allowed to hold your Proxmox password.");
+  L.push("");
+  L.push("  THE COALITION runs on the FLUX NETWORK, not here. It is the public face:");
+  L.push(`  customers reach it at ${url}.`);
+  L.push("");
+  L.push("  Different machines, different files. compose.yaml is the agent.");
+  L.push("  env.json + flux-app-spec.json are the Coalition.");
+  L.push("");
+  L.push("");
+  L.push("EVERYDAY COMMANDS (the agent)");
+  rule();
+  L.push("");
+  L.push("  Run these in THIS directory.");
+  L.push("");
+  L.push("    docker compose up -d          start it (also: apply a change)");
+  L.push("    docker compose logs -f        watch what it is doing (Ctrl-C to stop");
+  L.push("                                  watching — that does not stop the agent)");
+  L.push("    docker compose ps             is it running?");
+  L.push("    docker compose down           stop it and remove it");
+  L.push("    docker compose restart        DO NOT USE after changing a setting.");
+  L.push("                                  See the next section.");
+  L.push("");
+  L.push("");
+  L.push("WHEN YOU CHANGE SOMETHING");
+  rule();
+  L.push("");
+  L.push("  Find what you changed. Run the line next to it. In order.");
+  L.push("");
+  L.push("  Added or removed a NODE (a slot on a host you already declared)");
+  L.push("      edit data/inventory.json");
+  L.push("      docker compose up -d --force-recreate");
+  L.push("");
+  L.push("  Added a whole new HOST (a machine not listed above)");
+  L.push("      add it to HOSTS in config.env");
+  L.push("      mt-manifest sign          <- your attested hardware changed");
+  L.push("      paste manifest.json and sign with your wallet, at:");
+  L.push(`        ${a.mtBaseUrl}/onboard`);
+  L.push("      mt-manifest env  ->  re-import env.json on Flux  ->  redeploy");
+  L.push("      Until you do all of that, Flux Hub REFUSES your whole inventory.");
+  L.push("");
+  if (selling) {
+    L.push("  Changed a PRICE or how many slots you offer");
+    L.push("      edit config.env, then:");
+    L.push("      mt-manifest env  ->  re-import env.json on Flux  ->  redeploy");
+    L.push("      docker compose up -d --force-recreate");
+    L.push("      No re-signing needed. Price is not part of your signed manifest.");
+    L.push("");
+  }
+  L.push("  Changed anything in secrets.env or .env.operator");
+  L.push("      mt-manifest env  ->  re-import env.json on Flux  ->  redeploy");
+  L.push("      docker compose up -d --force-recreate");
+  L.push("");
+  L.push("  Not sure whether your files still agree");
+  L.push("      mt-manifest doctor");
+  L.push("      It reads your files and tells you what disagrees. It changes nothing.");
+  L.push("      Run it any time. The last line is usually the command to run next.");
+  L.push("");
+  L.push("");
+  L.push("WHY `restart` IS NOT ON THAT LIST");
+  rule();
+  L.push("");
+  L.push("  `docker compose restart` does not re-read your settings. Neither does");
+  L.push("  `docker restart`. The agent comes back up with the OLD values and keeps");
+  L.push("  failing in exactly the same way, which makes it look like your fix did not");
+  L.push("  work. Use --force-recreate. This is the single most common confusion.");
+  L.push("");
+  L.push("");
+  L.push("THINGS THAT ARE HARD TO UNDO");
+  rule();
+  L.push("");
+  L.push("  Deleting manifest-key.pem");
+  L.push("      Flux Hub pinned its public half. There is no copy anywhere else.");
+  L.push("      BACK IT UP somewhere off this machine.");
+  L.push("");
+  L.push("  Running `mt-manifest init --force` again");
+  L.push("      It rewrites secrets.env, which erases the three keys /onboard issued");
+  L.push("      you. They cannot be looked up — only re-issued by a Flux Hub admin.");
+  L.push("");
+  L.push("  Committing secrets.env or env.json to git");
+  L.push("      Both hold live credentials. config.env is the one that is safe.");
+  L.push("");
+  L.push("  Mounting data/inventory.json instead of the data/ directory");
+  L.push("      compose.yaml already does this correctly. If you hand-edit it to point");
+  L.push("      at the file, your inventory edits silently stop reaching the agent.");
+  L.push("");
+  L.push("");
+  L.push("IF SOMETHING IS WRONG");
+  rule();
+  L.push("");
+  L.push("  1. mt-manifest doctor          does anything disagree?");
+  L.push("  2. docker compose logs --tail 50");
+  L.push("  3. Read the first line of the agent's log. It is a summary:");
+  L.push("       auth=signature   good — it is using your manifest key");
+  L.push("       courier=on       good — it can receive authorization requests");
+  L.push("       courier=off      it will never receive them, and deletes will hang");
+  L.push("       dryRun=true      it is only pretending; nothing is being built");
+  L.push("");
+  L.push("  Nothing here talks to Flux Hub except the agent and your Coalition. If both");
+  L.push("  are down, Flux Hub hides your listing until they come back. Your data is");
+  L.push("  kept, and the listing returns on its own.");
+  L.push("");
+  L.push("");
+  L.push("THE FULL GUIDE");
+  rule();
+  L.push("");
+  L.push("  docs/operator-onboarding.md in the moltentech-operator repository covers");
+  L.push("  every step in detail, including the parts this file summarises.");
+  L.push("");
+  L.push("  This file contains no secrets, so it is safe to share when asking for help.");
+  L.push("");
+  return L.join("\n");
+}
+
+/**
  * `compose.yaml` for the agent — the half of the deployment that runs on the operator's
  * OWN hardware. (The Coalition half is `flux-app-spec.json`; it runs on the Flux Network.)
  *
@@ -834,6 +1009,7 @@ export const GENERATED_PATHS = [
   "data/inventory.json",
   "flux-app-spec.json",
   "compose.yaml",
+  "README.txt",
   // Not in GeneratedFiles — the CLI signs and writes this one — but it is the file
   // carrying a SIGNATURE, so it is the last one that should be clobbered silently.
   "manifest.json",
@@ -846,6 +1022,7 @@ export interface GeneratedFiles {
   "inventory.json": string;
   "flux-app-spec.json": string;
   "compose.yaml": string;
+  "README.txt": string;
 }
 
 export function generateAll(
@@ -878,5 +1055,6 @@ export function generateAll(
     "inventory.json": renderInventoryJson(a),
     "flux-app-spec.json": renderFluxAppSpec(a),
     "compose.yaml": renderAgentCompose(a),
+    "README.txt": renderReadme(a),
   };
 }
