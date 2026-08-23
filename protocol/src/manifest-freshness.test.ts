@@ -91,7 +91,10 @@ test("⭐ editing config.env after signing is an ERROR that names what moved", (
   const stale = doctor(dir).findings.find((f) => f.rule === "MANIFEST_STALE")!;
   assert.equal(stale.severity, "error");
   assert.match(stale.message, /trialDays/);
-  assert.match(stale.message, /mt-manifest sign/);
+  // The FIX belongs in the headline, not buried at the end of the diagnosis — this is the
+  // line the operator scans the report for.
+  assert.match(stale.summary!, /mt-manifest sign/);
+  assert.match(stale.summary!, /trialDays/);
 });
 
 test("re-signing clears it, so the fix the message names actually works", () => {
@@ -133,4 +136,60 @@ test("doctor with no manifest.json says nothing about it — mid-onboarding is n
     runDoctor({ configEnv: read(dir, "config.env") }).findings.filter((f) => f.rule.startsWith("MANIFEST_")),
     []
   );
+});
+
+/**
+ * `env` is the last command between a finished scaffold and a deployable Flux app, and
+ * it used to be the longest to type: three required paths, all naming files `init` had
+ * just written into the directory you were standing in. The runbook's own instruction —
+ * "run `mt-manifest env`" — did not work as written.
+ */
+
+test("⭐ `env` needs no arguments in a scaffold directory", () => {
+  const dir = scaffold();
+  // Fill the three keys /onboard issues; env legitimately requires them.
+  writeFileSync(
+    join(dir, "secrets.env"),
+    read(dir, "secrets.env")
+      .replace(/^AGENT_KEY=$/m, "AGENT_KEY=ak_test")
+      .replace(/^COALITION_KEY=$/m, "COALITION_KEY=ck_test")
+      .replace(/^STRIPE_SECRET_KEY=$/m, "STRIPE_SECRET_KEY=rk_test")
+      .replace(/^STRIPE_WEBHOOK_SECRET=$/m, "STRIPE_WEBHOOK_SECRET=whsec_test")
+  );
+  cli(["env", "--dir", dir]);
+  const pairs = JSON.parse(read(dir, "env.json")) as string[];
+  assert.ok(Array.isArray(pairs) && pairs.length > 0);
+  assert.ok(pairs.some((p) => p.startsWith("MANIFEST_JSON=")), "the signed manifest must ship");
+  assert.ok(pairs.some((p) => p === "AGENT_KEY=ak_test"));
+});
+
+test("a missing file names WHICH file and where env expected it", () => {
+  const dir = mkdtempSync(join(tmpdir(), "mt-env-empty-"));
+  assert.throws(
+    () => cli(["env", "--dir", dir]),
+    (err: Error & { stderr?: string }) => {
+      assert.match(err.stderr ?? "", /config\.env not found/);
+      assert.match(err.stderr ?? "", /--dir/);
+      return true;
+    }
+  );
+});
+
+test("⭐ `sign` needs no arguments either — it is the command doctor tells you to run", () => {
+  // MANIFEST_STALE's headline says "re-run `mt-manifest sign`". That has to be the whole
+  // command, or the headline is a lie and the operator is back to copying three paths.
+  const dir = scaffold();
+  writeFileSync(join(dir, "config.env"), read(dir, "config.env").replace(/^TRIAL_DAYS=.*$/m, "TRIAL_DAYS=5"));
+  assert.equal(doctor(dir).findings.some((f) => f.rule === "MANIFEST_STALE"), true);
+  cli(["sign", "--dir", dir]);
+  assert.deepEqual(doctor(dir).findings.filter((f) => f.rule.startsWith("MANIFEST_")), []);
+});
+
+test("init puts inventory.json in data/, the directory the agent mounts", () => {
+  // A single-file bind mount pins the container to an inode that an atomic editor save
+  // detaches, after which host edits silently stop reaching the agent. The directory is
+  // the unit that gets mounted, so the tool creates one.
+  const dir = scaffold();
+  assert.ok(existsSync(join(dir, "data", "inventory.json")));
+  assert.equal(existsSync(join(dir, "inventory.json")), false, "not also written flat");
 });

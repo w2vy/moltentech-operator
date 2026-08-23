@@ -17,10 +17,16 @@
  *                                       otherwise: --check-stripe proves the webhook is on
  *                                       YOUR account, --check-proxmox proves the token works
  *                                       and the image storage does not spin. Both read-only.
- *   sign   --key <pem> (--from-config <config.env> | --in <body.json>) [--out <manifest.json>]
+ *   sign   [--dir <dir>] [--key <pem>] [--from-config <config.env>] [--in <body.json>]
+ *          [--out <manifest.json>] [--stdout]
+ *                                       every path defaults to the file `init` wrote in <dir>,
+ *                                       so re-signing after a config edit is `mt-manifest sign`.
  *                                       render body (from config.env) or read body.json,
  *                                       fill pubkey + publishedAt, sign, emit full manifest
- *   env    --from-config <config.env> --secrets <secrets.env> --manifest <manifest.json> [--out <env.json>]
+ *   env    [--dir <dir>] [--from-config <config.env>] [--secrets <secrets.env>]
+ *          [--manifest <manifest.json>] [--out <env.json>] [--stdout]
+ *                                       every path defaults to the file `init` wrote in <dir>,
+ *                                       so a finished scaffold needs no arguments at all.
  *                                       assemble the Flux "Import Environment Variables" blob (JSON array of
  *                                       "KEY=value"): non-secret config + secrets + the signed manifest as
  *                                       MANIFEST_JSON; passes TIER_PRICES_JSON through from config.env. --manifest may
@@ -37,7 +43,7 @@
  *                                        wrap the manifest + your wallet signature into the
  *                                        SignedProviderManifest MT ingests (proven identity)
  */
-import { readFileSync, writeFileSync, existsSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { join, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
@@ -670,16 +676,25 @@ async function main() {
       // generator stays pure and `--answers` can pin an existing value to keep sessions.
       const sessionSecret = answers.sessionSecret?.trim() || randomBytes(32).toString("hex");
       const files = generateAll(answers, { manifestPubkey, manifestKey, sessionSecret });
-      // manifest.json is written below rather than by the generator, so it has to be named
-      // here too — otherwise the one file carrying a SIGNATURE is the only one init would
-      // clobber without asking.
-      const existing = [...Object.keys(files), "manifest.json"].filter((f) => existsSync(join(dir, f)));
+      // ⭐ inventory.json goes in data/, not beside the rest.
+      //
+      // That directory is bind-mounted into the agent container at /data, and the mount is
+      // the DIRECTORY, not the file — a single-file mount pins the container to an inode
+      // that any atomic editor save detaches, after which host edits silently stop
+      // reaching the agent. Writing it flat meant the operator had to notice that and
+      // build the directory themselves at Step 5; the layout is the same either way, so
+      // the tool should produce it. Nothing else may go in there: the agent must never be
+      // able to read .env.operator or manifest-key.pem.
+      const outPathFor = (name: string): string =>
+        name === "inventory.json" ? join(dir, "data", name) : join(dir, name);
+      const existing = [...Object.keys(files), "manifest.json"].filter((f) => existsSync(outPathFor(f)));
       if (existing.length > 0 && !force) {
         die(`refusing to overwrite existing file(s): ${existing.join(", ")} — pass --force to replace them.`);
       }
+      mkdirSync(join(dir, "data"), { recursive: true });
       for (const [name, text] of Object.entries(files)) {
         const mode = name === "secrets.env" ? 0o600 : 0o644;
-        writeFileSync(join(dir, name), text, { mode });
+        writeFileSync(outPathFor(name), text, { mode });
       }
 
       // ⭐ SIGN IT. init used to stop one command short of the artifact its own closing
@@ -699,7 +714,10 @@ async function main() {
       // that are somewhere they cannot name.
       const outDir = resolve(dir);
       const where = outDir === "/work" ? `${outDir} (the directory you ran this from)` : outDir;
-      console.log(`Wrote ${[...Object.keys(files), "manifest.json"].join(", ")} to ${where}\n`);
+      const written = [...Object.keys(files), "manifest.json"]
+        .map((f) => (f === "inventory.json" ? "data/inventory.json" : f))
+        .join(", ");
+      console.log(`Wrote ${written} to ${where}\n`);
       // Only steps that are genuinely still OUTSTANDING belong in this list. It used to
       // open with "1. mt-manifest keygen" — which init now requires to have happened
       // already — and with a base64-and-paste step init performs itself.
@@ -719,8 +737,17 @@ async function main() {
       } else {
         console.log("  2. Stripe: not needed — you are not listing anything for sale.");
       }
-      console.log(`  3. deploy Flux app "${answers.fluxAppName}" → ${coalitionUrlFor(answers.fluxAppName)}`);
-      console.log("\nThen run `mt-manifest doctor` here to check every file agrees.");
+      // The step that used to be missing entirely. "deploy Flux app" is not something an
+      // operator can act on: the app needs an environment, and nothing here said where it
+      // comes from or that a command builds it. It is also the LAST thing that reads
+      // secrets.env, so it belongs after /onboard has filled it in.
+      console.log("  3. `mt-manifest doctor`   ← run it here; it checks every file agrees");
+      console.log("  4. `mt-manifest env`      → env.json, the Flux \"Import Environment Variables\" blob");
+      console.log("     built from config.env + secrets.env + manifest.json. CONTAINS SECRETS.");
+      console.log(`  5. deploy Flux app "${answers.fluxAppName}" as an ENTERPRISE app, import env.json`);
+      console.log(`     → ${coalitionUrlFor(answers.fluxAppName)}`);
+      console.log("     ⚠️  enterprise, not standard: a standard Flux app's environment is");
+      console.log("         WORLD-READABLE, and yours holds your Stripe key.");
       break;
     }
     case "doctor": {
@@ -736,7 +763,7 @@ async function main() {
       };
       // inventory.json sits beside the others during onboarding but is mounted at
       // data/ once the agent runs, so look in both rather than reporting it missing.
-      const inventory = read("inventory.json") ?? read(join("data", "inventory.json"));
+      const inventory = read(join("data", "inventory.json")) ?? read("inventory.json");
       const configText = read("config.env");
       // Price rules come from MT itself when we can reach it — the minimum is MT's to
       // set, and a copy in this repo is only a fallback. MT_BASE_URL is read from the
@@ -825,11 +852,19 @@ async function main() {
       break;
     }
     case "sign": {
-      const keyPath = flag(args, "--key") ?? die("--key <manifest-key.pem> required");
-      const fromConfig = flag(args, "--from-config");
+      // Same defaults as `env`, for the same reason: every one of these names a file
+      // `init` wrote into the directory you are standing in. The re-sign instruction that
+      // `doctor` prints is the command an operator types most often, and it was 90
+      // characters of paths they had no choice about.
+      const dir = flag(args, "--dir") ?? ".";
       const inPath = flag(args, "--in");
-      if (!fromConfig && !inPath) die("provide --from-config <config.env> or --in <body.json>");
-      const outPath = flag(args, "--out");
+      const keyPath = flag(args, "--key") ?? join(dir, "manifest-key.pem");
+      const fromConfig = inPath ? flag(args, "--from-config") : (flag(args, "--from-config") ?? join(dir, "config.env"));
+      const outPath = flag(args, "--out") ?? (args.includes("--stdout") ? undefined : join(dir, "manifest.json"));
+      if (!existsSync(keyPath)) {
+        die(`${keyPath} not found — run \`mt-manifest keygen\` first, or pass --key <pem>.`);
+      }
+      if (fromConfig && !existsSync(fromConfig)) die(`${fromConfig} not found — pass --from-config <config.env>.`);
 
       const keyPem = readFileSync(keyPath, "utf8");
       let manifest: Record<string, unknown>;
@@ -856,10 +891,28 @@ async function main() {
       break;
     }
     case "env": {
-      const fromConfig = flag(args, "--from-config") ?? die("--from-config <config.env> required");
-      const secretsPath = flag(args, "--secrets") ?? die("--secrets <secrets.env> required");
-      const manifestPath = flag(args, "--manifest") ?? die("--manifest <manifest.json> required");
-      const outPath = flag(args, "--out");
+      // ⭐ Defaults, because `init` writes all four of these files under exactly these
+      // names into one directory. Requiring three explicit paths meant the one command
+      // standing between a finished scaffold and a deployable Flux app was also the
+      // longest to type — and the runbook's own instruction ("run `mt-manifest env`")
+      // did not actually work as written.
+      const dir = flag(args, "--dir") ?? ".";
+      const fromConfig = flag(args, "--from-config") ?? join(dir, "config.env");
+      const secretsPath = flag(args, "--secrets") ?? join(dir, "secrets.env");
+      const manifestPath = flag(args, "--manifest") ?? join(dir, "manifest.json");
+      const outPath = flag(args, "--out") ?? (args.includes("--stdout") ? undefined : join(dir, "env.json"));
+      for (const [what, path] of [
+        ["config.env", fromConfig],
+        ["secrets.env", secretsPath],
+        ["manifest.json", manifestPath],
+      ] as const) {
+        if (!existsSync(path)) {
+          die(
+            `${path} not found. \`env\` assembles the Flux environment from the files \`init\` wrote ` +
+              `(${what} among them) — run it in that directory, or pass --dir <dir>.`
+          );
+        }
+      }
 
       const config = parseConfigEnv(readFileSync(fromConfig, "utf8"));
       const secrets = parseConfigEnv(readFileSync(secretsPath, "utf8"));
@@ -1067,8 +1120,11 @@ async function main() {
       console.log("  keygen    [--out <dir>]");
       console.log("  init      [--out <dir>] [--answers <answers.json>] [--force]");
       console.log("  doctor    [--dir <dir>]");
-      console.log("  sign      --key <pem> (--from-config <config.env> | --in <body.json>) [--out <manifest.json>]");
-      console.log("  env       --from-config <config.env> --secrets <secrets.env> --manifest <manifest|signed-manifest.json> [--out <env.json>]");
+      console.log("  sign      [--dir <dir>] [--key <pem>] [--from-config <config.env>|--in <body.json>]");
+      console.log("            [--out <manifest.json>] [--stdout]   defaults to what `init` wrote");
+      console.log("  env       [--dir <dir>] [--from-config <config.env>] [--secrets <secrets.env>]");
+      console.log("            [--manifest <manifest|signed-manifest.json>] [--out <env.json>] [--stdout]");
+      console.log("            defaults to the files `init` wrote in the current directory");
       console.log("  verify    --in <manifest.json>");
       console.log("  authorize --in <manifest.json> [--signature <b64> --out <signed-manifest.json>]");
       process.exit(cmd ? 1 : 0);

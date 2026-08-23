@@ -105,6 +105,12 @@ export interface Finding {
   /** 1-indexed line, when the finding belongs to a specific line. */
   line?: number;
   message: string;
+  /**
+   * One-line headline for the summary block at the top of the report. Defaults to the
+   * message's first sentence, which is written to stand alone for exactly this reason.
+   * Set it explicitly when the useful headline is the FIX rather than the diagnosis.
+   */
+  summary?: string;
 }
 
 /**
@@ -689,6 +695,7 @@ export function lintManifestFreshness(manifestJson: string, configEnv: string): 
         severity: "error",
         file: "manifest.json",
         message: `manifest.json is not valid JSON (${(e as Error).message}) — re-run \`mt-manifest sign\`.`,
+        summary: "not valid JSON — re-run `mt-manifest sign`",
       },
     ];
   }
@@ -704,6 +711,7 @@ export function lintManifestFreshness(manifestJson: string, configEnv: string): 
         message:
           "manifest.json does not verify against its own pubkey — it was edited by hand after " +
           "signing. Change config.env instead and re-run `mt-manifest sign`.",
+        summary: "edited by hand after signing — re-run `mt-manifest sign`",
       },
     ];
   }
@@ -727,8 +735,8 @@ export function lintManifestFreshness(manifestJson: string, configEnv: string): 
       file: "manifest.json",
       message:
         `manifest.json was signed from an older config.env (differs at: ${changed.join(", ")}). ` +
-        "Pasting it at /onboard would ingest the OLD values, correctly signed — re-run " +
-        "`mt-manifest sign --key manifest-key.pem --from-config config.env --out manifest.json`.",
+        "Pasting it at /onboard would ingest the OLD values, correctly signed.",
+      summary: `signed from an older config.env (${changed.join(", ")}) — re-run \`mt-manifest sign\``,
     },
   ];
 }
@@ -799,6 +807,27 @@ export function runDoctor(input: DoctorInput): DoctorReport {
 }
 
 /** Human-readable report. Returns the text and whether anything is fatal. */
+
+/**
+ * The first sentence of a finding's message, used as its headline when it has no explicit
+ * `summary`. Every rule's message is written to open with a standalone statement of what
+ * is wrong, so this is a real headline rather than a truncation — and a message that is
+ * already one sentence is simply itself, which is why such findings are not printed twice.
+ */
+function firstSentence(message: string): string {
+  // "e.g." and friends end in a period followed by a space and are not sentence ends.
+  // Getting this wrong truncates a headline mid-clause ("supplied by `pveum user token
+  // add` — the id, e.g."), which reads as a bug in the tool rather than a short summary.
+  const ABBREV = /(?:^|\s)(?:e\.g|i\.e|etc|vs|approx|Dr|Mr|Ms)\.$/;
+  for (const m of message.matchAll(/[.!?](?=\s|$)/g)) {
+    const end = m.index! + 1;
+    const head = message.slice(0, end);
+    if (ABBREV.test(head)) continue;
+    return head.trim();
+  }
+  return message;
+}
+
 export function formatReport(report: DoctorReport): { text: string; ok: boolean } {
   const errors = report.findings.filter((f) => f.severity === "error");
   const warnings = report.findings.filter((f) => f.severity === "warning");
@@ -811,9 +840,32 @@ export function formatReport(report: DoctorReport): { text: string; ok: boolean 
     };
   }
 
-  for (const f of report.findings) {
-    const where = f.line != null ? `${f.file}:${f.line}` : f.file;
-    lines.push(`${f.severity === "error" ? "ERROR" : "warn "}  ${where}  [${f.rule}]  ${f.message}`);
+  // TWO BLOCKS: headlines, then the detail behind each.
+  //
+  // A single block of full-sentence findings is unreadable at the size this report reaches
+  // — the run that prompted this had two errors whose messages wrapped over four lines
+  // each, and the one that mattered could not be picked out at a glance. The headline
+  // block is what you scan; the detail block is what you read once you know which one you
+  // care about. Same findings, same order, twice.
+  const headline = (f: Finding): string => f.summary ?? firstSentence(f.message);
+  const label = (f: Finding): string => (f.severity === "error" ? "ERROR" : "warn ");
+  const where = (f: Finding): string => (f.line != null ? `${f.file}:${f.line}` : f.file);
+
+  // Errors first in BOTH blocks. Findings are generated in file order, which on a fresh
+  // scaffold puts five routine "not yet filled" warnings above the one error that stops
+  // the deployment — exactly the report that sent tom looking for a message he could not
+  // see. Severity is the only ordering the reader cares about.
+  const ranked = [...errors, ...warnings];
+  for (const f of ranked) {
+    lines.push(`${label(f)}  ${where(f)}  [${f.rule}] ${headline(f)}`);
+  }
+  // Only worth printing twice when the detail actually says more than the headline did.
+  const expanded = ranked.filter((f) => headline(f) !== f.message);
+  if (expanded.length > 0) {
+    lines.push("");
+    for (const f of expanded) {
+      lines.push(`${label(f)}  ${where(f)}  [${f.rule}]  ${f.message}`);
+    }
   }
   if (lines.length > 0) lines.push("");
   lines.push(
