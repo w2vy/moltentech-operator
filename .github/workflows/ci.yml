@@ -109,7 +109,7 @@ jobs:
           # names, values, prices — is used exactly as an operator would copy it.
           c = cfg[0].replace("https://<your-coalition>", "https://coalition.example")
           c = c.replace("<the wallet address you sign with>", "t1exampleOwnerWalletAddress")
-          c = c.replace("<your MT pubkey>", "Y2ktZHVtbXktbXQtcHVia2V5LTMyLWJ5dGVzISE=")
+          c = c.replace("<your FH pubkey>", "Y2ktZHVtbXktbXQtcHVia2V5LTMyLWJ5dGVzISE=")
           (work / "config.env").write_text(c)
 
           # Every placeholder in a VALUE must be substituted above. An unsubstituted <...>

@@ -314,6 +314,10 @@ COALITION_URL=https://<your-coalition>
 # logged into FluxOS as in Step 4, and the two can differ. This one is the wallet you
 # will sign with at /onboard.
 OWNER_ADDRESS=<the wallet address you sign with>
+# PROVIDER_LEVEL — supporter (own nodes + Foundation nodes, nothing for sale) or
+# operator (also rents hardware out). Optional: omitted means operator, which is what
+# every provider onboarded before this field existed is.
+PROVIDER_LEVEL=operator
 # MT_PUBKEY — FILL THIS IN. Fetch it now: curl {MT_BASE_URL}/api/mt-pubkey
 # Only the Coalition consumes it, to verify FH's inbound calls are really from FH.
 #
