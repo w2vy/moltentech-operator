@@ -256,7 +256,10 @@ jobs:
 
           # inventory.json must be a top-level ARRAY — the agent reads nothing else,
           # and an object form parses fine while declaring zero hosts.
-          inv = json.loads((work / "inventory.json").read_text())
+          # ...and it lives in data/, the directory the agent bind-mounts at /data.
+          inv_path = work / "data" / "inventory.json"
+          assert inv_path.exists(), "init must write data/inventory.json, not a flat file"
+          inv = json.loads(inv_path.read_text())
           assert isinstance(inv, list), "inventory.json must be a top-level array"
           assert inv[0]["name"] == "pve-01"
 

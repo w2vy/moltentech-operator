@@ -414,7 +414,7 @@ signed `manifest.json` from the same `config.env`, and you only need this comman
 after you EDIT `config.env`:
 
 ```sh
-mt-manifest sign --key manifest-key.pem --from-config config.env --out manifest.json
+mt-manifest sign          # key, config and output all default to what `init` wrote
 mt-manifest verify --in manifest.json
 # expect: OK — manifest signature valid (bare manifest, no owner authorization)
 ```
@@ -423,8 +423,8 @@ mt-manifest verify --in manifest.json
 trial length — anything that reaches the manifest — and `manifest.json` still carries the
 OLD values, correctly signed. Submitting it then ingests the old provider with every
 signature valid, which nothing downstream can detect. `mt-manifest doctor` compares the
-two and fails with `MANIFEST_STALE`, naming the fields that moved; re-run the `sign`
-command above to clear it.
+two and fails with `MANIFEST_STALE`, naming the fields that moved; `mt-manifest sign`
+clears it.
 
 ⚠️ **"bare manifest, no owner authorization" is the correct and expected result.** Under
 the old flow you then ran `mt-manifest authorize` to wrap it in a wallet signature. You
@@ -638,10 +638,16 @@ Your agent-managed hosts and slots are **declared by you**, not inserted into FH
 database by an admin. Create a **dedicated subdirectory** for it — the agent mounts that
 directory, and nothing else in it should be readable by the container:
 
+**`init` already wrote this** — `data/inventory.json`, in a directory of its own, because
+that directory is what the agent bind-mounts at `/data` in Step 6. Edit it in place:
+
 ```sh
-mkdir -p agent-data
-$EDITOR agent-data/inventory.json
+$EDITOR data/inventory.json
 ```
+
+If you are writing one by hand instead, `mkdir -p data` first. Keep `data/` scoped to
+`inventory.json` alone — `.env.operator` and `manifest-key.pem` have no business being
+readable inside the agent container.
 
 ```json
 [
@@ -687,7 +693,7 @@ operator's inventory, and never hard-deletes a rented slot.
 admin action, not a file edit.
 
 Because the agent **re-reads the file every heartbeat**, edits apply without a restart —
-**only if you mount `./agent-data` as a directory** (Step 6). (Alternative: inline
+**only if you mount `./data` as a directory** (Step 6). (Alternative: inline
 `AGENT_INVENTORY_JSON`; absent entirely = don't declare.)
 
 **ISO auto-refresh:** declaring inventory also turns on automatic ArcaneOS/FluxLive ISO
@@ -768,13 +774,11 @@ To confirm the key is the right one, decode it and compare the derived pubkey wi
 
 ### Mount the directory, not the file
 
-Mount `./agent-data` read-only at `/data`, which is where `AGENT_INVENTORY_PATH`
+Mount `./data` read-only at `/data`, which is where `AGENT_INVENTORY_PATH`
 resolves inside the container. A **single-file** bind mount pins the container to that
 file's *inode*, and most editors save atomically via write-new-then-rename, which
 detaches the mount — host edits silently stop reaching the container (no error, it just
-keeps serving stale content) until the container is recreated. Keep `agent-data/` scoped
-to `inventory.json` alone: `.env.operator` and `manifest-key.pem` have no business being
-readable inside the container.
+keeps serving stale content) until the container is recreated.
 
 ### Dry run, then run
 
@@ -783,7 +787,7 @@ readable inside the container.
 Before any VM is created, run the credentialed checks — read-only, creates nothing:
 
 ```sh
-docker run --rm --env-file .env.operator -v "$PWD/agent-data:/data:ro" \
+docker run --rm --env-file .env.operator -v "$PWD/data:/data:ro" \
   w2vy/mt-agent:0.3.0 doctor
 ```
 
@@ -809,7 +813,7 @@ the media yourself; an honest "cannot tell" is deliberate rather than a guess.
 Validate connectivity/auth to FH first, **without touching Proxmox**:
 
 ```sh
-docker run --rm --env-file .env.operator -v "$PWD/agent-data:/data:ro" \
+docker run --rm --env-file .env.operator -v "$PWD/data:/data:ro" \
   -e AGENT_DRY_RUN=1 w2vy/mt-agent:0.3.0
 # expect: provider=… mt=… dryRun=true auth=signature ownerAuth=enforced courier=on
 ```
@@ -825,7 +829,7 @@ Then run it for real:
 
 ```sh
 docker run -d --name mt-agent --restart unless-stopped \
-  --env-file .env.operator -v "$PWD/agent-data:/data:ro" w2vy/mt-agent:0.3.0
+  --env-file .env.operator -v "$PWD/data:/data:ro" w2vy/mt-agent:0.3.0
 ```
 
 ⚠️ **`docker restart` does NOT reload `--env-file` changes.** Any env edit requires

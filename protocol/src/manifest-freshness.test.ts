@@ -91,7 +91,10 @@ test("⭐ editing config.env after signing is an ERROR that names what moved", (
   const stale = doctor(dir).findings.find((f) => f.rule === "MANIFEST_STALE")!;
   assert.equal(stale.severity, "error");
   assert.match(stale.message, /trialDays/);
-  assert.match(stale.message, /mt-manifest sign/);
+  // The FIX belongs in the headline, not buried at the end of the diagnosis — this is the
+  // line the operator scans the report for.
+  assert.match(stale.summary!, /mt-manifest sign/);
+  assert.match(stale.summary!, /trialDays/);
 });
 
 test("re-signing clears it, so the fix the message names actually works", () => {
@@ -170,4 +173,23 @@ test("a missing file names WHICH file and where env expected it", () => {
       return true;
     }
   );
+});
+
+test("⭐ `sign` needs no arguments either — it is the command doctor tells you to run", () => {
+  // MANIFEST_STALE's headline says "re-run `mt-manifest sign`". That has to be the whole
+  // command, or the headline is a lie and the operator is back to copying three paths.
+  const dir = scaffold();
+  writeFileSync(join(dir, "config.env"), read(dir, "config.env").replace(/^TRIAL_DAYS=.*$/m, "TRIAL_DAYS=5"));
+  assert.equal(doctor(dir).findings.some((f) => f.rule === "MANIFEST_STALE"), true);
+  cli(["sign", "--dir", dir]);
+  assert.deepEqual(doctor(dir).findings.filter((f) => f.rule.startsWith("MANIFEST_")), []);
+});
+
+test("init puts inventory.json in data/, the directory the agent mounts", () => {
+  // A single-file bind mount pins the container to an inode that an atomic editor save
+  // detaches, after which host edits silently stop reaching the agent. The directory is
+  // the unit that gets mounted, so the tool creates one.
+  const dir = scaffold();
+  assert.ok(existsSync(join(dir, "data", "inventory.json")));
+  assert.equal(existsSync(join(dir, "inventory.json")), false, "not also written flat");
 });
