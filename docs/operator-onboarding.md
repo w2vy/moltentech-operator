@@ -161,11 +161,27 @@ into `.env.operator` in Step 6.
 
 ### 0.3 Choose an ISO storage — you do not download the ISO
 
-Pick an ISO storage every attested host can read (a shared NFS/CIFS storage if you have
-more than one host) and note its **storage ID**; it becomes `PROXMOX_STORAGE_ISO`. That
-is the whole step: the agent downloads the ArcaneOS/FluxLive ISO itself, checksum-verifies
-it, uploads it to that storage on every declared host at startup and every 6h, and adopts
-the new name into `ARCANE_ISO` in-process (Step 5's *ISO auto-refresh*).
+Pick an ISO storage every attested host can read and note its **storage ID**; it becomes
+`PROXMOX_STORAGE_ISO`. That is the whole step: the agent downloads the ArcaneOS/FluxLive
+ISO itself, checksum-verifies it, uploads it to that storage on every declared host at
+startup and every 6h, and adopts the new name into `ARCANE_ISO` in-process (Step 5's *ISO
+auto-refresh*).
+
+⭐ **On a cluster, choose a shared storage** — NFS, CIFS, or anything Proxmox marks
+`shared`. The agent stages the ISO onto whatever storage each host names, so a shared
+target is written **once and seen by every node**, and a new ArcaneOS release lands
+everywhere in one refresh. Name per-host storage instead and you get one copy per host,
+each refreshed separately — which is one more place for a single host to sit on a stale
+ISO. `mt-manifest init` labels shared storages in its list and offers one as the default:
+
+```
+storages on pve30: ssd(SSD) local-lvm(HDD) pve55-shared(NFS, shared) local(dir)
+  (9 more defined in the cluster but not usable here: ss1, ss2, ss3, …)
+```
+
+Storages belonging to *other* hosts are listed separately rather than as choices: a
+cluster defines storage globally, so every host's storage list also carries every other
+host's local pools.
 
 ⚠️ The auto-staging is scoped to **declared inventory**. Skip Step 5 and the agent has no
 record of your node names: `ARCANE_ISO` then stays whatever you set by hand, and a
