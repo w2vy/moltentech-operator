@@ -50,7 +50,9 @@ baked in):
 ```sh
 # A shell FUNCTION, not an alias: an alias does not expand as an argument to another
 # command. The -i is required — without stdin, `init` prints one prompt and exits at EOF.
-mt-manifest() { docker run --rm -i -v "$PWD:/work" -u "$(id -u):$(id -g)" ghcr.io/w2vy/mt-manifest "$@"; }
+# `docker run` never re-pulls, so refresh the image every 48h (see the onboarding doc for
+# the stamp-file version); --pull always is the one-liner alternative.
+mt-manifest() { docker run --rm -i --pull always -v "$PWD:/work" -u "$(id -u):$(id -g)" ghcr.io/w2vy/mt-manifest "$@"; }
 mt-manifest keygen                                                       # -> manifest-key.pem (KEEP SECRET) + pubkey
 mt-manifest sign --key manifest-key.pem --from-config config.env --out manifest.json
 mt-manifest verify --in manifest.json
