@@ -243,7 +243,9 @@ all from the same folder.
 
 `init` asks about eight questions and writes **every** file this guide would otherwise
 have you create by hand — `config.env`, a `secrets.env` skeleton, `.env.operator`,
-`inventory.json`, and the Flux app spec:
+`data/inventory.json`, the Flux app spec, `compose.yaml` for the agent, a signed
+`manifest.json`, and a **`README.txt`** that explains the whole directory in plain
+language and lists which command to run after which kind of change:
 
 ```sh
 mt-manifest init

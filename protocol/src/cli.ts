@@ -790,6 +790,9 @@ async function main() {
       // Only steps that are genuinely still OUTSTANDING belong in this list. It used to
       // open with "1. mt-manifest keygen" — which init now requires to have happened
       // already — and with a base64-and-paste step init performs itself.
+      // Pointed at explicitly: a generated README nobody is told about is a file nobody
+      // opens, and this is the one written for the operator rather than for the tooling.
+      console.log("⭐ README.txt explains every file here and what to run when.\n");
       console.log("Already done, from the key in this directory:");
       console.log("  ✓ MANIFEST_KEY   filled in secrets.env and .env.operator");
       console.log("  ✓ MANIFEST_PUBKEY pinned in .env.operator (`mt-agent doctor` now compares, not skips)");
