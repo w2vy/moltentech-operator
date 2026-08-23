@@ -744,6 +744,7 @@ async function main() {
       console.log("  3. `mt-manifest doctor`   ← run it here; it checks every file agrees");
       console.log("  4. `mt-manifest env`      → env.json, the Flux \"Import Environment Variables\" blob");
       console.log("     built from config.env + secrets.env + manifest.json. CONTAINS SECRETS.");
+      console.log("     then `docker compose up -d` here to start the agent (compose.yaml is written)");
       console.log(`  5. deploy Flux app "${answers.fluxAppName}" as an ENTERPRISE app, import env.json`);
       console.log(`     → ${coalitionUrlFor(answers.fluxAppName)}`);
       console.log("     ⚠️  enterprise, not standard: a standard Flux app's environment is");
