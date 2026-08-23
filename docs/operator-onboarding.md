@@ -825,23 +825,33 @@ owner-authorization courier is live.
 `COALITION_URL` **and** `OWNER_ADDRESS` are all set. There is no warning — you simply
 never receive authorization requests, and deletes/reprovisions sit forever.
 
-Then run it for real:
+Then run it for real. **`init` wrote `compose.yaml` for you** — pinned image, `./data`
+mounted as a read-only directory, its own project name, no published ports:
+
+```sh
+docker compose up -d          # start
+docker compose logs -f        # watch
+docker compose down           # stop and remove
+```
+
+⚠️ **After editing `.env.operator`, use `docker compose up -d --force-recreate`.**
+`docker compose restart` re-reads nothing, and whether plain `up -d` notices a changed
+`env_file`'s *contents* varies by compose version. Same trap as `docker restart` with
+`--env-file`, and the single most common reason a corrected key keeps returning 401.
+
+The equivalent without compose, if you prefer:
 
 ```sh
 docker run -d --name mt-agent --restart unless-stopped \
   --env-file .env.operator -v "$PWD/data:/data:ro" w2vy/mt-agent:0.3.0
+# any env edit then needs: docker rm -f mt-agent && the above again
 ```
-
-⚠️ **`docker restart` does NOT reload `--env-file` changes.** Any env edit requires
-`docker rm -f mt-agent` and a fresh `docker run`. This is the single most common reason
-a "fixed" key keeps returning 401.
 
 ⚠️ If you see **"self-signed certificate in certificate chain"**, the image is missing
 its CA store — it is not a middlebox on your network and not a Proxmox cert problem.
 
-(Or use `docker-compose.operator.yml` with `image: w2vy/mt-agent` instead of `build:`.
-⚠️ The compose files hardcode a project name, so a second stack on the same host **must**
-pass `-p <name>` or the two will fight over the same containers.)
+(`docker-compose.operator.yml` in the repo is a different thing: it **builds from a
+source checkout** and runs both legs. The generated `compose.yaml` is the one you want.)
 
 `priceCents` must be ≥ the FH platform floor and should match `TIER_PRICES_JSON` in the
 Coalition.
