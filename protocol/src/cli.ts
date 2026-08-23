@@ -53,6 +53,11 @@ import {
   type ProxmoxSurvey,
 } from "./proxmox-probe";
 import {
+  allocateApiPort,
+  DEFAULT_API_PORT,
+  parseLanNetwork,
+  slotLanIp,
+  type LanNetwork,
   generateAll,
   fillManifestPubkey,
   needsMtPubkey,
@@ -215,6 +220,45 @@ async function askAnswers(minimums: Record<string, number> = TIER_FLOORS_CENTS):
       }
     }
 
+    // ── Pricing, before inventory ────────────────────────────────────────────────
+    // What you SELL is a business decision; what hardware you have is a stock-take.
+    // Asking them in that order means the tier list exists before the slots do, so each
+    // slot picks from it instead of inventing tier names the price map then has to chase.
+    const tierPricesCents: Record<string, number> = {};
+    if (level === "operator") {
+      const offered = (
+        await ask(`Which tiers will you offer? (${Object.keys(minimums).join("/")}, comma-separated)`, "cumulus")
+      )
+        .split(",")
+        .map((t) => t.trim())
+        .filter(Boolean);
+      // Prices in DOLLARS, then multiplied — which deletes the extra-zero class of bug
+      // rather than validating against it.
+      for (const tier of offered) {
+        const floor = minimums[tier] ?? 0;
+        const dollars = await ask(
+          `  monthly price for ${tier} in DOLLARS (floor $${(floor / 100).toFixed(2)})`,
+          (floor / 100).toFixed(2)
+        );
+        tierPricesCents[tier] = Math.round(Number(dollars) * 100);
+      }
+    }
+    const tiers = Object.keys(tierPricesCents);
+
+    // Only an operator with something for sale has a Stripe account to be asked about.
+    // The secret key exists already (dashboard → API keys); the WEBHOOK secret does not
+    // — it is minted when the endpoint is created against the Coalition URL, which is a
+    // real wait. Offer it, accept empty, and let `doctor` keep naming it.
+    let stripeSecretKey = "";
+    let stripeWebhookSecret = "";
+    if (tiers.length > 0) {
+      console.log("\nStripe — you are merchant of record; Flux Hub never holds these.");
+      stripeSecretKey = await ask("  restricted secret key (rk_… / sk_…), blank to fill in later", "");
+      stripeWebhookSecret = await ask("  webhook signing secret (whsec_…), blank if the endpoint does not exist yet", "");
+    }
+
+    // ── Inventory, last, one host at a time ──────────────────────────────────────
+    console.log("\nNow your hardware. Everything above was about you; this is a stock-take.");
     const hosts: HostAnswer[] = [];
     // Defaulted to what the cluster actually reports, so the names cannot be mistyped
     // and an operator who forgot a node sees it listed.
@@ -222,6 +266,13 @@ async function askAnswers(minimums: Record<string, number> = TIER_FLOORS_CENTS):
       .split(",")
       .map((s) => s.trim())
       .filter(Boolean);
+
+    // Asked once and carried forward: hosts usually share a LAN, and re-typing it per
+    // host is how one of them ends up on a different prefix by accident.
+    let lastNetwork: string | undefined;
+    let apiPortBase = DEFAULT_API_PORT;
+    let slotIndex = 0;
+
     for (const name of hostNames) {
       console.log(`\n— host ${name} —`);
       // The highest-value question in the list: a spinning-disk default wastes an entire
@@ -252,39 +303,64 @@ async function askAnswers(minimums: Record<string, number> = TIER_FLOORS_CENTS):
         console.log("    Nodes on it provision fine and then fail every benchmark, with no visible cause.");
       }
       const storageIso = await ask(`  storage holding the ArcaneOS ISO on ${name}`, iso[0]?.id ?? "pve55-shared");
+
+      // ⭐ ONE answer for the whole LAN: gateway AND prefix. Asked separately, the prefix
+      // is what gets left off a lanIp — and a bare lanIp silently becomes /32, so the
+      // node boots with no route out and is reachable by nobody.
+      let net: LanNetwork | undefined;
+      while (!net) {
+        const answer = await ask("  LAN gateway WITH prefix, e.g. 192.168.87.1/24", lastNetwork);
+        try {
+          net = parseLanNetwork(answer);
+          lastNetwork = answer;
+        } catch (e) {
+          console.log(`    ${(e as Error).message}`);
+        }
+      }
+      console.log(`    → VMs on ${net.base}x/${net.prefix}, gateway ${net.gateway}`);
+
       const slots: SlotAnswer[] = [];
       const count = Number(await ask(`  how many slots on ${name}?`, "1"));
+      if (slotIndex === 0) {
+        // Allocated, not asked 31 times. The block is contiguous so the operator has one
+        // range to open rather than a list to keep.
+        apiPortBase = Number(await ask("  first Flux API port (each slot takes the next +10)", String(DEFAULT_API_PORT)));
+      }
       for (let i = 0; i < count; i++) {
         console.log(`  · slot ${i + 1} of ${count}`);
-        const tier = await ask(`    tier (${Object.keys(minimums).join("/")})`, "cumulus");
+        const tier =
+          tiers.length > 0
+            ? await ask(`    tier (${tiers.join("/")})`, tiers[0])
+            : await ask(`    tier (${Object.keys(minimums).join("/")})`, "cumulus");
         const vmName = await ask("    VM name");
         const ipAddress = await ask("    public WAN IP");
-        const lanIp = await ask("    LAN IP with prefix, e.g. 192.168.87.2/24");
-        const gateway = await ask("    LAN gateway");
-        const apiPort = Number(await ask("    Flux API port", "16127"));
-        slots.push({ tier, vmName, ipAddress, lanIp, gateway, apiPort });
+        let lanIp = "";
+        while (!lanIp) {
+          const answer = await ask(`    LAN address — host number (e.g. 5 for ${net.base}5) or a full IP`);
+          try {
+            lanIp = slotLanIp(answer, net);
+          } catch (e) {
+            console.log(`      ${(e as Error).message}`);
+          }
+        }
+        const apiPort = allocateApiPort(apiPortBase, slotIndex);
+        console.log(`    → ${lanIp}, gateway ${net.gateway}, API port ${apiPort}`);
+        slots.push({ tier, vmName, ipAddress, lanIp, gateway: net.gateway, apiPort });
+        slotIndex++;
       }
       hosts.push({ name, storageImages, storageIso, slots });
     }
-
-    // Prices in DOLLARS, then multiplied — which deletes the extra-zero class of bug
-    // rather than validating against it.
-    const draft: Answers = { providerSlug, providerName, ownerAddress, mtBaseUrl, fluxAppName, hosts, level };
-    const tierPricesCents: Record<string, number> = {};
-    // A Supporter lists nothing, so there is no price to ask for. Selling nothing is an
-    // EMPTY price list, never a tier priced at zero: FH enforces a per-tier minimum and
-    // 422s anything under it, so a 0 is not even expressible.
-    const tiers =
-      level === "supporter" ? [] : [...new Set(hosts.flatMap((h) => h.slots.map((s) => s.tier)))].sort();
-    console.log("");
-    for (const tier of tiers) {
-      const floor = minimums[tier] ?? 0;
-      const dollars = await ask(
-        `Monthly price for ${tier} in DOLLARS (floor $${(floor / 100).toFixed(2)})`,
-        (floor / 100).toFixed(2)
+    if (slotIndex > 0) {
+      console.log(
+        `\nAPI ports ${apiPortBase}–${allocateApiPort(apiPortBase, slotIndex - 1)} must be reachable from ` +
+          `outside your LAN, or Flux Hub cannot pull stats from your nodes.`
       );
-      tierPricesCents[tier] = Math.round(Number(dollars) * 100);
     }
+
+    // A Supporter lists nothing, so `tiers` is empty above and no price was asked.
+    // Selling nothing is an EMPTY price list, never a tier priced at zero: FH enforces a
+    // per-tier minimum and 422s anything under it, so a 0 is not even expressible.
+    const draft: Answers = { providerSlug, providerName, ownerAddress, mtBaseUrl, fluxAppName, hosts, level };
 
     // How many to OFFER, defaulted to how many exist — the answer almost everyone
     // wants, so the prompt only has to be read by someone holding slots back. MT
@@ -295,18 +371,6 @@ async function askAnswers(minimums: Record<string, number> = TIER_FLOORS_CENTS):
       const have = counts[tier] ?? 0;
       const offered = await ask(`How many of your ${have} ${tier} slot(s) to offer for sale`, String(have));
       availableSlots[tier] = Math.trunc(Number(offered));
-    }
-
-    // Only an operator with something for sale has a Stripe account to be asked about.
-    // The secret key exists already (dashboard → API keys); the WEBHOOK secret does not
-    // — it is minted when the endpoint is created against the Coalition URL, which is a
-    // real wait. Offer it, accept empty, and let `doctor` keep naming it.
-    let stripeSecretKey = "";
-    let stripeWebhookSecret = "";
-    if (Object.values(tierPricesCents).some((c) => c > 0)) {
-      console.log("\nStripe — you are merchant of record; Flux Hub never holds these.");
-      stripeSecretKey = await ask("  restricted secret key (rk_… / sk_…), blank to fill in later", "");
-      stripeWebhookSecret = await ask("  webhook signing secret (whsec_…), blank if the endpoint does not exist yet", "");
     }
 
     return {

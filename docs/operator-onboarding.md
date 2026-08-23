@@ -211,6 +211,17 @@ than merely being checked for:
   `https://<app>.app.runonflux.io`, so you never have to know it in advance.
 - `HOSTS` and the host names in `inventory.json` come from the same answer, so the
   unattested-host rejection cannot happen.
+- **Your LAN is one answer**: the gateway *with* its prefix, `192.168.87.1/24`. Every
+  slot address is then either a host number (`5` → `192.168.87.5/24`) or a full IP, and
+  it always carries the prefix. A bare `lanIp` becomes `/32`, and the node boots with no
+  gateway and is reachable by nobody — asking for the prefix once is what makes that
+  unwritable rather than merely detected later.
+- **API ports are allocated, not asked 31 times**: the first port, then +10 per slot
+  (16127, 16137, 16147 …), matching the fleet. You get a contiguous range to open in the
+  firewall instead of a list to keep track of.
+- **Questions are in the order you can answer them**: who you are, then what you sell,
+  then a per-host stock-take of the hardware last — with your Proxmox's own node and
+  storage names offered as the defaults, because `init` has already connected by then.
 - Prices are asked in **dollars** and converted, so an extra zero cannot slip in.
   Each tier has a minimum FH will accept; `init` defaults to it and refuses less.
 

@@ -519,6 +519,65 @@ export function fillManifestPubkey(
   return { text: envOperator + suffix, result: "filled" };
 }
 
+/**
+ * The LAN a host's VMs live on, given as ONE answer: the gateway with its prefix,
+ * `192.168.87.1/24`.
+ *
+ * Asking for gateway and prefix separately is how `lanIp` ends up without a `/NN` — and
+ * a bare lanIp silently becomes /32, so the node boots with no route out and is
+ * reachable by nobody. `doctor` catches that after the fact; taking the prefix from the
+ * gateway answer means a slot cannot be written without one in the first place.
+ */
+export interface LanNetwork {
+  /** The gateway address itself, e.g. `192.168.87.1`. */
+  gateway: string;
+  /** Prefix length, e.g. 24. */
+  prefix: number;
+  /** The first three octets, e.g. `192.168.87.` — what a host number is appended to. */
+  base: string;
+}
+
+export function parseLanNetwork(input: string): LanNetwork {
+  const m = input.trim().match(/^(\d{1,3}(?:\.\d{1,3}){3})\/(\d{1,2})$/);
+  if (!m) throw new Error(`expected a gateway with prefix, e.g. 192.168.87.1/24 — got "${input}"`);
+  const [, gateway, prefixStr] = m;
+  const octets = gateway!.split(".").map(Number);
+  if (octets.some((o) => o > 255)) throw new Error(`"${gateway}" is not a valid IPv4 address`);
+  const prefix = Number(prefixStr);
+  if (prefix < 8 || prefix > 30) throw new Error(`prefix /${prefix} is not usable for a VM LAN`);
+  return { gateway: gateway!, prefix, base: octets.slice(0, 3).join(".") + "." };
+}
+
+/**
+ * Turn what the operator typed for a slot into a full `lanIp`. A bare host number (`5`)
+ * is completed from the gateway's own /24-style base; a full address is kept. The prefix
+ * is ALWAYS appended, which is the entire point.
+ */
+export function slotLanIp(input: string, net: LanNetwork): string {
+  const raw = input.trim().replace(/\/\d{1,2}$/, "");
+  const address = /^\d{1,3}$/.test(raw) ? `${net.base}${raw}` : raw;
+  if (!/^\d{1,3}(?:\.\d{1,3}){3}$/.test(address)) {
+    throw new Error(`"${input}" is neither a host number nor an IPv4 address`);
+  }
+  return `${address}/${net.prefix}`;
+}
+
+/** The Flux API port every node answers on. Ports are allocated from a base by index so
+ * an operator does not invent 31 of them by hand, and so the block they have to open in
+ * the firewall is contiguous and predictable. */
+export const DEFAULT_API_PORT = 16127;
+
+/**
+ * Ports go up in tens. Measured against the live fleet (prod `Slot.apiPort`, 2026-08-22):
+ * 16127, 16137, 16147 … 16197 — Flux uses a small block of consecutive ports per node
+ * (api, api-ssl, p2p …), so consecutive node ports would collide.
+ */
+export const API_PORT_STRIDE = 10;
+
+export function allocateApiPort(base: number, index: number): number {
+  return base + index * API_PORT_STRIDE;
+}
+
 /** The agent's own fallback when nothing is declared (`agent/src/config.ts`). Written
  * out explicitly rather than relied on, so the value is visible in the file. */
 export const DEFAULT_NETWORK = "vmbr0";
