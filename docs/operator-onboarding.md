@@ -253,9 +253,14 @@ than merely being checked for:
   sit on it. Type `next` at the port prompt to move to the next WAN IP; leave the WAN IP
   blank when every slot is placed.
 - **API ports are allocated, not asked 31 times**: each slot's prompt is pre-filled with
-  the next port (+10 per slot — 16127, 16137, 16147 …, matching the fleet), so Enter is
-  the whole answer. At the end you get the port-forward list *grouped by WAN IP*, which
-  is the shape of the firewall rules you have to create.
+  the next port, so Enter is the whole answer. The block is **16127–16197 in steps of
+  10** — they all end in 7 — and it **restarts at 16127 for every WAN IP**, because a
+  port only collides with another node on the same public address. Type a port yourself
+  and the wizard carries on from there. That block is also *why* a WAN IP tops out at
+  eight slots: Flux serves a small run of consecutive ports per node, so there is no
+  ninth. When the block is spent, `init` moves you to the next WAN IP and says so. At the
+  end you get the port-forward list *grouped by WAN IP*, which is the shape of the
+  firewall rules you have to create.
 - **Questions are in the order you can answer them**: who you are, then what you sell,
   then a per-host stock-take of the hardware last — with your Proxmox's own node and
   storage names offered as the defaults, because `init` has already connected by then.

@@ -53,8 +53,11 @@ import {
   type ProxmoxSurvey,
 } from "./proxmox-probe";
 import {
-  allocateApiPort,
   DEFAULT_API_PORT,
+  MAX_API_PORT,
+  API_PORT_STRIDE,
+  API_PORTS_PER_WAN,
+  isFluxApiPort,
   parseLanNetwork,
   slotLanIp,
   type LanNetwork,
@@ -278,11 +281,15 @@ async function askAnswers(minimums: Record<string, number> = TIER_FLOORS_CENTS):
       .map((s) => s.trim())
       .filter(Boolean);
 
+    // Ports are a property of the WAN IP, not of the host — one public address can front
+    // slots on two different hypervisors, and those slots share the one block. Tracked
+    // across the whole scaffold so a WAN IP reused on a second host resumes where it left
+    // off instead of handing out 16127 twice.
+    const usedPorts = new Map<string, Set<number>>();
+
     // Asked once and carried forward: hosts usually share a LAN, and re-typing it per
     // host is how one of them ends up on a different prefix by accident.
     let lastNetwork: string | undefined;
-    let apiPortBase = DEFAULT_API_PORT;
-    let slotIndex = 0;
 
     for (const name of hostNames) {
       console.log(`\n— host ${name} —`);
@@ -340,17 +347,46 @@ async function askAnswers(minimums: Record<string, number> = TIER_FLOORS_CENTS):
         }
         console.log(`    → VMs on ${net.base}x/${net.prefix}, gateway ${net.gateway}`);
 
+        // ⭐ Ports restart at 16127 for every WAN IP. Two nodes on 16127 collide only when
+        // they share a public address.
+        const used = usedPorts.get(ipAddress) ?? new Set<number>();
+        usedPorts.set(ipAddress, used);
+        const firstFree = (): number => {
+          let p = DEFAULT_API_PORT;
+          while (used.has(p)) p += API_PORT_STRIDE;
+          return p;
+        };
+        let nextPort = firstFree();
+
         while (slots.length < capacity) {
+          // The block runs out at 16197 — that is WHY a WAN IP carries at most eight
+          // slots. Rather than let the operator type a ninth port that Flux will not
+          // serve, the loop moves itself on to the next WAN IP and says so.
+          if (nextPort > MAX_API_PORT) {
+            console.log(
+              `    no port left on ${ipAddress}: ${DEFAULT_API_PORT}–${MAX_API_PORT} is the whole ` +
+                `block (${API_PORTS_PER_WAN} slots). More capacity needs another WAN IP.`
+            );
+            break;
+          }
           // The port prompt doubles as the "another node behind this WAN IP?" question, so
           // the common answer — Enter, take the next port — costs one keystroke, and moving
-          // on costs one word. The default is the next ALLOCATED port (+10 per slot, as the
-          // live fleet runs), so an operator who never reads it still gets a usable plan.
-          const suggested = allocateApiPort(apiPortBase, slotIndex);
-          const portAnswer = await ask(`    Flux API port (Enter, or 'next' for the next WAN IP)`, String(suggested));
+          // on costs one word.
+          const portAnswer = await ask(`    Flux API port (Enter, or 'next' for the next WAN IP)`, String(nextPort));
           if (portAnswer.toLowerCase() === "next") break;
           const apiPort = Number(portAnswer);
-          if (!Number.isInteger(apiPort) || apiPort < 1 || apiPort > 65535) {
-            console.log(`      ${portAnswer} is not a port number.`);
+          if (!isFluxApiPort(apiPort)) {
+            // Named precisely, because both halves are load-bearing and neither is
+            // guessable: Flux serves this block only, and a port off the stride overlaps
+            // the previous node's ports — which surfaces as THAT node going unreachable.
+            console.log(
+              `      ${portAnswer} is not usable: Flux API ports run ${DEFAULT_API_PORT}–${MAX_API_PORT} ` +
+                `in steps of ${API_PORT_STRIDE}, so they all end in ${DEFAULT_API_PORT % 10}.`
+            );
+            continue;
+          }
+          if (used.has(apiPort)) {
+            console.log(`      ${apiPort} is already taken on ${ipAddress}.`);
             continue;
           }
 
@@ -385,7 +421,11 @@ async function askAnswers(minimums: Record<string, number> = TIER_FLOORS_CENTS):
             apiPort,
             ...(storagePool && storagePool !== storageImages ? { storagePool } : {}),
           });
-          slotIndex++;
+          // Advance from the port that was USED, not from a running count: an operator who
+          // types 16157 to leave room for something else gets 16167 next, still on stride
+          // and still inside the block.
+          used.add(apiPort);
+          nextPort = Math.max(apiPort + API_PORT_STRIDE, firstFree());
         }
       }
       hosts.push({ name, storageImages, storageIso, slots });
