@@ -343,6 +343,13 @@ are missing, with the `pveum role modify` line that adds them — and resolves
 `init` runs these same checks the moment you type the token; this is for re-runs and for
 files you filled in by hand.
 
+A **test** key against production is reported as a *warning*, not an error — sandboxing
+with `rk_test_` is a step in this runbook, not a mistake, and `doctor` should not exit 1
+while you take it. A **live** key against staging stays an error: that one charges real
+money on a test rental. Before you list for real, swap the key **and** the `whsec_` from
+the live-mode endpoint — they are independent, and a live key with a test-mode webhook
+secret fails silently.
+
 ⚠️ `--check-stripe` needs **Webhook Endpoints: Read** on the restricted key (Step 3). A
 key without it returns 403, the endpoint comparison is skipped, and the report says so
 explicitly — a clean report from such a key means *not checked*, never *checked and fine*.

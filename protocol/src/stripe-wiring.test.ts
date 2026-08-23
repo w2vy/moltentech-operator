@@ -240,3 +240,64 @@ test("a NON-403 account failure is still surfaced — that one nobody has accoun
     }
   );
 });
+
+/**
+ * The two directions of a mode mismatch are not the same finding, and treating them alike
+ * broke the step operators are told to take. Sandboxing with an `rk_test_` against prod is
+ * the documented onboarding path — an operator's provider record lives on prod, so there is
+ * nowhere else to stand — and reporting it as an error made `doctor` exit 1 for the whole
+ * of that phase. A tool that is red while you follow its own instructions teaches you that
+ * red means nothing.
+ */
+test("⭐ a TEST key against prod is a WARNING — sandboxing is a step, not a mistake", async () => {
+  await withStubbedFetch(
+    () => ({ status: 200, body: { data: [{ url: `${MY_URL}/webhook`, status: "enabled" }] } }),
+    async () => {
+      const findings = await probeStripeWiring({
+        stripeSecretKey: "rk_test_fake",
+        coalitionUrl: MY_URL,
+        mtBaseUrl: "https://www.moltentech.us",
+      });
+      const f = findings.find((x) => x.rule === "STRIPE_KEY_MODE_MISMATCH")!;
+      assert.ok(f, "still reported — it must not become invisible");
+      assert.equal(f.severity, "warning");
+      // It has to name what to do before going live, including the trap that the webhook
+      // secret is a SEPARATE swap from the key.
+      assert.match(f.message, /whsec_/);
+      assert.match(f.summary!, /before you list/);
+    }
+  );
+});
+
+test("⭐ a LIVE key against staging stays an ERROR — that one charges real money", async () => {
+  // Opposite blast radius: an unsettled test payment is recoverable, a real charge on a
+  // test rental is not. Same rule name, deliberately different severity.
+  await withStubbedFetch(
+    () => ({ status: 200, body: { data: [{ url: `${MY_URL}/webhook`, status: "enabled" }] } }),
+    async () => {
+      const findings = await probeStripeWiring({
+        stripeSecretKey: "rk_live_fake",
+        coalitionUrl: MY_URL,
+        mtBaseUrl: "https://staging.moltentech.us",
+      });
+      const f = findings.find((x) => x.rule === "STRIPE_KEY_MODE_MISMATCH")!;
+      assert.equal(f.severity, "error");
+      assert.match(f.message, /real money/);
+    }
+  );
+});
+
+test("a matched pair in either mode reports no mismatch at all", async () => {
+  await withStubbedFetch(
+    () => ({ status: 200, body: { data: [{ url: `${MY_URL}/webhook`, status: "enabled" }] } }),
+    async () => {
+      for (const [key, url] of [
+        ["rk_live_fake", "https://www.moltentech.us"],
+        ["rk_test_fake", "https://staging.moltentech.us"],
+      ] as const) {
+        const findings = await probeStripeWiring({ stripeSecretKey: key, coalitionUrl: MY_URL, mtBaseUrl: url });
+        assert.deepEqual(findings, [], `${key} + ${url}`);
+      }
+    }
+  );
+});

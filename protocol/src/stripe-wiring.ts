@@ -137,17 +137,32 @@ export async function probeStripeWiring(args: {
   const { stripeSecretKey, coalitionUrl, mtBaseUrl } = args;
   const findings: Finding[] = [];
 
-  // Mode mismatch is worth catching before anything else: a live key against staging
-  // bills real money, and a test key against production silently never does.
+  // Mode mismatch, and the two directions are NOT the same finding.
+  //
+  // A test key against production is a legitimate place to stand: the runbook tells you to
+  // sandbox with an `rk_test_` first, and a real operator onboards against prod because
+  // that is where their provider record lives. Reporting it as an error made `doctor` exit
+  // 1 through the whole of a step operators are supposed to take, which teaches them that
+  // a red report is normal — the one habit this tool cannot afford to build.
+  //
+  // A LIVE key anywhere else stays an error, because that one charges real money on a
+  // test rental. Same rule name, opposite blast radius: unsettled test payments are
+  // recoverable, a real charge is not.
   const isTestKey = /^(sk|rk)_test_/.test(stripeSecretKey);
   if (mtBaseUrl) {
     const mtIsProd = /(^|\/\/)(www\.)?moltentech\.us/.test(mtBaseUrl) && !/staging/.test(mtBaseUrl);
     if (mtIsProd && isTestKey) {
       findings.push({
         rule: "STRIPE_KEY_MODE_MISMATCH",
-        severity: "error",
+        severity: "warning",
         file: "secrets.env",
-        message: `STRIPE_SECRET_KEY is a TEST key but MT_BASE_URL is production (${mtBaseUrl}). No real payment will ever settle.`,
+        summary: "TEST Stripe key against production — fine while you sandbox, swap it before you list",
+        message:
+          `STRIPE_SECRET_KEY is a TEST key but MT_BASE_URL is production (${mtBaseUrl}). ` +
+          "Expected while you are sandboxing — checkout works end to end and no real payment " +
+          "ever settles. Before you take a real customer, swap in the live `rk_live_` key AND " +
+          "the `whsec_` from the LIVE-mode endpoint: the two are independent, and a live key " +
+          "with a test-mode webhook secret fails silently.",
       });
     }
     if (!mtIsProd && !isTestKey) {
