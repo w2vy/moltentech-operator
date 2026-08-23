@@ -118,9 +118,18 @@ pveum user token add fluxhub@pve agent --privsep 0     # prints the secret ONCE
 
 `--privsep 0` makes the token inherit the user's privileges; with privilege separation
 on you must grant the ACL to the *token* as well. Copy the secret immediately — Proxmox
-never shows it again. The token ID is `fluxhub@pve!agent`; `mt-manifest init` asks for it
-and its secret, so keep both to hand — and **proves them on the spot**, so a mistyped
-secret or a token that cannot allocate is caught here rather than five steps later.
+never shows it again. These two values are what the rest of onboarding calls
+`PROXMOX_TOKEN_ID` and `PROXMOX_TOKEN_SECRET`, and `mt-manifest init` asks for them under
+exactly those names:
+
+| Variable | Value from the commands above |
+|---|---|
+| `PROXMOX_TOKEN_ID` | `fluxhub@pve!agent` — user, `!`, token name |
+| `PROXMOX_TOKEN_SECRET` | the UUID printed once by `user token add` |
+
+Keep both to hand. `init` **proves them on the spot**, so a mistyped secret or a token
+that cannot allocate is caught here rather than five steps later — and it reuses the
+connection to read your storage and node list, which is what fills in Step 0.2 for you.
 
 ⚠️ **Already onboarded under the old names? Keep them.** Operators set up before this
 rename have a `MoltenTechAgent` role and a `moltentech@pve!agent` token. That token id is
@@ -233,24 +242,34 @@ than merely being checked for:
   `https://<app>.app.runonflux.io`, so you never have to know it in advance.
 - `HOSTS` and the host names in `inventory.json` come from the same answer, so the
   unattested-host rejection cannot happen.
-- **Your LAN is one answer**: the gateway *with* its prefix, `192.168.87.1/24`. Every
-  slot address is then either a host number (`5` → `192.168.87.5/24`) or a full IP, and
-  it always carries the prefix. A bare `lanIp` becomes `/32`, and the node boots with no
-  gateway and is reachable by nobody — asking for the prefix once is what makes that
-  unwritable rather than merely detected later.
-- **API ports are allocated, not asked 31 times**: the first port, then +10 per slot
-  (16127, 16137, 16147 …), matching the fleet. You get a contiguous range to open in the
-  firewall instead of a list to keep track of.
+- **Your LAN is one answer per WAN IP**: the gateway *with* its prefix,
+  `192.168.87.1/24`. Every slot address is then either a host number (`5` →
+  `192.168.87.5/24`) or a full IP, and it always carries the prefix. A bare `lanIp`
+  becomes `/32`, and the node boots with no gateway and is reachable by nobody — asking
+  for the prefix once is what makes that unwritable rather than merely detected later.
+- **Slots are grouped under the WAN IP they answer on.** A host is not one public
+  address: pve40 fronts several, and each carries its own LAN. So the loop is *WAN IP →
+  its LAN → the nodes behind it*, and you type each WAN IP once no matter how many nodes
+  sit on it. Type `next` at the port prompt to move to the next WAN IP; leave the WAN IP
+  blank when every slot is placed.
+- **API ports are allocated, not asked 31 times**: each slot's prompt is pre-filled with
+  the next port (+10 per slot — 16127, 16137, 16147 …, matching the fleet), so Enter is
+  the whole answer. At the end you get the port-forward list *grouped by WAN IP*, which
+  is the shape of the firewall rules you have to create.
 - **Questions are in the order you can answer them**: who you are, then what you sell,
   then a per-host stock-take of the hardware last — with your Proxmox's own node and
   storage names offered as the defaults, because `init` has already connected by then.
 - Prices are asked in **dollars** and converted, so an extra zero cannot slip in.
   Each tier has a minimum FH will accept; `init` defaults to it and refuses less.
 
-If you are running nodes only for yourself, answer that you are **not selling**: the
-scaffold then lists no tiers and skips Stripe entirely. You can still be given nodes —
-a rental an admin **assigns** to you involves no payment method at all. Stripe is what
-lets strangers buy from you.
+If you are running nodes only for yourself, answer **Supporter**: the scaffold then
+lists no tiers, says so where Stripe would have been asked about, and offers nothing for
+sale. An Operator offers every slot they declared — `init` no longer asks, because the
+answer was always "all of them"; hold some back later by editing `AGENT_LISTING_JSON` in
+`config.env`.
+
+A Supporter can still be *given* nodes: a rental an admin **assigns** to you involves no
+payment method at all. Stripe is what lets strangers buy from you.
 - **`init` finishes what it can.** `MANIFEST_KEY` is derived from `manifest-key.pem`
   and written to both files, `MANIFEST_PUBKEY` is pinned, `SESSION_SECRET` is generated,
   and you are asked for the Proxmox token pair (Step 0.1 already printed it) and — if

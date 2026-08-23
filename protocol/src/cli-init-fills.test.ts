@@ -82,6 +82,23 @@ test("init REFUSES without manifest-key.pem, and names keygen as the fix", () =>
   );
 });
 
+test("⭐ the refusal comes BEFORE the first question, not after the last one", () => {
+  // A precondition checked where its value is first USED is not a precondition. This one
+  // used to fire after every prompt AND the MT_PUBKEY fetch, so an operator without a key
+  // answered the whole wizard — Proxmox token included — and lost all of it to a die().
+  const dir = mkdtempSync(join(tmpdir(), "mt-init-nokey-early-"));
+  assert.throws(
+    () => cli(["init", "--out", dir]),
+    (err: Error & { stdout?: string; stderr?: string }) => {
+      assert.match(err.stderr ?? "", /manifest-key\.pem not found/);
+      assert.doesNotMatch(err.stdout ?? "", /Which are you\?/, "no question may be asked first");
+      // Nor may it have gone to the network for tier minimums before refusing.
+      assert.doesNotMatch(err.stderr ?? "", /tier minimums/);
+      return true;
+    }
+  );
+});
+
 test("⭐ MANIFEST_KEY is filled in BOTH files, and is base64 of the key on disk", () => {
   const { dir } = scaffold();
   const expected = Buffer.from(read(dir, "manifest-key.pem"), "utf8").toString("base64");
