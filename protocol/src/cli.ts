@@ -69,6 +69,7 @@ import {
   slotLanIp,
   type LanNetwork,
   generateAll,
+  GENERATED_PATHS,
   fillManifestPubkey,
   needsMtPubkey,
   slotCountsByTier,
@@ -611,6 +612,21 @@ async function main() {
         );
       }
 
+      // ⭐ ...and so is the overwrite check. It used to be derived from `generateAll()`,
+      // which cannot run until every answer is in — so an operator re-running init in a
+      // scaffolded directory answered the ENTIRE wizard and only then learned that nothing
+      // would be written. Exactly the failure the key check above was moved to fix, in the
+      // same function, missed because the two checks looked unrelated.
+      const clobbered = GENERATED_PATHS.filter((f) => existsSync(join(dir, f)));
+      if (clobbered.length > 0 && !force) {
+        die(
+          `refusing to overwrite existing file(s): ${clobbered.join(", ")}\n` +
+            "  --force replaces them: manifest.json is re-signed, a NEW SESSION_SECRET is generated\n" +
+            "  (logging out any open Coalition sessions), and data/inventory.json is rewritten —\n" +
+            "  it is authoritative over slot edits made anywhere else. manifest-key.pem is never touched."
+        );
+      }
+
       // Same rule as doctor: ask MT for the live minimums, fall back to the bundled
       // table. Done before the prompts so the wizard quotes the real floor.
       const liveMinimums = await fetchTierMinimums(
@@ -687,10 +703,6 @@ async function main() {
       // able to read .env.operator or manifest-key.pem.
       const outPathFor = (name: string): string =>
         name === "inventory.json" ? join(dir, "data", name) : join(dir, name);
-      const existing = [...Object.keys(files), "manifest.json"].filter((f) => existsSync(outPathFor(f)));
-      if (existing.length > 0 && !force) {
-        die(`refusing to overwrite existing file(s): ${existing.join(", ")} — pass --force to replace them.`);
-      }
       mkdirSync(join(dir, "data"), { recursive: true });
       for (const [name, text] of Object.entries(files)) {
         const mode = name === "secrets.env" ? 0o600 : 0o644;
