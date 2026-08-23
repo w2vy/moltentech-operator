@@ -17,6 +17,9 @@
  * courier quietly never starting, costs a whole provision cycle and a beginner
  * cannot diagnose either. The silent rules are the reason this file exists.
  */
+import { renderManifestBodyFromConfig } from "./manifest-config";
+import { canonicalize, verifyManifestObject } from "./signing";
+
 
 /** The lowest price, in CENTS, MT will accept for a listed tier — **FALLBACK ONLY**.
  *
@@ -640,6 +643,8 @@ export interface DoctorInput {
   secretsEnv?: string;
   envOperator?: string;
   inventoryJson?: string;
+  /** The signed manifest, when one has been produced. */
+  manifestJson?: string;
   /** Live minimums from `GET /api/tiers`; omitted = use the bundled fallback. */
   tierMinimums?: Record<string, number>;
 }
@@ -659,6 +664,75 @@ export interface DoctorReport {
  * Missing files are skipped rather than failed: `doctor` is meant to be useful
  * halfway through onboarding, when only some of the five exist yet.
  */
+
+/**
+ * Is the signed manifest still the config.env beside it?
+ *
+ * `init` now signs manifest.json for the operator, which means the file can go stale in a
+ * way it never could when signing was a command you ran deliberately: edit config.env —
+ * change a price, add a host — and the manifest on disk still carries the OLD values,
+ * correctly signed. Pasting it at /onboard then ingests the old provider, silently and
+ * with every signature valid. Nothing downstream can catch that; only this comparison can.
+ *
+ * Compares the manifest BODY against what config.env renders right now, ignoring the three
+ * fields signing itself stamps (pubkey, publishedAt, signature). Same canonicalization the
+ * signature uses, so "differs" here means the signed bytes really would differ.
+ */
+export function lintManifestFreshness(manifestJson: string, configEnv: string): Finding[] {
+  let manifest: Record<string, unknown>;
+  try {
+    manifest = JSON.parse(manifestJson) as Record<string, unknown>;
+  } catch (e) {
+    return [
+      {
+        rule: "MANIFEST_UNPARSEABLE",
+        severity: "error",
+        file: "manifest.json",
+        message: `manifest.json is not valid JSON (${(e as Error).message}) — re-run \`mt-manifest sign\`.`,
+      },
+    ];
+  }
+  // An 'authorize' wrapper is the same manifest with an owner signature around it.
+  const inner = (manifest.manifest as Record<string, unknown> | undefined) ?? manifest;
+
+  if (!verifyManifestObject(inner)) {
+    return [
+      {
+        rule: "MANIFEST_SIG_INVALID",
+        severity: "error",
+        file: "manifest.json",
+        message:
+          "manifest.json does not verify against its own pubkey — it was edited by hand after " +
+          "signing. Change config.env instead and re-run `mt-manifest sign`.",
+      },
+    ];
+  }
+
+  let fresh: Record<string, unknown>;
+  try {
+    fresh = renderManifestBodyFromConfig(configEnv);
+  } catch {
+    return []; // config.env itself is broken; other rules report that, and better.
+  }
+  const { pubkey: _p, publishedAt: _t, signature: _s, ...signedBody } = inner;
+  if (canonicalize(signedBody) === canonicalize(fresh)) return [];
+
+  const changed = [...new Set([...Object.keys(fresh), ...Object.keys(signedBody)])]
+    .filter((k) => canonicalize(fresh[k] ?? null) !== canonicalize(signedBody[k] ?? null))
+    .sort();
+  return [
+    {
+      rule: "MANIFEST_STALE",
+      severity: "error",
+      file: "manifest.json",
+      message:
+        `manifest.json was signed from an older config.env (differs at: ${changed.join(", ")}). ` +
+        "Pasting it at /onboard would ingest the OLD values, correctly signed — re-run " +
+        "`mt-manifest sign --key manifest-key.pem --from-config config.env --out manifest.json`.",
+    },
+  ];
+}
+
 export function runDoctor(input: DoctorInput): DoctorReport {
   const findings: Finding[] = [];
   const filesChecked: string[] = [];
@@ -714,6 +788,11 @@ export function runDoctor(input: DoctorInput): DoctorReport {
   if (input.inventoryJson != null) {
     filesChecked.push("inventory.json");
     findings.push(...lintInventory(input.inventoryJson, hostsFromConfig));
+  }
+
+  if (input.manifestJson != null && input.configEnv != null) {
+    filesChecked.push("manifest.json");
+    findings.push(...lintManifestFreshness(input.manifestJson, input.configEnv));
   }
 
   return { findings, filesChecked, minimumsSource };

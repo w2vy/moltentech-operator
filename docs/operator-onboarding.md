@@ -275,7 +275,9 @@ answer was always "all of them"; hold some back later by editing `AGENT_LISTING_
 
 A Supporter can still be *given* nodes: a rental an admin **assigns** to you involves no
 payment method at all. Stripe is what lets strangers buy from you.
-- **`init` finishes what it can.** `MANIFEST_KEY` is derived from `manifest-key.pem`
+- **`init` finishes what it can.** It signs `manifest.json` for you — the file Step 2
+  asks you to paste — so there is no separate `sign` command to remember on a first run.
+  `MANIFEST_KEY` is derived from `manifest-key.pem`
   and written to both files, `MANIFEST_PUBKEY` is pinned, `SESSION_SECRET` is generated,
   and you are asked for the Proxmox token pair (Step 0.1 already printed it) and — if
   you are selling — your Stripe keys.
@@ -391,13 +393,22 @@ TRIAL_DAYS=1
 MANUAL_APPROVAL=false
 ```
 
-Sign the manifest from it:
+Sign the manifest from it. **If you used `init`, this is already done** — it wrote a
+signed `manifest.json` from the same `config.env`, and you only need this command again
+after you EDIT `config.env`:
 
 ```sh
 mt-manifest sign --key manifest-key.pem --from-config config.env --out manifest.json
 mt-manifest verify --in manifest.json
 # expect: OK — manifest signature valid (bare manifest, no owner authorization)
 ```
+
+⚠️ **A signed manifest is a snapshot of `config.env`.** Change a price, a host, your
+trial length — anything that reaches the manifest — and `manifest.json` still carries the
+OLD values, correctly signed. Submitting it then ingests the old provider with every
+signature valid, which nothing downstream can detect. `mt-manifest doctor` compares the
+two and fails with `MANIFEST_STALE`, naming the fields that moved; re-run the `sign`
+command above to clear it.
 
 ⚠️ **"bare manifest, no owner authorization" is the correct and expected result.** Under
 the old flow you then ran `mt-manifest authorize` to wrap it in a wallet signature. You
