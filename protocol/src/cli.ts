@@ -11,9 +11,12 @@
  *                                       ~8 questions -> config.env, secrets.env (skeleton),
  *                                       .env.operator, inventory.json and the Flux app spec.
  *                                       --answers runs the SAME generator non-interactively.
- *   doctor [--dir <dir>]                check that the generated files agree with each other
- *                                       (file-level only; the credential checks live in
- *                                        `mt-agent doctor`, where the credentials are)
+ *   doctor [--dir <dir>] [--check-stripe] [--check-proxmox]
+ *                                       check that the generated files agree with each other.
+ *                                       File-level and offline unless a --check-* flag asks
+ *                                       otherwise: --check-stripe proves the webhook is on
+ *                                       YOUR account, --check-proxmox proves the token works
+ *                                       and the image storage does not spin. Both read-only.
  *   sign   --key <pem> (--from-config <config.env> | --in <body.json>) [--out <manifest.json>]
  *                                       render body (from config.env) or read body.json,
  *                                       fill pubkey + publishedAt, sign, emit full manifest
@@ -35,6 +38,7 @@
  *                                        SignedProviderManifest MT ingests (proven identity)
  */
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
+import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { ProviderManifest, ProviderManifestBody, manifestOwnerMessage, unwrapManifest } from "./manifest";
@@ -42,6 +46,18 @@ import { renderManifestBodyFromConfig, parseConfigEnv } from "./manifest-config"
 import { runDoctor, formatReport, fetchTierMinimums, TIER_FLOORS_CENTS } from "./config-lint";
 import { probeStripeWiring } from "./stripe-wiring";
 import {
+  probeProxmox,
+  formatProbe,
+  ssdImageStorages,
+  isoStorages,
+  type ProxmoxSurvey,
+} from "./proxmox-probe";
+import {
+  allocateApiPort,
+  DEFAULT_API_PORT,
+  parseLanNetwork,
+  slotLanIp,
+  type LanNetwork,
   generateAll,
   fillManifestPubkey,
   needsMtPubkey,
@@ -89,10 +105,14 @@ function die(msg: string): never {
 }
 
 /**
- * The eight answers. Everything else in the five generated files is derived from
- * these — in particular COALITION_URL, which is asked for as a Flux APP NAME and
- * derived, because the URL is deterministic (`https://<app>.app.runonflux.io`) and
- * asking for it directly is what created the chicken-and-egg in the old runbook.
+ * The answers. Everything else in the five generated files is derived from these — in
+ * particular COALITION_URL, which is asked for as a Flux APP NAME and derived, because
+ * the URL is deterministic (`https://<app>.app.runonflux.io`) and asking for it
+ * directly is what created the chicken-and-egg in the old runbook.
+ *
+ * ⚠️ Every value asked for here must also be readable from `--answers`, or the
+ * scripted path writes a file the interactive path would have filled. That is exactly
+ * how `MT_PUBKEY=` shipped empty to every non-interactive onboarding (operator#54).
  */
 /**
  * MT's global signing pubkey, which the Coalition pins as `MT_PUBKEY` to verify that
@@ -137,6 +157,19 @@ async function askAnswers(minimums: Record<string, number> = TIER_FLOORS_CENTS):
   try {
     console.log("mt-manifest init — this writes every onboarding file from your answers.\n");
 
+    // Asked FIRST because it decides which of the later questions exist at all. A
+    // Supporter is not a degenerate operator — it is the level most participants will
+    // hold, and it has no Stripe account to ask about, no prices to set, and nothing
+    // listed for sale.
+    console.log("Which are you?");
+    console.log("  1) Flux Hub Supporter — your own nodes, plus Foundation nodes on your idle");
+    console.log("     capacity. Nothing for sale, no Stripe account needed.");
+    console.log("  2) Flux Hub Operator  — the above, plus hardware rented out through the");
+    console.log("     marketplace. You are merchant of record on your own Stripe account.");
+    const levelAnswer = await ask("  choose 1 or 2", "2");
+    const level: "supporter" | "operator" = levelAnswer.startsWith("1") ? "supporter" : "operator";
+    console.log(`  → Flux Hub ${level === "supporter" ? "Supporter" : "Operator"}\n`);
+
     const providerSlug = await ask("Provider slug (lowercase, PERMANENT once ingested)");
     const providerName = await ask("Display name", providerSlug);
     const providerLocation = await ask("Location (shown on your marketplace card)", "");
@@ -153,53 +186,181 @@ async function askAnswers(minimums: Record<string, number> = TIER_FLOORS_CENTS):
 
     // Offered as a choice, never free text by default: free-typing this is what put
     // half a deployment on staging and half on prod.
-    const which = await ask("MoltenTech environment — 1) production  2) staging", "1");
+    const which = await ask("Flux Hub environment — 1) production  2) staging", "1");
     const mtBaseUrl = which.startsWith("2") ? "https://staging.moltentech.us" : "https://www.moltentech.us";
 
     const fluxAppName = await ask("Flux app name for your Coalition", suggestFluxAppName(providerSlug));
     console.log(`  → COALITION_URL will be ${coalitionUrlFor(fluxAppName)}`);
 
+    // Step 0.1 has already produced these by the time init runs, and leaving them for
+    // later meant the agent could not make a single Proxmox call until the operator
+    // hand-edited .env.operator. Asked, not derived — init holds no cluster to ask.
+    console.log("\nProxmox API token (from `pveum user token add` in Step 0.1):");
+    const proxmoxUrl = await ask("  Proxmox URL (an IP is safest — this runs inside a container)", "https://192.168.1.10:8006");
+    const proxmoxTokenId = await ask("  token id, e.g. fluxhub@pve!agent");
+    const proxmoxTokenSecret = await ask("  token secret (printed once when you created it)");
+
+    // ⭐ Proved HERE, not five steps later in `mt-agent doctor`. A mistyped secret, a
+    // path-scoped token, a URL the container cannot resolve — all of them used to
+    // surface long after the step that caused them, in a different tool.
+    //
+    // Never fatal: this is a scaffolder, and an operator whose hypervisor is behind a
+    // VPN or momentarily down must still be able to generate their files.
+    let survey: ProxmoxSurvey | undefined;
+    if (proxmoxUrl && proxmoxTokenId && proxmoxTokenSecret) {
+      const probe = await probeProxmox({
+        url: proxmoxUrl,
+        tokenId: proxmoxTokenId,
+        tokenSecret: proxmoxTokenSecret,
+      });
+      console.log(formatProbe(probe.checks));
+      survey = probe.survey;
+      if (!probe.ok) {
+        console.log("  → continuing anyway; fix the above, then re-run `mt-manifest doctor --check-proxmox`.");
+      }
+    }
+
+    // ── Pricing, before inventory ────────────────────────────────────────────────
+    // What you SELL is a business decision; what hardware you have is a stock-take.
+    // Asking them in that order means the tier list exists before the slots do, so each
+    // slot picks from it instead of inventing tier names the price map then has to chase.
+    const tierPricesCents: Record<string, number> = {};
+    if (level === "operator") {
+      const offered = (
+        await ask(`Which tiers will you offer? (${Object.keys(minimums).join("/")}, comma-separated)`, "cumulus")
+      )
+        .split(",")
+        .map((t) => t.trim())
+        .filter(Boolean);
+      // Prices in DOLLARS, then multiplied — which deletes the extra-zero class of bug
+      // rather than validating against it.
+      for (const tier of offered) {
+        const floor = minimums[tier] ?? 0;
+        const dollars = await ask(
+          `  monthly price for ${tier} in DOLLARS (floor $${(floor / 100).toFixed(2)})`,
+          (floor / 100).toFixed(2)
+        );
+        tierPricesCents[tier] = Math.round(Number(dollars) * 100);
+      }
+    }
+    const tiers = Object.keys(tierPricesCents);
+
+    // Only an operator with something for sale has a Stripe account to be asked about.
+    // The secret key exists already (dashboard → API keys); the WEBHOOK secret does not
+    // — it is minted when the endpoint is created against the Coalition URL, which is a
+    // real wait. Offer it, accept empty, and let `doctor` keep naming it.
+    let stripeSecretKey = "";
+    let stripeWebhookSecret = "";
+    if (tiers.length > 0) {
+      console.log("\nStripe — you are merchant of record; Flux Hub never holds these.");
+      stripeSecretKey = await ask("  restricted secret key (rk_… / sk_…), blank to fill in later", "");
+      stripeWebhookSecret = await ask("  webhook signing secret (whsec_…), blank if the endpoint does not exist yet", "");
+    }
+
+    // ── Inventory, last, one host at a time ──────────────────────────────────────
+    console.log("\nNow your hardware. Everything above was about you; this is a stock-take.");
     const hosts: HostAnswer[] = [];
-    const hostNames = (await ask("Proxmox host name(s), comma-separated"))
+    // Defaulted to what the cluster actually reports, so the names cannot be mistyped
+    // and an operator who forgot a node sees it listed.
+    const hostNames = (await ask("Proxmox host name(s), comma-separated", survey?.nodes.join(",")))
       .split(",")
       .map((s) => s.trim())
       .filter(Boolean);
+
+    // Asked once and carried forward: hosts usually share a LAN, and re-typing it per
+    // host is how one of them ends up on a different prefix by accident.
+    let lastNetwork: string | undefined;
+    let apiPortBase = DEFAULT_API_PORT;
+    let slotIndex = 0;
+
     for (const name of hostNames) {
       console.log(`\n— host ${name} —`);
-      // The highest-value question in the list: a spinning-disk default wastes an
-      // entire provision + benchmark cycle and reports no cause. `mt-agent doctor`
-      // is what actually proves ROTA=0; here we just make it a deliberate answer.
-      const storageImages = await ask(`  storage pool for VM images on ${name} (must NOT be a spinning disk)`);
-      const storageIso = await ask(`  storage holding the ArcaneOS ISO on ${name}`, "pve55-shared");
+      // The highest-value question in the list: a spinning-disk default wastes an entire
+      // provision + benchmark cycle and reports NO cause. When the probe answered, the
+      // safe options are printed and the default is one of them — the operator has to go
+      // out of their way to pick a spinning disk instead of having to know not to.
+      const options = survey?.storages[name] ?? [];
+      const ssd = ssdImageStorages(options);
+      const iso = isoStorages(options);
+      if (options.length > 0) {
+        console.log(
+          `  storages on ${name}: ` +
+            options
+              .map((o) => `${o.id}(${o.rotational === true ? "HDD" : o.rotational === false ? "SSD" : "?"})`)
+              .join(" ")
+        );
+        if (ssd.length === 0) {
+          console.log("  ⚠ no storage on this host resolved to solid state — check the answer you give below.");
+        }
+      }
+      const storageImages = await ask(
+        `  storage pool for VM images on ${name} (must NOT be a spinning disk)`,
+        ssd[0]?.id
+      );
+      const chosen = options.find((o) => o.id === storageImages);
+      if (chosen?.rotational === true) {
+        console.log(`  ⚠ ${storageImages} is ROTATIONAL: ${chosen.why}`);
+        console.log("    Nodes on it provision fine and then fail every benchmark, with no visible cause.");
+      }
+      const storageIso = await ask(`  storage holding the ArcaneOS ISO on ${name}`, iso[0]?.id ?? "pve55-shared");
+
+      // ⭐ ONE answer for the whole LAN: gateway AND prefix. Asked separately, the prefix
+      // is what gets left off a lanIp — and a bare lanIp silently becomes /32, so the
+      // node boots with no route out and is reachable by nobody.
+      let net: LanNetwork | undefined;
+      while (!net) {
+        const answer = await ask("  LAN gateway WITH prefix, e.g. 192.168.87.1/24", lastNetwork);
+        try {
+          net = parseLanNetwork(answer);
+          lastNetwork = answer;
+        } catch (e) {
+          console.log(`    ${(e as Error).message}`);
+        }
+      }
+      console.log(`    → VMs on ${net.base}x/${net.prefix}, gateway ${net.gateway}`);
+
       const slots: SlotAnswer[] = [];
       const count = Number(await ask(`  how many slots on ${name}?`, "1"));
+      if (slotIndex === 0) {
+        // Allocated, not asked 31 times. The block is contiguous so the operator has one
+        // range to open rather than a list to keep.
+        apiPortBase = Number(await ask("  first Flux API port (each slot takes the next +10)", String(DEFAULT_API_PORT)));
+      }
       for (let i = 0; i < count; i++) {
         console.log(`  · slot ${i + 1} of ${count}`);
-        const tier = await ask(`    tier (${Object.keys(minimums).join("/")})`, "cumulus");
+        const tier =
+          tiers.length > 0
+            ? await ask(`    tier (${tiers.join("/")})`, tiers[0])
+            : await ask(`    tier (${Object.keys(minimums).join("/")})`, "cumulus");
         const vmName = await ask("    VM name");
         const ipAddress = await ask("    public WAN IP");
-        const lanIp = await ask("    LAN IP with prefix, e.g. 192.168.87.2/24");
-        const gateway = await ask("    LAN gateway");
-        const apiPort = Number(await ask("    Flux API port", "16127"));
-        slots.push({ tier, vmName, ipAddress, lanIp, gateway, apiPort });
+        let lanIp = "";
+        while (!lanIp) {
+          const answer = await ask(`    LAN address — host number (e.g. 5 for ${net.base}5) or a full IP`);
+          try {
+            lanIp = slotLanIp(answer, net);
+          } catch (e) {
+            console.log(`      ${(e as Error).message}`);
+          }
+        }
+        const apiPort = allocateApiPort(apiPortBase, slotIndex);
+        console.log(`    → ${lanIp}, gateway ${net.gateway}, API port ${apiPort}`);
+        slots.push({ tier, vmName, ipAddress, lanIp, gateway: net.gateway, apiPort });
+        slotIndex++;
       }
       hosts.push({ name, storageImages, storageIso, slots });
     }
-
-    // Prices in DOLLARS, then multiplied — which deletes the extra-zero class of bug
-    // rather than validating against it.
-    const draft: Answers = { providerSlug, providerName, ownerAddress, mtBaseUrl, fluxAppName, hosts };
-    const tierPricesCents: Record<string, number> = {};
-    const tiers = [...new Set(hosts.flatMap((h) => h.slots.map((s) => s.tier)))].sort();
-    console.log("");
-    for (const tier of tiers) {
-      const floor = minimums[tier] ?? 0;
-      const dollars = await ask(
-        `Monthly price for ${tier} in DOLLARS (floor $${(floor / 100).toFixed(2)})`,
-        (floor / 100).toFixed(2)
+    if (slotIndex > 0) {
+      console.log(
+        `\nAPI ports ${apiPortBase}–${allocateApiPort(apiPortBase, slotIndex - 1)} must be reachable from ` +
+          `outside your LAN, or Flux Hub cannot pull stats from your nodes.`
       );
-      tierPricesCents[tier] = Math.round(Number(dollars) * 100);
     }
+
+    // A Supporter lists nothing, so `tiers` is empty above and no price was asked.
+    // Selling nothing is an EMPTY price list, never a tier priced at zero: FH enforces a
+    // per-tier minimum and 422s anything under it, so a 0 is not even expressible.
+    const draft: Answers = { providerSlug, providerName, ownerAddress, mtBaseUrl, fluxAppName, hosts, level };
 
     // How many to OFFER, defaulted to how many exist — the answer almost everyone
     // wants, so the prompt only has to be read by someone holding slots back. MT
@@ -216,8 +377,14 @@ async function askAnswers(minimums: Record<string, number> = TIER_FLOORS_CENTS):
       ...draft,
       providerLocation: providerLocation || undefined,
       providerContact: providerContact || undefined,
+      selling: level === "operator",
       tierPricesCents,
       availableSlots,
+      proxmoxUrl: proxmoxUrl || undefined,
+      proxmoxTokenId: proxmoxTokenId || undefined,
+      proxmoxTokenSecret: proxmoxTokenSecret || undefined,
+      stripeSecretKey: stripeSecretKey || undefined,
+      stripeWebhookSecret: stripeWebhookSecret || undefined,
     };
   } finally {
     rl.close();
@@ -270,11 +437,11 @@ async function main() {
       const { publicKeyBase64, privateKey } = generateEd25519();
       writeFileSync(keyPath, exportPrivateKeyPem(privateKey), { mode: 0o600 });
       writeFileSync(join(dir, "manifest-pubkey.txt"), publicKeyBase64 + "\n");
-      // The documented order is init THEN keygen, so `init` cannot know this value —
-      // which is exactly why MANIFEST_PUBKEY stayed empty on every real onboarding and
-      // `mt-agent doctor`'s key check never did anything but `skip`. Fill the slot here,
-      // where the value first exists. Only ever fills an EMPTY slot: a non-empty one is
-      // a deliberate pin, and silently repointing it is how a rotation loses the old key.
+      // The documented order is keygen THEN init, and `init` now REFUSES without a key —
+      // so on a first run there is no .env.operator here yet and this is a no-op ("no-file").
+      // It still earns its place for the ROTATION path (`keygen --force` beside files that
+      // already exist). Only ever fills an EMPTY slot: a non-empty one is a deliberate pin,
+      // and silently repointing it is how a rotation loses the old key.
       const backfilled = backfillManifestPubkey(join(dir, ".env.operator"), publicKeyBase64);
       console.log(`Wrote ${keyPath} (KEEP SECRET — this signs your manifest).`);
       console.log(`Public key (manifest "pubkey", also saved to manifest-pubkey.txt):\n${publicKeyBase64}`);
@@ -303,7 +470,7 @@ async function main() {
         process.env.MT_BASE_URL ?? "https://www.moltentech.us"
       );
       if (!liveMinimums) {
-        console.error("note: could not reach MT for live tier minimums — using this tool's bundled copy.");
+        console.error("note: could not reach Flux Hub for live tier minimums — using this tool's bundled copy.");
       }
       const minimums = liveMinimums ?? TIER_FLOORS_CENTS;
 
@@ -341,13 +508,41 @@ async function main() {
         answers.mtPubkey = await fetchMtPubkey(answers.mtBaseUrl);
       }
 
-      // Usually absent (keygen comes after init), but an operator re-running `init`
-      // after a typo already has the key — reuse it rather than re-emptying the slot.
+      // ⭐ The key is a PRECONDITION, not a later step. `keygen` first is the order the
+      // runbook teaches (Step 1) and the only one in which MANIFEST_PUBKEY reaches
+      // .env.operator without hand-editing — but `init` used to print "1. mt-manifest
+      // keygen" in its closing steps regardless, so an operator who had just run it was
+      // told to run it again. Requiring it here collapses that whole class: the file
+      // either exists and every derived value is filled, or you are told exactly what to
+      // run. Refusing is also the only way MANIFEST_KEY can be filled at all.
+      const keyPath = join(dir, "manifest-key.pem");
+      if (!existsSync(keyPath)) {
+        die(
+          `${keyPath} not found. Run \`mt-manifest keygen\` first — your signing key is your ` +
+            `provider identity, and init fills MANIFEST_KEY and MANIFEST_PUBKEY from it.`
+        );
+      }
+      const keyPem = readFileSync(keyPath, "utf8");
+      // Exactly what the operator used to be told to produce by hand and paste into two
+      // files. `base64 -w0` of the PEM — the single-line form agent/src/signing.ts decodes.
+      const manifestKey = Buffer.from(keyPem, "utf8").toString("base64");
+      // Prefer the file keygen wrote; derive from the key itself if it is missing, so a
+      // deleted manifest-pubkey.txt cannot leave the pin empty (the failure that made
+      // `mt-agent doctor`'s key check report `skip` on every onboarding so far).
       const pubkeyPath = join(dir, "manifest-pubkey.txt");
-      const manifestPubkey = existsSync(pubkeyPath)
-        ? readFileSync(pubkeyPath, "utf8").trim()
-        : undefined;
-      const files = generateAll(answers, { manifestPubkey });
+      let manifestPubkey: string;
+      try {
+        manifestPubkey = existsSync(pubkeyPath)
+          ? readFileSync(pubkeyPath, "utf8").trim()
+          : publicKeyBase64FromPrivate(importPrivateKeyPem(keyPem));
+      } catch (e) {
+        die(`${keyPath} is not a usable ed25519 private key: ${(e as Error).message}`);
+      }
+      // No external issuer, so there is nothing to wait for and no reason to send the
+      // operator away to run openssl. Generated here rather than in the generator so the
+      // generator stays pure and `--answers` can pin an existing value to keep sessions.
+      const sessionSecret = answers.sessionSecret?.trim() || randomBytes(32).toString("hex");
+      const files = generateAll(answers, { manifestPubkey, manifestKey, sessionSecret });
       const existing = Object.keys(files).filter((f) => existsSync(join(dir, f)));
       if (existing.length > 0 && !force) {
         die(`refusing to overwrite existing file(s): ${existing.join(", ")} — pass --force to replace them.`);
@@ -359,28 +554,33 @@ async function main() {
 
       const prices = resolvedPrices(answers);
       console.log(`Wrote ${Object.keys(files).join(", ")} to ${dir}\n`);
+      // Only steps that are genuinely still OUTSTANDING belong in this list. It used to
+      // open with "1. mt-manifest keygen" — which init now requires to have happened
+      // already — and with a base64-and-paste step init performs itself.
+      console.log("Already done, from the key in this directory:");
+      console.log("  ✓ MANIFEST_KEY   filled in secrets.env and .env.operator");
+      console.log("  ✓ MANIFEST_PUBKEY pinned in .env.operator (`mt-agent doctor` now compares, not skips)");
+      console.log("  ✓ SESSION_SECRET generated\n");
       console.log("Next, in order:");
-      console.log("  1. mt-manifest keygen                     → manifest-key.pem (once, ever)");
-      console.log("     → also fills MANIFEST_PUBKEY in .env.operator, which is what makes");
-      console.log("       `mt-agent doctor`'s key check compare instead of skip");
-      console.log("  2. paste base64 of that key into secrets.env AND .env.operator as MANIFEST_KEY");
-      console.log(`  3. open ${answers.mtBaseUrl}/onboard, paste your manifest, sign with ${answers.ownerAddress}`);
+      console.log(`  1. open ${answers.mtBaseUrl}/onboard, paste your manifest, sign with ${answers.ownerAddress}`);
       console.log("     → issues AGENT_KEY, COALITION_KEY, COALITION_SIGNING_KEY for secrets.env");
       if (hasPaidTier(prices)) {
-        console.log("  4. Stripe: create a restricted key + a webhook endpoint.");
+        console.log("  2. Stripe: create the webhook endpoint against your Coalition URL.");
         console.log("     ⚠️  the webhook secret is bound to THAT endpoint — a secret from another");
         console.log("         endpoint fails silently and checkout never completes.");
       } else {
-        console.log("  4. Stripe: not needed — you are not listing anything for sale.");
+        console.log("  2. Stripe: not needed — you are not listing anything for sale.");
       }
-      console.log(`  5. deploy Flux app "${answers.fluxAppName}" → ${coalitionUrlFor(answers.fluxAppName)}`);
+      console.log(`  3. deploy Flux app "${answers.fluxAppName}" → ${coalitionUrlFor(answers.fluxAppName)}`);
       console.log("\nThen run `mt-manifest doctor` here to check every file agrees.");
       break;
     }
     case "doctor": {
-      // The runbook's "which value must match where" table, executed. File-level
-      // only: no network, no secrets held, no Proxmox credentials. The checks that
-      // need credentials live in `mt-agent doctor`, where they already exist.
+      // The runbook's "which value must match where" table, executed. File-level by
+      // DEFAULT: no network, no secrets held. Two opt-in flags cross that line on
+      // purpose — `--check-stripe` and `--check-proxmox` — because the two failures
+      // that cost the most (wrong Stripe account, spinning storage) are invisible to
+      // any amount of file comparison. Without a flag, nothing here leaves the disk.
       const dir = flag(args, "--dir") ?? ".";
       const read = (f: string): string | undefined => {
         const p = join(dir, f);
@@ -422,6 +622,52 @@ async function main() {
             ...(await probeStripeWiring({ stripeSecretKey, coalitionUrl, mtBaseUrl }))
           );
           report.filesChecked.push("stripe (live)");
+        }
+      }
+      // Same opt-in bargain as --check-stripe: file-level doctor stays credential-free
+      // and offline, and this flag is how you ask for the one thing no file can answer —
+      // whether the token in .env.operator actually works, and whether the storage it
+      // names spins. `init` runs these at the moment the token is typed; this is for
+      // re-runs, and for an operator who filled the files in by hand.
+      if (args.includes("--check-proxmox")) {
+        const operatorText = read(".env.operator");
+        const operator = operatorText ? parseConfigEnv(operatorText) : {};
+        const url = operator.PROXMOX_URL;
+        const tokenId = operator.PROXMOX_TOKEN_ID;
+        const tokenSecret = operator.PROXMOX_TOKEN_SECRET;
+        if (!url || !tokenId || !tokenSecret) {
+          console.log("--check-proxmox: .env.operator is missing PROXMOX_URL / _TOKEN_ID / _TOKEN_SECRET — skipped.\n");
+        } else {
+          const probe = await probeProxmox({ url, tokenId, tokenSecret });
+          console.log(`proxmox (live) — ${url}`);
+          console.log(formatProbe(probe.checks) + "\n");
+          for (const check of probe.checks) {
+            if (check.status !== "fail") continue;
+            report.findings.push({
+              severity: "error",
+              rule: "PROXMOX_CHECK_FAILED",
+              file: ".env.operator",
+              message: `${check.name}: ${check.detail}`,
+            });
+          }
+          // The storage the operator actually configured, judged. This is the check that
+          // exists because a `local-lvm` default on a WD Red provisions fine and then
+          // fails every benchmark with nothing in any log to say why.
+          const images = operator.PROXMOX_STORAGE_IMAGES;
+          for (const [node, options] of Object.entries(probe.survey?.storages ?? {})) {
+            const chosen = options.find((o) => o.id === images);
+            if (chosen?.rotational === true) {
+              report.findings.push({
+                severity: "error",
+                rule: "DOC_DEFAULT_STORAGE_IS_HDD",
+                file: ".env.operator",
+                message:
+                  `PROXMOX_STORAGE_IMAGES="${images}" is ROTATIONAL on ${node} (${chosen.why}) — ` +
+                  `nodes provision fine and then fail every benchmark, with no visible cause.`,
+              });
+            }
+          }
+          report.filesChecked.push("proxmox (live)");
         }
       }
       const { text, ok } = formatReport(report);

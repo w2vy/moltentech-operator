@@ -1,9 +1,9 @@
-# MoltenTech Operator
+# Flux Hub Operator
 
-Source-available bundle for running a **MoltenTech marketplace operator** — host
+Source-available bundle for running a **Flux Hub marketplace operator** — host
 Flux nodes on your own Proxmox hardware and sell that capacity through the
-MoltenTech marketplace. You stay merchant of record (your own Stripe, or FLUX);
-MoltenTech holds **none** of your hypervisor or payment credentials and opens
+Flux Hub marketplace. You stay merchant of record (your own Stripe, or FLUX);
+Flux Hub holds **none** of your hypervisor or payment credentials and opens
 **no** inbound connection to you.
 
 ## Architecture
@@ -12,8 +12,8 @@ Three components, each isolated by trust boundary:
 
 | Component | Where it runs | Holds | Network |
 |-----------|---------------|-------|---------|
-| **`agent/`** | A trusted always-on host with LAN reach to your Proxmox `:8006` | Your **local Proxmox token** | Outbound only — pulls provision jobs from MoltenTech, never receives a push |
-| **`coalition/`** | A Flux node (ArcaneOS) — the inbound leg | Your **restricted Stripe key + webhook secret** (if using Stripe) | Inbound: serves the signed manifest + stats; relays Stripe webhooks outbound to MoltenTech |
+| **`agent/`** | A trusted always-on host with LAN reach to your Proxmox `:8006` | Your **local Proxmox token** | Outbound only — pulls provision jobs from Flux Hub, never receives a push |
+| **`coalition/`** | A Flux node (ArcaneOS) — the inbound leg | Your **restricted Stripe key + webhook secret** (if using Stripe) | Inbound: serves the signed manifest + stats; relays Stripe webhooks outbound to Flux Hub |
 | **`protocol/`** | Shared library | — | The typed wire contracts (zod) both legs speak + the manifest signing CLI |
 
 The **agent** provisions your local Proxmox via the bundled
@@ -40,7 +40,7 @@ Already cloned without submodules? `git submodule update --init --recursive`.
 ## Onboarding
 
 Full step-by-step (sign your manifest → configure Stripe → deploy both legs →
-hand off to MoltenTech for key issuance + activation) is in
+hand off to Flux Hub for key issuance + activation) is in
 [`docs/operator-onboarding.md`](docs/operator-onboarding.md).
 
 Sign your provider manifest with the bundled CLI:

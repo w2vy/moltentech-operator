@@ -138,7 +138,10 @@ test("an empty skeleton slot is not a leak, and not an error", () => {
   assert.deepEqual(rules(report), ["NOT_YET_FILLED", "NOT_YET_FILLED"]);
   assert.ok(report.findings.every((f) => f.severity === "warning"));
   // It must say where the value comes from, or the operator is just told it is empty.
-  assert.match(report.findings[0]!.message, /keygen/);
+  // `init` fills MANIFEST_KEY from the key it requires, so the recovery it names is a
+  // re-run (or the base64 by hand) — not keygen, which would mint a NEW identity.
+  assert.match(report.findings[0]!.message, /manifest-key\.pem/);
+  assert.doesNotMatch(report.findings[0]!.message, /keygen/);
   assert.equal(formatReport(report).ok, true);
 });
 

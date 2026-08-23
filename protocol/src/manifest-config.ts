@@ -14,6 +14,7 @@ import { SCHEMA_VERSION } from "./common";
  *                                                      Proxmox host rows; tiers/counts
  *                                                      derive from the agent's inventory)
  *   TRIAL_DAYS                                      -> trialDays
+ *   PROVIDER_LEVEL                                  -> level (supporter | operator)
  *   MANUAL_APPROVAL ("true"/"false")                -> manualApproval
  *   OWNER_ADDRESS                                   -> ownerAddress (optional; the
  *                                                      wallet that authorizes this
@@ -81,5 +82,15 @@ export function renderManifestBodyFromConfig(configText: string): Record<string,
   // Optional owner wallet that authorizes this manifest's pubkey (proven, not blind,
   // TOFU). Included only when set, so a legacy config still renders a bare body.
   if (env.OWNER_ADDRESS) body.ownerAddress = env.OWNER_ADDRESS;
+  // Supporter vs operator. Emitted only when set — an absent level means `operator`,
+  // which is what every provider signed before this field existed already is. Rendering
+  // it unconditionally would change the bytes of a re-signed legacy manifest for no
+  // reason the operator asked for.
+  if (env.PROVIDER_LEVEL) {
+    if (env.PROVIDER_LEVEL !== "supporter" && env.PROVIDER_LEVEL !== "operator") {
+      throw new Error(`config.env: PROVIDER_LEVEL must be "supporter" or "operator", got "${env.PROVIDER_LEVEL}"`);
+    }
+    body.level = env.PROVIDER_LEVEL;
+  }
   return body;
 }

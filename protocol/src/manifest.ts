@@ -63,6 +63,26 @@ export const ProviderManifestBody = Envelope.extend({
   ownerAddress: z.string().min(1).optional(),
   /** Hardware (Proxmox host rows) the operator attests. Tiers/counts derive from inventory. */
   hardware: z.array(ProviderManifestHardware).min(1),
+  /**
+   * What this participant signed up to be.
+   *
+   *   supporter — runs their own nodes and lends idle capacity for Foundation nodes.
+   *               Sells nothing, needs no Stripe account.
+   *   operator  — also offers hardware for rent through the marketplace.
+   *
+   * 🔴 OPTIONAL, and deliberately WITHOUT a zod `.default()`. Every manifest signed
+   * before this field existed omits it, and a default that materialised during parsing
+   * would be a field the signer never signed. Signature checking runs on the RAW object
+   * (`verifyManifestObject`), so a default cannot reach the signed bytes today — do not
+   * "tidy" verification to run on a parsed body, and do not make this required.
+   *
+   * Absent means `operator`, which is what every existing provider is.
+   *
+   * It is a DECLARATION, not an authorization: FH decides what a provider may do from
+   * its own records. Nothing may grant itself capability by claiming a level here — the
+   * same reasoning as `trustedSelfClaim` below.
+   */
+  level: z.enum(["supporter", "operator"]).optional(),
   /** Operator-selectable free-trial window in days (1–7); MT defaults missing to 1. */
   trialDays: z.number().int().min(1).max(7).default(1),
   /** Cautious operators may require manual approval before provisioning a trial. */

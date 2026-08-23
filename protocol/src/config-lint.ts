@@ -428,7 +428,7 @@ export function lintListing(
         file,
         message:
           `AGENT_LISTING_JSON: ${tier} needs availableSlots — how many to OFFER. ` +
-          "MT clamps it to your live available slots, so it cannot oversell.",
+          "Flux Hub clamps it to your live available slots, so it cannot oversell.",
       });
     }
     const configured = prices[tier];
@@ -439,7 +439,7 @@ export function lintListing(
         file,
         message:
           `${tier} is ${entry.priceCents} in AGENT_LISTING_JSON but ${configured} in ` +
-          "config.env's TIER_PRICES_JSON — MT and your Coalition would quote different prices.",
+          "config.env's TIER_PRICES_JSON — Flux Hub and your Coalition would quote different prices.",
       });
     }
   }
@@ -449,15 +449,24 @@ export function lintListing(
 /** Rule 8: the courier fails OPEN and SILENT — `courier=off` in one startup line and
  * nothing else, ever. No authorization request will reach the operator. */
 /** Which onboarding step issues each value, so "not yet filled" can say what to do. */
+/**
+ * Where each empty value comes from.
+ *
+ * ⚠️ `init` now FILLS MANIFEST_KEY (from the key it requires) and GENERATES
+ * SESSION_SECRET, and asks for the Proxmox pair. Seeing any of those four empty no
+ * longer means "a later step issues it" — it means the file predates that change or
+ * was hand-edited, so each says how to get it back rather than describing a step that
+ * no longer exists.
+ */
 const SUPPLIED_BY: Record<string, string> = {
-  MANIFEST_KEY: "`mt-manifest keygen`, then paste the base64 of manifest-key.pem",
+  MANIFEST_KEY: "`mt-manifest init`, from manifest-key.pem — re-run it, or paste `base64 -w0 manifest-key.pem`",
   OWNER_ADDRESS: "your wallet address — the one you sign with at /onboard",
   AGENT_KEY: "the /onboard web flow, after you sign",
   COALITION_KEY: "the /onboard web flow, after you sign",
-  SESSION_SECRET: "`openssl rand -hex 32`",
+  SESSION_SECRET: "`mt-manifest init` — any long random string, e.g. `openssl rand -hex 32`",
   STRIPE_SECRET_KEY: "the Stripe dashboard (Developers → API keys)",
   STRIPE_WEBHOOK_SECRET: "the Stripe dashboard, shown once when you create the endpoint",
-  PROXMOX_TOKEN_ID: "`pveum user token add` — the id, e.g. `mt-agent@pve!agent`",
+  PROXMOX_TOKEN_ID: "`pveum user token add` — the id, e.g. `fluxhub@pve!agent`",
   PROXMOX_TOKEN_SECRET: "`pveum user token add`, printed ONCE when the token is created",
 };
 
@@ -525,10 +534,19 @@ export function lintCourier(operator: Record<string, string>, operatorFile: stri
   return found;
 }
 
-/** Report every empty slot in secrets.env as "not yet filled", naming its source. */
-function lintSkeletonSlots(entries: EnvEntry[], file: string): Finding[] {
+/**
+ * Report every empty slot in secrets.env as "not yet filled", naming its source.
+ *
+ * ⚠️ A Flux Hub SUPPORTER sells nothing and has no Stripe account, so an empty Stripe
+ * pair is not a pending step for them — it is the correct final state. `init` does not
+ * even write those lines for a supporter; this covers the hand-written file. Warning
+ * about something that will never be filled teaches the operator to skim the list, and
+ * the three warnings that DO matter are in that same list.
+ */
+function lintSkeletonSlots(entries: EnvEntry[], file: string, opts: { supporter?: boolean } = {}): Finding[] {
   return entries
     .filter((e) => e.value === "")
+    .filter((e) => !(opts.supporter && e.key.startsWith("STRIPE_")))
     .map((e) => ({
       rule: "NOT_YET_FILLED",
       severity: "warning" as const,
@@ -670,7 +688,11 @@ export function runDoctor(input: DoctorInput): DoctorReport {
     // naming the step that issues it: a fresh scaffold must not look broken.
     const secretEntries = parseEnvLines(input.secretsEnv);
     findings.push(...lintValueShape(secretEntries, "secrets.env"));
-    findings.push(...lintSkeletonSlots(secretEntries, "secrets.env"));
+    findings.push(
+      ...lintSkeletonSlots(secretEntries, "secrets.env", {
+        supporter: configRec.PROVIDER_LEVEL === "supporter",
+      })
+    );
   }
 
   let operatorRec: Record<string, string> = {};
@@ -720,7 +742,7 @@ export function formatReport(report: DoctorReport): { text: string; ok: boolean 
   );
   if (report.minimumsSource === "bundled") {
     lines.push(
-      "note: could not reach MT for live tier minimums; price rules used this tool's " +
+      "note: could not reach Flux Hub for live tier minimums; price rules used this tool's " +
         "bundled copy, which may be out of date."
     );
   }

@@ -79,6 +79,20 @@ export interface Answers {
    */
   selling?: boolean;
   /**
+   * Which kind of participant this is (see `ProviderManifestBody.level`).
+   *
+   *   supporter — runs their own nodes, lends idle capacity for Foundation nodes,
+   *               sells nothing, needs no Stripe account
+   *   operator  — also rents hardware out through the marketplace
+   *
+   * `selling` is DERIVED from this when it is not stated, so the two cannot disagree.
+   * Kept separate rather than collapsed into one field because they answer different
+   * questions: `level` is what you signed up as and is published in the manifest;
+   * `selling` is whether this particular scaffold lists anything, which a supporter
+   * who later adds a tier can change without re-declaring who they are.
+   */
+  level?: "supporter" | "operator";
+  /**
    * Tier → how many slots to OFFER for sale. Defaults to every slot of that tier in
    * `hosts`, which is what an operator almost always means.
    *
@@ -89,6 +103,32 @@ export interface Answers {
   availableSlots?: Record<string, number>;
   trialDays?: number;
   manualApproval?: boolean;
+  /**
+   * Proxmox API token, as `pveum user token add` printed it in Step 0.1 — the id
+   * (`fluxhub@pve!agent`) and the secret shown exactly once.
+   *
+   * Carried through `Answers` rather than asked for only at the prompt so the
+   * `--answers` path writes the same complete files the interactive one does. That
+   * split is what shipped `MT_PUBKEY=` empty for every scripted onboarding
+   * (operator#54); it is not repeated here.
+   */
+  /** Base URL of the Proxmox API, e.g. `https://192.168.1.10:8006`. An IP beats a
+   * hostname: `mt-manifest` and the agent both run in containers, which resolve names
+   * themselves and often cannot see the LAN's DNS. */
+  proxmoxUrl?: string;
+  proxmoxTokenId?: string;
+  proxmoxTokenSecret?: string;
+  /** Stripe restricted key + webhook signing secret. Only ever asked of an operator
+   * who listed a paid tier; a self-hoster has no Stripe account to ask about. */
+  stripeSecretKey?: string;
+  stripeWebhookSecret?: string;
+  /**
+   * The Coalition console's session secret. Any long random string — it has no
+   * external issuer, so `init` GENERATES one when this is absent rather than sending
+   * the operator away to run `openssl rand -hex 32`. Present here so a re-run with
+   * `--answers` can keep a console's existing sessions alive.
+   */
+  sessionSecret?: string;
 }
 
 /** The Flux app URL is deterministic and documented nowhere else. Deriving it is what
@@ -184,7 +224,7 @@ export function tiersInUse(a: Answers): string[] {
 
 export function resolvedPrices(a: Answers): Record<string, number> {
   const out: Record<string, number> = {};
-  if (a.selling === false) return out;
+  if (!isSelling(a)) return out;
   for (const tier of tiersInUse(a)) {
     // An unknown tier has no floor to fall back on; validateAnswers rejects it, and
     // defaulting to 0 here would quietly produce an unlistable price.
@@ -224,6 +264,16 @@ export function resolvedListing(
   }));
 }
 
+/**
+ * Does this operator sell? Explicit `selling` wins; otherwise a Supporter sells nothing
+ * and everyone else does. One place, so the price list, the Stripe scaffolding and the
+ * doctor's warnings can never disagree about it.
+ */
+export function isSelling(a: Answers): boolean {
+  if (typeof a.selling === "boolean") return a.selling;
+  return a.level !== "supporter";
+}
+
 /** Whether anything is listed for sale — the gate for whether Stripe is needed.
  * Any listed tier is a paid tier, because every price must clear the platform floor. */
 export function hasPaidTier(prices: Record<string, number>): boolean {
@@ -243,7 +293,13 @@ export function renderConfigEnv(a: Answers): string {
   lines.push(
     `MT_BASE_URL=${a.mtBaseUrl}`,
     `COALITION_URL=${coalitionUrlFor(a.fluxAppName)}`,
-    `OWNER_ADDRESS=${a.ownerAddress}`
+    `OWNER_ADDRESS=${a.ownerAddress}`,
+    "",
+    "# PROVIDER_LEVEL — what you signed up as, published in your signed manifest.",
+    "#   supporter = your own nodes + Foundation nodes on idle capacity; nothing for sale",
+    "#   operator  = the above, plus hardware rented out through the marketplace",
+    "# A supporter needs no Stripe account at all.",
+    `PROVIDER_LEVEL=${a.level ?? (isSelling(a) ? "operator" : "supporter")}`
   );
   // ALWAYS emitted, even empty. An absent line is invisible: the operator has nothing
   // to notice and nothing to fill in, and the omission only surfaces at the first
@@ -278,18 +334,41 @@ export function renderConfigEnv(a: Answers): string {
  * Empty-but-present is a deliberate third state — `doctor` reports it as "not yet
  * filled", never as an error, so a fresh scaffold does not read as broken.
  */
-export function renderSecretsEnv(a: Answers, opts: { includeStripe: boolean }): string {
+/**
+ * `secrets.env` — the Coalition's secret environment.
+ *
+ * ⚠️ An EMPTY value here must mean "another system has to issue this", never "we did
+ * not bother to ask". A real onboarding run (2026-08-22) ended with ten
+ * `NOT_YET_FILLED` warnings of which seven were values `init` already held or could
+ * have asked for — and a warning list that is mostly noise is one the operator learns
+ * to skim, which is where the three that matter then hide.
+ *
+ * So: MANIFEST_KEY is derived from the key on disk, SESSION_SECRET is generated, the
+ * Stripe pair is asked for, and exactly three values are left empty — the ones the
+ * `/onboard` web flow mints and shows once.
+ */
+export function renderSecretsEnv(
+  a: Answers,
+  opts: {
+    includeStripe: boolean;
+    /** base64 of manifest-key.pem, derived by the CLI from the key `init` requires. */
+    manifestKey?: string;
+    /** Generated by the CLI when the operator did not supply one. */
+    sessionSecret?: string;
+  }
+): string {
   const lines = [
-    "# secrets.env — generated by `mt-manifest init`. CONTAINS SECRETS once filled in.",
+    "# secrets.env — generated by `mt-manifest init`. CONTAINS SECRETS.",
     "# Never commit this file. Never paste these values into config.env.",
     "#",
-    "# Every value below is EMPTY on purpose: these are issued after this step.",
+    "# The values still EMPTY below are the ones another system has to issue; each",
+    "# names its source. Everything else was filled in from your answers.",
     "# Comments stay on their own line — text after `=` becomes part of the value.",
     "",
-    "# MANIFEST_KEY — base64 of manifest-key.pem, issued by `mt-manifest keygen`.",
-    "# Run the base64 yourself and paste the RESULT: env files run no shell, so",
-    "# MANIFEST_KEY=$(base64 …) would ship literally.",
-    "MANIFEST_KEY=",
+    "# MANIFEST_KEY — base64 of manifest-key.pem, filled in by `mt-manifest init`.",
+    "# Never a shell substitution: env files run no shell, so MANIFEST_KEY=$(base64 …)",
+    "# would ship literally.",
+    `MANIFEST_KEY=${opts.manifestKey ?? ""}`,
     "",
     "# AGENT_KEY, COALITION_KEY and COALITION_SIGNING_KEY — all three are issued by the",
     "# /onboard web flow after you sign, and shown ONCE. COALITION_SIGNING_KEY has no",
@@ -299,20 +378,22 @@ export function renderSecretsEnv(a: Answers, opts: { includeStripe: boolean }): 
     "COALITION_KEY=",
     "COALITION_SIGNING_KEY=",
     "",
-    "# SESSION_SECRET — any long random string (`openssl rand -hex 32`).",
-    "# Without it the Coalition console withholds the node dashboard.",
-    "SESSION_SECRET=",
+    "# SESSION_SECRET — generated for you (32 random bytes, hex). It has no external",
+    "# issuer, so there is nothing to wait for. Without it the Coalition console",
+    "# withholds the node dashboard. Changing it logs everyone out; that is all.",
+    `SESSION_SECRET=${opts.sessionSecret ?? ""}`,
   ];
   if (opts.includeStripe) {
     lines.push(
       "",
       "# Stripe — required because you listed at least one PAID tier.",
       "# STRIPE_SECRET_KEY: Stripe dashboard > Developers > API keys (use a restricted key).",
-      "STRIPE_SECRET_KEY=",
+      `STRIPE_SECRET_KEY=${a.stripeSecretKey ?? ""}`,
       "# STRIPE_WEBHOOK_SECRET: shown ONCE when you create the webhook endpoint.",
       "# It is bound to THAT endpoint — a secret from a different endpoint fails silently",
-      "# and checkout simply never completes.",
-      "STRIPE_WEBHOOK_SECRET="
+      "# and checkout simply never completes. Empty until you create the endpoint, which",
+      "# needs the Coalition URL above — that is a real wait, not a missing question.",
+      `STRIPE_WEBHOOK_SECRET=${a.stripeWebhookSecret ?? ""}`
     );
   } else {
     lines.push(
@@ -337,6 +418,12 @@ export function renderEnvOperator(
     arcaneIso?: string;
     /** Base64 pubkey from `manifest-pubkey.txt`, when keygen has already run. */
     manifestPubkey?: string;
+    /** base64 of manifest-key.pem — the SAME value secrets.env carries. The agent
+     * and the Coalition each read their own env file, so this is genuinely two
+     * copies of one secret, not a duplicate to be deduplicated away. */
+    manifestKey?: string;
+    /** The `pveum user token add` secret, printed once in Step 0.1. */
+    tokenSecret?: string;
   } = {}
 ): string {
   const host = a.hosts[0];
@@ -353,8 +440,9 @@ export function renderEnvOperator(
     "# once and no authorization request ever reaches you.",
     `COALITION_URL=${coalitionUrlFor(a.fluxAppName)}`,
     "",
-    "# MANIFEST_KEY — the same base64 value as in secrets.env. Fill both.",
-    "MANIFEST_KEY=",
+    "# MANIFEST_KEY — the same base64 value as in secrets.env; `init` fills both from",
+    "# the key on disk. Empty here means the agent signs nothing and runs courier=off.",
+    `MANIFEST_KEY=${proxmox.manifestKey ?? ""}`,
     "",
     "# MANIFEST_PUBKEY — the public half, from manifest-pubkey.txt (`mt-manifest keygen`).",
     "# It is NOT a second secret: it is the pin `mt-agent doctor` compares MANIFEST_KEY",
@@ -366,7 +454,7 @@ export function renderEnvOperator(
     "",
     `PROXMOX_URL=${proxmox.url ?? `https://${host.nodeName ?? host.name}:8006`}`,
     `PROXMOX_TOKEN_ID=${proxmox.tokenId ?? ""}`,
-    "PROXMOX_TOKEN_SECRET=",
+    `PROXMOX_TOKEN_SECRET=${proxmox.tokenSecret ?? ""}`,
     `PROXMOX_STORAGE_IMAGES=${host.storageImages}`,
     `PROXMOX_STORAGE_ISO=${host.storageIso}`,
     "# Scratch storage for image import; `local` suits almost every host.",
@@ -429,6 +517,65 @@ export function fillManifestPubkey(
       "",
     ].join("\n");
   return { text: envOperator + suffix, result: "filled" };
+}
+
+/**
+ * The LAN a host's VMs live on, given as ONE answer: the gateway with its prefix,
+ * `192.168.87.1/24`.
+ *
+ * Asking for gateway and prefix separately is how `lanIp` ends up without a `/NN` — and
+ * a bare lanIp silently becomes /32, so the node boots with no route out and is
+ * reachable by nobody. `doctor` catches that after the fact; taking the prefix from the
+ * gateway answer means a slot cannot be written without one in the first place.
+ */
+export interface LanNetwork {
+  /** The gateway address itself, e.g. `192.168.87.1`. */
+  gateway: string;
+  /** Prefix length, e.g. 24. */
+  prefix: number;
+  /** The first three octets, e.g. `192.168.87.` — what a host number is appended to. */
+  base: string;
+}
+
+export function parseLanNetwork(input: string): LanNetwork {
+  const m = input.trim().match(/^(\d{1,3}(?:\.\d{1,3}){3})\/(\d{1,2})$/);
+  if (!m) throw new Error(`expected a gateway with prefix, e.g. 192.168.87.1/24 — got "${input}"`);
+  const [, gateway, prefixStr] = m;
+  const octets = gateway!.split(".").map(Number);
+  if (octets.some((o) => o > 255)) throw new Error(`"${gateway}" is not a valid IPv4 address`);
+  const prefix = Number(prefixStr);
+  if (prefix < 8 || prefix > 30) throw new Error(`prefix /${prefix} is not usable for a VM LAN`);
+  return { gateway: gateway!, prefix, base: octets.slice(0, 3).join(".") + "." };
+}
+
+/**
+ * Turn what the operator typed for a slot into a full `lanIp`. A bare host number (`5`)
+ * is completed from the gateway's own /24-style base; a full address is kept. The prefix
+ * is ALWAYS appended, which is the entire point.
+ */
+export function slotLanIp(input: string, net: LanNetwork): string {
+  const raw = input.trim().replace(/\/\d{1,2}$/, "");
+  const address = /^\d{1,3}$/.test(raw) ? `${net.base}${raw}` : raw;
+  if (!/^\d{1,3}(?:\.\d{1,3}){3}$/.test(address)) {
+    throw new Error(`"${input}" is neither a host number nor an IPv4 address`);
+  }
+  return `${address}/${net.prefix}`;
+}
+
+/** The Flux API port every node answers on. Ports are allocated from a base by index so
+ * an operator does not invent 31 of them by hand, and so the block they have to open in
+ * the firewall is contiguous and predictable. */
+export const DEFAULT_API_PORT = 16127;
+
+/**
+ * Ports go up in tens. Measured against the live fleet (prod `Slot.apiPort`, 2026-08-22):
+ * 16127, 16137, 16147 … 16197 — Flux uses a small block of consecutive ports per node
+ * (api, api-ssl, p2p …), so consecutive node ports would collide.
+ */
+export const API_PORT_STRIDE = 10;
+
+export function allocateApiPort(base: number, index: number): number {
+  return base + index * API_PORT_STRIDE;
 }
 
 /** The agent's own fallback when nothing is declared (`agent/src/config.ts`). Written
@@ -554,13 +701,31 @@ export interface GeneratedFiles {
 
 export function generateAll(
   a: Answers,
-  opts: { manifestPubkey?: string } = {}
+  opts: {
+    manifestPubkey?: string;
+    /** base64 of manifest-key.pem. The CLI derives it; the generator stays pure so
+     * both `init` paths and the tests produce byte-identical files from one input. */
+    manifestKey?: string;
+    /** Randomness is the CLI's job for the same reason — a generator that reaches for
+     * `randomBytes` cannot be diffed against itself. */
+    sessionSecret?: string;
+  } = {}
 ): GeneratedFiles {
   const prices = resolvedPrices(a);
   return {
     "config.env": renderConfigEnv(a),
-    "secrets.env": renderSecretsEnv(a, { includeStripe: hasPaidTier(prices) }),
-    ".env.operator": renderEnvOperator(a, { manifestPubkey: opts.manifestPubkey }),
+    "secrets.env": renderSecretsEnv(a, {
+      includeStripe: hasPaidTier(prices),
+      manifestKey: opts.manifestKey,
+      sessionSecret: opts.sessionSecret,
+    }),
+    ".env.operator": renderEnvOperator(a, {
+      manifestPubkey: opts.manifestPubkey,
+      manifestKey: opts.manifestKey,
+      url: a.proxmoxUrl,
+      tokenId: a.proxmoxTokenId,
+      tokenSecret: a.proxmoxTokenSecret,
+    }),
     "inventory.json": renderInventoryJson(a),
     "flux-app-spec.json": renderFluxAppSpec(a),
   };

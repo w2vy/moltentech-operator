@@ -109,7 +109,7 @@ jobs:
           # names, values, prices — is used exactly as an operator would copy it.
           c = cfg[0].replace("https://<your-coalition>", "https://coalition.example")
           c = c.replace("<the wallet address you sign with>", "t1exampleOwnerWalletAddress")
-          c = c.replace("<your MT pubkey>", "Y2ktZHVtbXktbXQtcHVia2V5LTMyLWJ5dGVzISE=")
+          c = c.replace("<your FH pubkey>", "Y2ktZHVtbXktbXQtcHVia2V5LTMyLWJ5dGVzISE=")
           (work / "config.env").write_text(c)
 
           # Every placeholder in a VALUE must be substituted above. An unsubstituted <...>
@@ -196,24 +196,49 @@ jobs:
           ANSWERS
 
           run() { docker run --rm -v "$work:/work" -u "$(id -u):$(id -g)" mt-manifest:ci "$@"; }
+
+          # keygen FIRST — the documented order, and now a precondition: init derives
+          # MANIFEST_KEY and MANIFEST_PUBKEY from the key and refuses without it.
+          run keygen
           run init --answers answers.json
           run doctor
 
-          # Fill the skeleton the way an operator would, then take the same path.
-          sed -i 's/^AGENT_KEY=$/AGENT_KEY=ci-dummy/;s/^COALITION_KEY=$/COALITION_KEY=ci-dummy/' "$work/secrets.env"
-          sed -i 's/^STRIPE_SECRET_KEY=$/STRIPE_SECRET_KEY=ci-dummy/' "$work/secrets.env"
-          sed -i 's/^STRIPE_WEBHOOK_SECRET=$/STRIPE_WEBHOOK_SECRET=ci-dummy/' "$work/secrets.env"
-          run keygen
-          # keygen runs AFTER init (the documented order), so it is what fills
-          # MANIFEST_PUBKEY — the pin `mt-agent doctor` compares MANIFEST_KEY against.
-          # Empty, that check can only report `skip`, which is what it did on every real
-          # onboarding.
+          # MANIFEST_PUBKEY is the pin `mt-agent doctor` compares MANIFEST_KEY against.
+          # Empty, that check can only report `skip` — which is what it did on every real
+          # onboarding, because nothing filled it until the operator did it by hand.
           pubkey="$(tr -d '\n' < "$work/manifest-pubkey.txt")"
           grep -q "^MANIFEST_PUBKEY=${pubkey}$" "$work/.env.operator" || {
-            echo "keygen did not fill MANIFEST_PUBKEY in .env.operator"
+            echo "init did not pin MANIFEST_PUBKEY in .env.operator"
             grep '^MANIFEST_PUBKEY=' "$work/.env.operator" || echo "(no MANIFEST_PUBKEY line at all)"
             exit 1
           }
+          # MANIFEST_KEY must be filled in BOTH files, and be base64 of the key on disk.
+          key64="$(base64 -w0 < "$work/manifest-key.pem")"
+          for f in secrets.env .env.operator; do
+            grep -q "^MANIFEST_KEY=${key64}$" "$work/$f" || {
+              echo "init did not fill MANIFEST_KEY in $f"; exit 1
+            }
+          done
+          # SESSION_SECRET has no external issuer, so an empty one is init's failure.
+          grep -qE '^SESSION_SECRET=[0-9a-f]{64}$' "$work/secrets.env" || {
+            echo "init did not generate SESSION_SECRET"
+            grep '^SESSION_SECRET=' "$work/secrets.env"; exit 1
+          }
+          # Asserted on the FRESH file, before anything is filled in. Every empty value
+          # must be one another system issues: the three /onboard mints, plus — for this
+          # SELLING fixture, which supplies no Stripe answers — the Stripe pair, whose
+          # webhook secret genuinely does not exist until the endpoint is created.
+          # Anything else appearing here is a question init failed to ask.
+          left="$(grep -E '^[A-Z_]+=$' "$work/secrets.env" | tr -d '=' | sort | tr '\n' ' ')"
+          [ "$left" = "AGENT_KEY COALITION_KEY COALITION_SIGNING_KEY STRIPE_SECRET_KEY STRIPE_WEBHOOK_SECRET " ] || {
+            echo "unexpected empty values in secrets.env: $left"; exit 1
+          }
+
+          # Now fill what an operator would be handed later, and take the same path.
+          sed -i 's/^AGENT_KEY=$/AGENT_KEY=ci-dummy/;s/^COALITION_KEY=$/COALITION_KEY=ci-dummy/' "$work/secrets.env"
+          sed -i 's/^STRIPE_SECRET_KEY=$/STRIPE_SECRET_KEY=ci-dummy/' "$work/secrets.env"
+          sed -i 's/^STRIPE_WEBHOOK_SECRET=$/STRIPE_WEBHOOK_SECRET=ci-dummy/' "$work/secrets.env"
+
           run sign --key manifest-key.pem --from-config config.env --out manifest.json
           run verify --in manifest.json
           run env --from-config config.env --secrets secrets.env \
@@ -298,7 +323,7 @@ jobs:
             "ownerAddress": "t1exampleOwnerWalletAddress",
             "mtBaseUrl": "https://www.moltentech.us",
             "fluxAppName": "coalition-ci-selfhost",
-            "selling": false,
+            "level": "supporter",
             "hosts": [{
               "name": "pve-01", "storageImages": "ssd", "storageIso": "iso-store",
               "slots": [{
@@ -310,17 +335,25 @@ jobs:
           ANSWERS
 
           run() { docker run --rm -v "$work:/work" -u "$(id -u):$(id -g)" mt-manifest:ci "$@"; }
+          run keygen
           run init --answers answers.json
           grep -q '^TIER_PRICES_JSON={}$' "$work/config.env" || { echo "expected an empty price list"; exit 1; }
+          grep -q '^PROVIDER_LEVEL=supporter$' "$work/config.env" || { echo "level did not reach config.env"; exit 1; }
           grep -q 'STRIPE' "$work/secrets.env" && { echo "Stripe leaked into a sell-nothing scaffold"; exit 1; }
           # Selling nothing is an EMPTY listing, not a zero-priced tier.
           grep -q '^AGENT_LISTING_JSON=\[\]$' "$work/.env.operator" || {
             echo "expected an empty AGENT_LISTING_JSON for a sell-nothing operator"
             grep '^AGENT_LISTING_JSON=' "$work/.env.operator"; exit 1
           }
+          # ⭐ A self-hoster has no Stripe account and no external step but /onboard, so
+          # this is where the invariant is at its sharpest: exactly three empty values.
+          left="$(grep -E '^[A-Z_]+=$' "$work/secrets.env" | tr -d '=' | sort | tr '\n' ' ')"
+          [ "$left" = "AGENT_KEY COALITION_KEY COALITION_SIGNING_KEY " ] || {
+            echo "a self-hoster should be left with only the /onboard keys, got: $left"; exit 1
+          }
           sed -i 's/^AGENT_KEY=$/AGENT_KEY=ci-dummy/;s/^COALITION_KEY=$/COALITION_KEY=ci-dummy/' "$work/secrets.env"
-          run keygen
           run sign --key manifest-key.pem --from-config config.env --out manifest.json
+          python3 -c "import json,sys; m=json.load(open('$work/manifest.json')); assert m['level']=='supporter', m.get('level'); print('manifest declares level=supporter')"
           run env --from-config config.env --secrets secrets.env \
                   --manifest manifest.json --out env.json
           echo "sell-nothing env.json built with no Stripe keys"
