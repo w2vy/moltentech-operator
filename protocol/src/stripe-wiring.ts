@@ -61,7 +61,14 @@ function isMtPlatformWebhook(url: string): boolean {
  */
 export function classifyEndpoints(
   endpoints: StripeEndpoint[],
-  coalitionUrl: string
+  coalitionUrl: string,
+  /**
+   * Which mode the listing key opens. Stripe keeps test and live endpoints in SEPARATE
+   * sets, and a key only ever sees its own — so "not registered" without the mode sends an
+   * operator hunting in the wrong half of the dashboard for something that was never
+   * missing. Optional so existing callers are unaffected.
+   */
+  mode?: "test" | "live"
 ): Finding[] {
   const findings: Finding[] = [];
   const mine = normalizeUrl(`${coalitionUrl.replace(/\/$/, "")}/webhook`);
@@ -91,10 +98,12 @@ export function classifyEndpoints(
       severity: "error",
       file: "secrets.env",
       message:
-        `${e.url} is another Coalition's webhook registered in the same Stripe account. ` +
+        `${e.url} is a DIFFERENT Coalition's webhook registered in the same Stripe account. ` +
         "Stripe delivers every event to every endpoint, and a Coalition relays what it " +
-        "receives under its own providerSlug — so that operator will claim your sale " +
-        "onto their hardware. One Stripe account per operator.",
+        "receives under its OWN providerSlug — so a sale of yours gets claimed onto that " +
+        "provider's hardware. ⚠️ This holds even when both Coalitions are YOURS: the damage " +
+        "is done by the slug in the relay, not by who owns the account. One Stripe account " +
+        "per provider.",
     });
   }
 
@@ -102,14 +111,25 @@ export function classifyEndpoints(
   //    succeeds, the customer is charged, and no rental is ever relayed to MT.
   if (!enabled.some((e) => normalizeUrl(e.url) === mine)) {
     const disabled = endpoints.find((e) => normalizeUrl(e.url) === mine);
+    // Naming the mode matters: this list only ever contains endpoints of the SAME mode as
+    // the key that read it, so an endpoint created in the other half of the dashboard is
+    // invisible here rather than absent. Without that sentence the finding reads as "you
+    // never made one", which is the wrong thing to go and do.
+    const inMode = mode ? ` ${mode.toUpperCase()}-mode` : "";
+    const modeNote = mode
+      ? ` Your key is ${mode}-mode, so only${inMode} endpoints are visible here — if you ` +
+        `created yours in ${mode === "test" ? "Live" : "Test"} mode it will not appear, and ` +
+        "it also would not fire for this key. Test and live are separate endpoints with " +
+        "separate signing secrets."
+      : "";
     findings.push({
       rule: "STRIPE_WEBHOOK_NOT_REGISTERED",
       severity: "error",
       file: "secrets.env",
       message: disabled
         ? `${mine} is registered but its status is "${disabled.status}", not "enabled".`
-        : `${mine} is not registered as a webhook endpoint in this Stripe account. ` +
-          "Checkout will succeed and no rental will ever reach MT.",
+        : `${mine} is not registered as a${inMode} webhook endpoint in this Stripe account. ` +
+          `Checkout will succeed, the customer is charged, and no rental ever reaches Flux Hub.${modeNote}`,
     });
   }
 
@@ -247,6 +267,6 @@ export async function probeStripeWiring(args: {
     url: String(e.url ?? ""),
     status: String(e.status ?? ""),
   }));
-  findings.push(...classifyEndpoints(endpoints, coalitionUrl));
+  findings.push(...classifyEndpoints(endpoints, coalitionUrl, isTestKey ? "test" : "live"));
   return findings;
 }

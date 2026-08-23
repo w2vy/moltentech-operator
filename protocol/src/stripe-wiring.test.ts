@@ -301,3 +301,41 @@ test("a matched pair in either mode reports no mismatch at all", async () => {
     }
   );
 });
+
+/**
+ * Reproduces the prod finding of 2026-08-23, which is the first time this check ever ran
+ * against a real account. `prod-pve30` is provider `moltentech-test1`, but the Stripe
+ * account held an enabled endpoint for `coalition-moltentech` (provider `moltentech`,
+ * active on prod) and NONE for test1 — the 08-18 misroute, live, on two Coalitions that
+ * belong to the SAME person.
+ */
+test("⭐ two of your OWN Coalitions in one Stripe account still cross-claim", async () => {
+  // The damage is done by the providerSlug in the relay, not by who owns the account, so
+  // "one Stripe account per operator" was the wrong way to say it — tom owns both of these.
+  const findings = classifyEndpoints(
+    [{ url: "https://coalition-moltentech.app.runonflux.io/webhook", status: "enabled" }],
+    MINE,
+    "test"
+  );
+  const foreign = findings.find((f) => f.rule === "STRIPE_WEBHOOK_FOREIGN_COALITION")!;
+  assert.match(foreign.message, /even when both Coalitions are YOURS/);
+  assert.match(foreign.message, /per provider/);
+});
+
+test("⭐ 'not registered' names the MODE — the other half of the dashboard is invisible", () => {
+  // Stripe keeps test and live endpoints in separate sets and a key sees only its own.
+  // Without the mode this reads as "you never made one", which is the wrong thing to go
+  // and do — and for a live key it would send you to create a second test endpoint.
+  const test = classifyEndpoints([], MINE, "test").find((f) => f.rule === "STRIPE_WEBHOOK_NOT_REGISTERED")!;
+  assert.match(test.message, /TEST-mode webhook endpoint/);
+  assert.match(test.message, /created yours in Live mode it will not appear/);
+
+  const live = classifyEndpoints([], MINE, "live").find((f) => f.rule === "STRIPE_WEBHOOK_NOT_REGISTERED")!;
+  assert.match(live.message, /LIVE-mode webhook endpoint/);
+  assert.match(live.message, /created yours in Test mode it will not appear/);
+});
+
+test("without a known mode the finding stays mode-neutral rather than guessing", () => {
+  const f = classifyEndpoints([], MINE).find((x) => x.rule === "STRIPE_WEBHOOK_NOT_REGISTERED")!;
+  assert.doesNotMatch(f.message, /mode/i);
+});
