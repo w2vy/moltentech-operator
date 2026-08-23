@@ -783,6 +783,27 @@ export function renderFluxAppSpec(a: Answers): string {
   return JSON.stringify(spec, null, 2) + "\n";
 }
 
+/**
+ * Everything `init` writes, RELATIVE to its output directory — the names alone, with no
+ * answers needed to know them.
+ *
+ * ⚠️ This list exists so the overwrite check can run BEFORE the first question. Deriving
+ * it from `generateAll()` means it cannot be known until every answer is in, which is how
+ * the refusal ended up firing after the whole wizard. Keep it in step with
+ * `GeneratedFiles` + whatever `init` writes itself; `scaffold.test.ts` asserts it.
+ */
+export const GENERATED_PATHS = [
+  "config.env",
+  "secrets.env",
+  ".env.operator",
+  "data/inventory.json",
+  "flux-app-spec.json",
+  "compose.yaml",
+  // Not in GeneratedFiles — the CLI signs and writes this one — but it is the file
+  // carrying a SIGNATURE, so it is the last one that should be clobbered silently.
+  "manifest.json",
+] as const;
+
 export interface GeneratedFiles {
   "config.env": string;
   "secrets.env": string;

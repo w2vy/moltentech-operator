@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { generateAll, renderAgentCompose, AGENT_IMAGE, type Answers } from "./scaffold";
+import { generateAll, renderAgentCompose, AGENT_IMAGE, GENERATED_PATHS, type Answers } from "./scaffold";
 
 /**
  * `compose.yaml` for the agent.
@@ -94,4 +94,18 @@ test("it reads .env.operator, the file that holds the agent's secrets", () => {
 
 test("restart: unless-stopped, so a reboot brings it back", () => {
   assert.match(compose(), /^ {4}restart: unless-stopped$/m);
+});
+
+test("⭐ GENERATED_PATHS names every file init writes, or the guard has a hole", () => {
+  // The overwrite check runs BEFORE the first question, so it cannot ask the generator
+  // what it is about to write — it works from this list. A file added to `generateAll`
+  // and not added here is one init would silently clobber.
+  const generated = Object.keys(generateAll(ANSWERS)).map((f) =>
+    f === "inventory.json" ? "data/inventory.json" : f
+  );
+  for (const f of generated) {
+    assert.ok(GENERATED_PATHS.includes(f as (typeof GENERATED_PATHS)[number]), `${f} is not in GENERATED_PATHS`);
+  }
+  // ...plus manifest.json, which the CLI signs and writes itself.
+  assert.deepEqual([...GENERATED_PATHS].sort(), [...generated, "manifest.json"].sort());
 });
