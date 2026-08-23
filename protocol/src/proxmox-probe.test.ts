@@ -6,6 +6,7 @@ import {
   classifyRotational,
   ssdImageStorages,
   isoStorages,
+  describeStorage,
   type ProxmoxCreds,
 } from "./proxmox-probe";
 
@@ -43,7 +44,10 @@ function fakeGet(overrides: Record<string, unknown> = {}) {
     "/api2/json/nodes/pve30/storage": [
       { storage: "ssd", type: "lvmthin", content: "images,rootdir" },
       { storage: "local-lvm", type: "lvmthin", content: "images,rootdir" },
-      { storage: "pve55-shared", type: "nfs", content: "iso,vztmpl" },
+      { storage: "pve55-shared", type: "nfs", content: "iso,vztmpl", shared: 1, active: 1 },
+      { storage: "local", type: "dir", content: "iso,vztmpl", shared: 0, active: 1 },
+      // Defined cluster-wide, belongs to another host: Proxmox lists it here anyway.
+      { storage: "ss8", type: "lvmthin", content: "images", shared: 0, active: 0 },
     ],
     "/api2/json/nodes/pve30/disks/list": [
       { devpath: "/dev/sda", type: "hdd", rpm: "5400" },
@@ -104,11 +108,35 @@ test("⭐ the survey resolves each storage to its real media", async () => {
   assert.match(byId.get("local-lvm")!.why, /\/dev\/sda/);
 });
 
-test("only non-spinning image storages are offered; ISO storages ignore rotation", async () => {
+test("only non-spinning image storages are offered; ISO storages put SHARED first", async () => {
   const probe = await probeProxmox(CREDS, fakeGet());
   const options = probe.survey!.storages["pve30"]!;
   assert.deepEqual(ssdImageStorages(options).map((o) => o.id), ["ssd"]);
-  assert.deepEqual(isoStorages(options).map((o) => o.id), ["pve55-shared"]);
+  // ⭐ Shared first, because that is the recommendation the wizard defaults to: the agent
+  // stages the ArcaneOS ISO onto whatever each host names, so a shared target is refreshed
+  // ONCE for the cluster while `local` is a copy per host to keep current.
+  assert.deepEqual(isoStorages(options).map((o) => o.id), ["pve55-shared", "local"]);
+});
+
+test("⭐ a storage that belongs to ANOTHER host is not offered, and says so", async () => {
+  // Proxmox lists cluster-wide storages on every node whether or not they are reachable
+  // there, so a fleet of per-host VGs shows up on each host as storages it cannot use.
+  // Labelling those "?" reads as a broken tool; they are simply not choices here.
+  const probe = await probeProxmox(CREDS, fakeGet());
+  const options = probe.survey!.storages["pve30"]!;
+  const elsewhere = options.find((o) => o.id === "ss8")!;
+  assert.equal(elsewhere.active, false);
+  assert.equal(describeStorage(elsewhere), "elsewhere in the cluster");
+  assert.equal(ssdImageStorages(options).some((o) => o.id === "ss8"), false);
+});
+
+test("a network share is labelled by what it IS, not as an unresolved disk", () => {
+  // "Does it spin?" is the wrong question for NFS, and "?" is the wrong answer to it.
+  const nfs = { id: "pve55-shared", type: "nfs", rotational: null, why: "", content: ["iso"], shared: true, active: true };
+  assert.equal(describeStorage(nfs), "NFS, shared");
+  assert.equal(describeStorage({ ...nfs, type: "cifs" }), "CIFS, shared");
+  assert.equal(describeStorage({ ...nfs, shared: false, type: "dir" }), "dir");
+  assert.equal(describeStorage({ ...nfs, rotational: false }), "SSD", "resolved media still wins");
 });
 
 test("a storage that cannot be resolved is NOT offered as safe", () => {
@@ -123,7 +151,9 @@ test("a storage that cannot be resolved is NOT offered as safe", () => {
   );
   assert.equal(rotational, null);
   assert.deepEqual(
-    ssdImageStorages([{ id: "x", type: "dir", rotational: null, why: "", content: ["images"] }]),
+    ssdImageStorages([
+      { id: "x", type: "dir", rotational: null, why: "", content: ["images"], shared: false, active: true },
+    ]),
     []
   );
 });

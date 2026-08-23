@@ -162,6 +162,18 @@ export interface StorageOption {
   why: string;
   /** What Proxmox says it can hold: `images`, `iso`, `vztmpl`, ... */
   content: string[];
+  /**
+   * The same bytes on every node. For ISO storage this is the answer you WANT: the agent
+   * stages the ArcaneOS ISO once and the whole cluster sees it, instead of a copy per host
+   * that each have to be refreshed.
+   */
+  shared: boolean;
+  /**
+   * Usable from THIS node right now. Proxmox lists cluster-wide storages on every node's
+   * storage endpoint whether or not they are reachable there, which is why a fleet full of
+   * per-host VGs shows up on each host as a list of storages it cannot actually use.
+   */
+  active: boolean;
 }
 
 export interface ProxmoxSurvey {
@@ -177,6 +189,11 @@ interface StorageRow {
   storage?: string;
   type?: string;
   content?: string;
+  /** 1 = the same bytes are visible from every node in the cluster. */
+  shared?: number;
+  /** 0 = defined cluster-wide but not usable from THIS node right now. */
+  active?: number;
+  enabled?: number;
 }
 
 /**
@@ -332,6 +349,10 @@ export async function probeProxmox(
           rotational,
           why,
           content: (row.content ?? "").split(",").filter(Boolean),
+          shared: row.shared === 1,
+          // Absent means the field was not reported; treat that as usable rather than
+          // hiding a storage on a Proxmox version that does not send it.
+          active: row.active !== 0 && row.enabled !== 0,
         });
       }
       survey.storages[node] = options;
@@ -347,12 +368,41 @@ export async function probeProxmox(
  * "storage pool for VM images". A `null` (unresolved) storage is deliberately NOT
  * offered: this list exists to make the silent-benchmark-failure unpickable. */
 export function ssdImageStorages(options: StorageOption[]): StorageOption[] {
-  return options.filter((o) => o.content.includes("images") && o.rotational === false);
+  return options.filter((o) => o.active && o.content.includes("images") && o.rotational === false);
 }
 
-/** Storages that can hold ISOs. Rotational is fine here — an ISO is read once at boot. */
+/**
+ * Storages that can hold ISOs, SHARED ONES FIRST.
+ *
+ * Rotational is irrelevant — an ISO is read once at boot. What matters is whether the
+ * cluster shares it: the agent refreshes the ArcaneOS ISO onto the storage each declared
+ * host names, so a shared NFS/CIFS target is staged once and every node sees the new
+ * release, while per-host storage means N copies and N chances for one host to be left on
+ * a stale ISO. Ordering is the recommendation — the wizard offers `[0]` as its default.
+ */
 export function isoStorages(options: StorageOption[]): StorageOption[] {
-  return options.filter((o) => o.content.includes("iso"));
+  return options
+    .filter((o) => o.active && o.content.includes("iso"))
+    .sort((a, b) => Number(b.shared) - Number(a.shared));
+}
+
+/**
+ * How to label a storage in a one-line list.
+ *
+ * "?" used to be the answer for everything whose media could not be resolved through LVM
+ * — which on a real cluster is most of them: NFS, CIFS, dir-backed, and every per-host VG
+ * belonging to a DIFFERENT host. That reads as "the tool is broken", when in fact the
+ * media question is the wrong question for a network share, and a storage that is not
+ * active here is not a choice at all.
+ */
+export function describeStorage(o: StorageOption): string {
+  if (!o.active) return "elsewhere in the cluster";
+  if (o.rotational === true) return "HDD";
+  if (o.rotational === false) return "SSD";
+  // A network storage has no local spindle to classify; its type IS the useful answer,
+  // and `shared` is what decides whether it is the right ISO target.
+  if (o.shared) return `${o.type.toUpperCase()}, shared`;
+  return o.type ? o.type : "?";
 }
 
 export function formatProbe(checks: ProbeResult[]): string {

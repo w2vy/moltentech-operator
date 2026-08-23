@@ -50,6 +50,7 @@ import {
   formatProbe,
   ssdImageStorages,
   isoStorages,
+  describeStorage,
   type ProxmoxSurvey,
 } from "./proxmox-probe";
 import {
@@ -301,12 +302,16 @@ async function askAnswers(minimums: Record<string, number> = TIER_FLOORS_CENTS):
       const ssd = ssdImageStorages(options);
       const iso = isoStorages(options);
       if (options.length > 0) {
-        console.log(
-          `  storages on ${name}: ` +
-            options
-              .map((o) => `${o.id}(${o.rotational === true ? "HDD" : o.rotational === false ? "SSD" : "?"})`)
-              .join(" ")
-        );
+        // Only what this host can actually use is listed as a choice. A cluster defines
+        // storages globally, so every host's storage list also carries the per-host VGs of
+        // every OTHER host — printing those as "?" made the useful two lines hard to find.
+        const here = options.filter((o) => o.active);
+        const elsewhere = options.filter((o) => !o.active);
+        console.log(`  storages on ${name}: ` + here.map((o) => `${o.id}(${describeStorage(o)})`).join(" "));
+        if (elsewhere.length > 0) {
+          console.log(`    (${elsewhere.length} more defined in the cluster but not usable here: ` +
+            `${elsewhere.map((o) => o.id).join(", ")})`);
+        }
         if (ssd.length === 0) {
           console.log("  ⚠ no storage on this host resolved to solid state — check the answer you give below.");
         }
@@ -316,6 +321,12 @@ async function askAnswers(minimums: Record<string, number> = TIER_FLOORS_CENTS):
       if (chosen?.rotational === true) {
         console.log(`  ⚠ ${storageImages} is ROTATIONAL: ${chosen.why}`);
         console.log("    Nodes on it provision fine and then fail every benchmark, with no visible cause.");
+      }
+      // Shared is the recommendation, and it is worth one line of why: the agent refreshes
+      // the ArcaneOS ISO onto whatever each host names, so a shared target is staged ONCE
+      // for the cluster while per-host storage is a copy per host to keep current.
+      if (iso[0]?.shared) {
+        console.log(`  ${iso[0].id} is shared — one ISO for the whole cluster, refreshed in one place.`);
       }
       const storageIso = await ask(`  storage holding the ArcaneOS ISO on ${name}`, iso[0]?.id ?? "pve55-shared");
 
