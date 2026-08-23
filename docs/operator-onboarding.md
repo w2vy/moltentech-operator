@@ -503,20 +503,21 @@ to never listing it, and the console will withhold the node dashboard.
 **2. Register the Flux App:** Docker image `w2vy/coalition:0.2.8`, container port
 **8088**, then supply `env.json` as the app's environment.
 
-⚠️ **Flux caps a plaintext environment parameter at 400 characters, and `MANIFEST_JSON`
-is far longer than that.** Pasting `env.json` straight into **Environment Variables →
-Import** fails validation with *"App component coalition environment MANIFEST_JSON=… is
-too long. Maximum of 400 characters is allowed"*. Two supported ways past it:
+🔒 **Register it as an ENTERPRISE app.** That is the whole answer to both problems
+below; there is no second option to weigh up. The environment is encrypted into a single
+`enterprise` blob with `environmentParameters: []`, and Flux Cloud is used to carry it —
+you do not choose or upload that separately. Both production Coalitions are deployed
+this way.
 
-- 🔒 **An enterprise app — do this one.** The environment is encrypted into a single
-  `enterprise` blob with `environmentParameters: []`. Both production Coalitions are
-  deployed this way. A Flux app's plaintext environment is **world-readable**, and
-  `env.json` holds your Stripe secret key: anything that leaves it in the clear hands
-  your merchant credentials to anyone who looks.
-- **Flux Cloud storage**: upload `env.json` and reference it from the app spec. The
-  size cap does not apply — but the reference is a **capability URL**, so anyone who
-  obtains it reads your secrets. Acceptable only for a Coalition with no Stripe key
-  (a Flux Hub Supporter), never for one taking payments.
+Two reasons it is not optional:
+
+- **Your secrets would otherwise be public.** A Flux app's plaintext environment is
+  **world-readable**, and `env.json` holds your Stripe secret key. Anything that leaves
+  it in the clear hands your merchant credentials to anyone who looks.
+- **It would not fit anyway.** Flux caps a plaintext environment parameter at 400
+  characters and `MANIFEST_JSON` is far longer, so pasting `env.json` into
+  **Environment Variables → Import** fails with *"App component coalition environment
+  MANIFEST_JSON=… is too long. Maximum of 400 characters is allowed"*.
 
 **3. Verify:** `<COALITION_URL>/health` → `{"ok":true,"provider":"…","coalitionVersion":"…"}`
 and `<COALITION_URL>/.well-known/mt-provider.json` returns your manifest.
