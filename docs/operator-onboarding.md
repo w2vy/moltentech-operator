@@ -327,12 +327,13 @@ step that issues each one — that is expected on first run, not an error. After
 there should be exactly three of them (five if you are selling and have not created the
 Stripe endpoint yet); anything else is worth looking at.
 
-Two opt-in flags cross the file boundary deliberately, because the two costliest
-failures are invisible to any amount of file comparison. Both are read-only:
+Three opt-in flags cross the file boundary deliberately, because the costliest failures
+are invisible to any amount of file comparison. All three are read-only:
 
 ```sh
 mt-manifest doctor --check-proxmox   # the token really works; your image storage really is an SSD
 mt-manifest doctor --check-stripe    # the webhook endpoint is on YOUR Stripe account
+mt-manifest doctor --check-hub       # your three issued keys are still accepted
 ```
 
 `--check-proxmox` connects with the credentials in `.env.operator`, proves the token,
@@ -341,6 +342,30 @@ are missing, with the `pveum role modify` line that adds them — and resolves
 `PROXMOX_STORAGE_IMAGES` through LVM to the physical device to see whether it spins.
 `init` runs these same checks the moment you type the token; this is for re-runs and for
 files you filled in by hand.
+
+`--check-hub` is the only check that proves a **key** rather than a configuration. It
+presents `AGENT_KEY` to Flux Hub and `COALITION_KEY` to your **deployed** Coalition, and
+compares the manifest that Coalition serves against the one you signed here.
+
+🔴 **Nothing else you can see checks a key.** Flux Hub's stats pull is an *unauthenticated*
+GET, so the provider page keeps showing you as synced while your Coalition holds a dead
+credential — the first symptom is a customer's checkout failing. Run `--check-hub`
+whenever you change a secret: after keys are re-issued, after `init --force`, and after
+any redeploy of the Flux app.
+
+The sequencing is what makes this a standing trap: keys are issued at **Step 4**
+(`/onboard`) and the Coalition is deployed at **Step 7**, so the app runs an environment
+captured at deploy time. Rotate a key between those two points and the running app is
+stale with no visible sign.
+
+⚠️ It probes the Coalition by POSTing an empty body to `/checkout`. Authentication runs
+*before* the body is parsed, so a `400 Invalid checkout request` means **the key was
+accepted** — nothing is created, no payment is touched. Only a `401` means rejected.
+
+⚠️ What it cannot prove: that Flux Hub's *stored* copy of your `coalitionKey` matches.
+Flux Hub keeps it encrypted and only uses it outbound. That copy matches by construction —
+you pasted what `/onboard` issued — so the drift worth checking is the deployed app, which
+is exactly what this covers.
 
 ⚠️ **Prefer an IP address in `PROXMOX_URL`.** `mt-manifest` runs in a container, so a
 hostname is resolved by the *container*, not by your shell — `pve30` can work at your

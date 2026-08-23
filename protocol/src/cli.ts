@@ -11,12 +11,14 @@
  *                                       ~8 questions -> config.env, secrets.env (skeleton),
  *                                       .env.operator, inventory.json and the Flux app spec.
  *                                       --answers runs the SAME generator non-interactively.
- *   doctor [--dir <dir>] [--check-stripe] [--check-proxmox]
+ *   doctor [--dir <dir>] [--check-stripe] [--check-proxmox] [--check-hub]
  *                                       check that the generated files agree with each other.
  *                                       File-level and offline unless a --check-* flag asks
  *                                       otherwise: --check-stripe proves the webhook is on
  *                                       YOUR account, --check-proxmox proves the token works
- *                                       and the image storage does not spin. Both read-only.
+ *                                       and the image storage does not spin, --check-hub proves
+ *                                       the issued keys are still accepted by Flux Hub and by
+ *                                       the DEPLOYED Coalition. All three read-only.
  *   sign   [--dir <dir>] [--key <pem>] [--from-config <config.env>] [--in <body.json>]
  *          [--out <manifest.json>] [--stdout]
  *                                       every path defaults to the file `init` wrote in <dir>,
@@ -51,6 +53,7 @@ import { ProviderManifest, ProviderManifestBody, manifestOwnerMessage, unwrapMan
 import { renderManifestBodyFromConfig, parseConfigEnv } from "./manifest-config";
 import { runDoctor, formatReport, fetchTierMinimums, TIER_FLOORS_CENTS } from "./config-lint";
 import { probeStripeWiring } from "./stripe-wiring";
+import { probeHub } from "./hub-probe";
 import {
   probeProxmox,
   formatProbe,
@@ -917,6 +920,34 @@ async function main() {
             }
           }
           report.filesChecked.push("proxmox (live)");
+        }
+      }
+      // The third opt-in probe, and the only one that proves a KEY rather than a
+      // configuration. It exists because every passive signal an operator has is
+      // key-blind: Flux Hub's stats pull is unauthenticated, so a Coalition holding a
+      // dead credential presents exactly as a healthy one until a customer's checkout
+      // fails. See hub-probe.ts for what is provable from here and what is not.
+      if (args.includes("--check-hub")) {
+        const secretsText = read("secrets.env");
+        const operatorText = read(".env.operator");
+        const secrets = secretsText ? parseConfigEnv(secretsText) : {};
+        const operator = operatorText ? parseConfigEnv(operatorText) : {};
+        const config = configText ? parseConfigEnv(configText) : {};
+        if (!mtBaseUrl) {
+          console.log("--check-hub: no MT_BASE_URL in config.env — skipped.\n");
+        } else {
+          const probe = await probeHub({
+            mtBaseUrl,
+            coalitionUrl: config.COALITION_URL,
+            agentKey: secrets.AGENT_KEY || operator.AGENT_KEY,
+            coalitionKey: secrets.COALITION_KEY || operator.COALITION_KEY,
+            localPubkey: read("manifest-pubkey.txt"),
+            localManifestJson: read("manifest.json"),
+          });
+          console.log(`hub (live) — ${mtBaseUrl}`);
+          console.log(formatProbe(probe.checks) + "\n");
+          report.findings.push(...probe.findings);
+          report.filesChecked.push("hub (live)");
         }
       }
       const { text, ok } = formatReport(report);
