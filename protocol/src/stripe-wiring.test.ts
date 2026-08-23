@@ -122,9 +122,13 @@ test("a 403 on /v1/account does not stop the probe — the endpoint checks still
         coalitionUrl: MY_URL,
       });
       const ruleNames = findings.map((f) => f.rule).sort();
+      // ⭐ NOT reported (changed 2026-08-23). A 403 here is the expected answer for a key
+      // built to the runbook, and nothing below reads `account` — the call only separates
+      // 401 from "key works". Warning about it told the operator to widen a key's
+      // permissions to silence a check whose result is thrown away.
       assert.ok(
-        ruleNames.includes("STRIPE_ACCOUNT_UNREADABLE"),
-        "expected the account read to be reported as a warning"
+        !ruleNames.includes("STRIPE_ACCOUNT_UNREADABLE"),
+        "an expected 403 on a discarded liveness probe must not become a warning"
       );
       assert.ok(
         !ruleNames.includes("STRIPE_KEY_INVALID"),
@@ -133,10 +137,7 @@ test("a 403 on /v1/account does not stop the probe — the endpoint checks still
       // The whole point: the endpoint rules executed.
       assert.ok(ruleNames.includes("STRIPE_WEBHOOK_FOREIGN_COALITION"));
       assert.ok(ruleNames.includes("STRIPE_WEBHOOK_NOT_REGISTERED"));
-      assert.equal(
-        findings.find((f) => f.rule === "STRIPE_ACCOUNT_UNREADABLE")?.severity,
-        "warning"
-      );
+
     }
   );
 });
@@ -179,4 +180,162 @@ test("a healthy account produces no account-level finding at all", async () => {
       assert.deepEqual(findings, []);
     }
   );
+});
+
+test("⭐ a 403 on the ENDPOINT list says the check DID NOT RUN — not that wiring is fine", async () => {
+  // Measured on prod 2026-08-23 with the runbook's own restricted key, which grants no
+  // `webhook_read`: the endpoint comparison — the entire reason this flag exists, and the
+  // only defence against the 08-18 misroute — was skipped, and the report ended "1
+  // error(s), 2 warning(s)" as though the wiring had been looked at. Unverified must never
+  // be presentable as verified-good.
+  await withStubbedFetch(
+    (url) =>
+      url.includes("/v1/webhook_endpoints")
+        ? { status: 403, body: { error: { message: "Permission denied. …webhook_read…" } } }
+        : { status: 200, body: {} },
+    async () => {
+      const findings = await probeStripeWiring({
+        stripeSecretKey: FAKE_RESTRICTED_KEY,
+        coalitionUrl: MY_URL,
+      });
+      const only = findings.find((f) => f.rule === "STRIPE_ENDPOINTS_UNREADABLE")!;
+      assert.ok(only, "expected the unreadable-endpoints warning");
+      assert.match(only.summary!, /DID NOT RUN/);
+      assert.match(only.summary!, /Webhook Endpoints: Read/);
+      assert.match(only.message, /UNVERIFIED/);
+      // and it must not have silently claimed anything about the wiring
+      assert.equal(findings.some((f) => f.rule.startsWith("STRIPE_WEBHOOK_")), false);
+    }
+  );
+});
+
+test("a 403 on /v1/account is silent, because its result is discarded", async () => {
+  await withStubbedFetch(
+    (url) =>
+      url.includes("/v1/account")
+        ? { status: 403, body: { error: { message: "Permission denied. …accounts_kyc_basic_read…" } } }
+        : { status: 200, body: { data: [{ url: `${MY_URL}/webhook`, status: "enabled" }] } },
+    async () => {
+      const findings = await probeStripeWiring({
+        stripeSecretKey: FAKE_RESTRICTED_KEY,
+        coalitionUrl: MY_URL,
+      });
+      assert.deepEqual(findings, [], "a correctly wired restricted key reports nothing at all");
+    }
+  );
+});
+
+test("a NON-403 account failure is still surfaced — that one nobody has accounted for", async () => {
+  await withStubbedFetch(
+    (url) =>
+      url.includes("/v1/account")
+        ? { status: 500, body: { error: { message: "internal" } } }
+        : { status: 200, body: { data: [{ url: `${MY_URL}/webhook`, status: "enabled" }] } },
+    async () => {
+      const findings = await probeStripeWiring({
+        stripeSecretKey: FAKE_RESTRICTED_KEY,
+        coalitionUrl: MY_URL,
+      });
+      assert.deepEqual(findings.map((f) => f.rule), ["STRIPE_ACCOUNT_UNREADABLE"]);
+    }
+  );
+});
+
+/**
+ * The two directions of a mode mismatch are not the same finding, and treating them alike
+ * broke the step operators are told to take. Sandboxing with an `rk_test_` against prod is
+ * the documented onboarding path — an operator's provider record lives on prod, so there is
+ * nowhere else to stand — and reporting it as an error made `doctor` exit 1 for the whole
+ * of that phase. A tool that is red while you follow its own instructions teaches you that
+ * red means nothing.
+ */
+test("⭐ a TEST key against prod is a WARNING — sandboxing is a step, not a mistake", async () => {
+  await withStubbedFetch(
+    () => ({ status: 200, body: { data: [{ url: `${MY_URL}/webhook`, status: "enabled" }] } }),
+    async () => {
+      const findings = await probeStripeWiring({
+        stripeSecretKey: "rk_test_fake",
+        coalitionUrl: MY_URL,
+        mtBaseUrl: "https://www.moltentech.us",
+      });
+      const f = findings.find((x) => x.rule === "STRIPE_KEY_MODE_MISMATCH")!;
+      assert.ok(f, "still reported — it must not become invisible");
+      assert.equal(f.severity, "warning");
+      // It has to name what to do before going live, including the trap that the webhook
+      // secret is a SEPARATE swap from the key.
+      assert.match(f.message, /whsec_/);
+      assert.match(f.summary!, /before you list/);
+    }
+  );
+});
+
+test("⭐ a LIVE key against staging stays an ERROR — that one charges real money", async () => {
+  // Opposite blast radius: an unsettled test payment is recoverable, a real charge on a
+  // test rental is not. Same rule name, deliberately different severity.
+  await withStubbedFetch(
+    () => ({ status: 200, body: { data: [{ url: `${MY_URL}/webhook`, status: "enabled" }] } }),
+    async () => {
+      const findings = await probeStripeWiring({
+        stripeSecretKey: "rk_live_fake",
+        coalitionUrl: MY_URL,
+        mtBaseUrl: "https://staging.moltentech.us",
+      });
+      const f = findings.find((x) => x.rule === "STRIPE_KEY_MODE_MISMATCH")!;
+      assert.equal(f.severity, "error");
+      assert.match(f.message, /real money/);
+    }
+  );
+});
+
+test("a matched pair in either mode reports no mismatch at all", async () => {
+  await withStubbedFetch(
+    () => ({ status: 200, body: { data: [{ url: `${MY_URL}/webhook`, status: "enabled" }] } }),
+    async () => {
+      for (const [key, url] of [
+        ["rk_live_fake", "https://www.moltentech.us"],
+        ["rk_test_fake", "https://staging.moltentech.us"],
+      ] as const) {
+        const findings = await probeStripeWiring({ stripeSecretKey: key, coalitionUrl: MY_URL, mtBaseUrl: url });
+        assert.deepEqual(findings, [], `${key} + ${url}`);
+      }
+    }
+  );
+});
+
+/**
+ * Reproduces the prod finding of 2026-08-23, which is the first time this check ever ran
+ * against a real account. `prod-pve30` is provider `moltentech-test1`, but the Stripe
+ * account held an enabled endpoint for `coalition-moltentech` (provider `moltentech`,
+ * active on prod) and NONE for test1 — the 08-18 misroute, live, on two Coalitions that
+ * belong to the SAME person.
+ */
+test("⭐ two of your OWN Coalitions in one Stripe account still cross-claim", async () => {
+  // The damage is done by the providerSlug in the relay, not by who owns the account, so
+  // "one Stripe account per operator" was the wrong way to say it — tom owns both of these.
+  const findings = classifyEndpoints(
+    [{ url: "https://coalition-moltentech.app.runonflux.io/webhook", status: "enabled" }],
+    MINE,
+    "test"
+  );
+  const foreign = findings.find((f) => f.rule === "STRIPE_WEBHOOK_FOREIGN_COALITION")!;
+  assert.match(foreign.message, /even when both Coalitions are YOURS/);
+  assert.match(foreign.message, /per provider/);
+});
+
+test("⭐ 'not registered' names the MODE — the other half of the dashboard is invisible", () => {
+  // Stripe keeps test and live endpoints in separate sets and a key sees only its own.
+  // Without the mode this reads as "you never made one", which is the wrong thing to go
+  // and do — and for a live key it would send you to create a second test endpoint.
+  const test = classifyEndpoints([], MINE, "test").find((f) => f.rule === "STRIPE_WEBHOOK_NOT_REGISTERED")!;
+  assert.match(test.message, /TEST-mode webhook endpoint/);
+  assert.match(test.message, /created yours in Live mode it will not appear/);
+
+  const live = classifyEndpoints([], MINE, "live").find((f) => f.rule === "STRIPE_WEBHOOK_NOT_REGISTERED")!;
+  assert.match(live.message, /LIVE-mode webhook endpoint/);
+  assert.match(live.message, /created yours in Test mode it will not appear/);
+});
+
+test("without a known mode the finding stays mode-neutral rather than guessing", () => {
+  const f = classifyEndpoints([], MINE).find((x) => x.rule === "STRIPE_WEBHOOK_NOT_REGISTERED")!;
+  assert.doesNotMatch(f.message, /mode/i);
 });

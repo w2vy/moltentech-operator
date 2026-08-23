@@ -61,7 +61,14 @@ function isMtPlatformWebhook(url: string): boolean {
  */
 export function classifyEndpoints(
   endpoints: StripeEndpoint[],
-  coalitionUrl: string
+  coalitionUrl: string,
+  /**
+   * Which mode the listing key opens. Stripe keeps test and live endpoints in SEPARATE
+   * sets, and a key only ever sees its own — so "not registered" without the mode sends an
+   * operator hunting in the wrong half of the dashboard for something that was never
+   * missing. Optional so existing callers are unaffected.
+   */
+  mode?: "test" | "live"
 ): Finding[] {
   const findings: Finding[] = [];
   const mine = normalizeUrl(`${coalitionUrl.replace(/\/$/, "")}/webhook`);
@@ -91,10 +98,12 @@ export function classifyEndpoints(
       severity: "error",
       file: "secrets.env",
       message:
-        `${e.url} is another Coalition's webhook registered in the same Stripe account. ` +
+        `${e.url} is a DIFFERENT Coalition's webhook registered in the same Stripe account. ` +
         "Stripe delivers every event to every endpoint, and a Coalition relays what it " +
-        "receives under its own providerSlug — so that operator will claim your sale " +
-        "onto their hardware. One Stripe account per operator.",
+        "receives under its OWN providerSlug — so a sale of yours gets claimed onto that " +
+        "provider's hardware. ⚠️ This holds even when both Coalitions are YOURS: the damage " +
+        "is done by the slug in the relay, not by who owns the account. One Stripe account " +
+        "per provider.",
     });
   }
 
@@ -102,14 +111,25 @@ export function classifyEndpoints(
   //    succeeds, the customer is charged, and no rental is ever relayed to MT.
   if (!enabled.some((e) => normalizeUrl(e.url) === mine)) {
     const disabled = endpoints.find((e) => normalizeUrl(e.url) === mine);
+    // Naming the mode matters: this list only ever contains endpoints of the SAME mode as
+    // the key that read it, so an endpoint created in the other half of the dashboard is
+    // invisible here rather than absent. Without that sentence the finding reads as "you
+    // never made one", which is the wrong thing to go and do.
+    const inMode = mode ? ` ${mode.toUpperCase()}-mode` : "";
+    const modeNote = mode
+      ? ` Your key is ${mode}-mode, so only${inMode} endpoints are visible here — if you ` +
+        `created yours in ${mode === "test" ? "Live" : "Test"} mode it will not appear, and ` +
+        "it also would not fire for this key. Test and live are separate endpoints with " +
+        "separate signing secrets."
+      : "";
     findings.push({
       rule: "STRIPE_WEBHOOK_NOT_REGISTERED",
       severity: "error",
       file: "secrets.env",
       message: disabled
         ? `${mine} is registered but its status is "${disabled.status}", not "enabled".`
-        : `${mine} is not registered as a webhook endpoint in this Stripe account. ` +
-          "Checkout will succeed and no rental will ever reach MT.",
+        : `${mine} is not registered as a${inMode} webhook endpoint in this Stripe account. ` +
+          `Checkout will succeed, the customer is charged, and no rental ever reaches Flux Hub.${modeNote}`,
     });
   }
 
@@ -137,17 +157,32 @@ export async function probeStripeWiring(args: {
   const { stripeSecretKey, coalitionUrl, mtBaseUrl } = args;
   const findings: Finding[] = [];
 
-  // Mode mismatch is worth catching before anything else: a live key against staging
-  // bills real money, and a test key against production silently never does.
+  // Mode mismatch, and the two directions are NOT the same finding.
+  //
+  // A test key against production is a legitimate place to stand: the runbook tells you to
+  // sandbox with an `rk_test_` first, and a real operator onboards against prod because
+  // that is where their provider record lives. Reporting it as an error made `doctor` exit
+  // 1 through the whole of a step operators are supposed to take, which teaches them that
+  // a red report is normal — the one habit this tool cannot afford to build.
+  //
+  // A LIVE key anywhere else stays an error, because that one charges real money on a
+  // test rental. Same rule name, opposite blast radius: unsettled test payments are
+  // recoverable, a real charge is not.
   const isTestKey = /^(sk|rk)_test_/.test(stripeSecretKey);
   if (mtBaseUrl) {
     const mtIsProd = /(^|\/\/)(www\.)?moltentech\.us/.test(mtBaseUrl) && !/staging/.test(mtBaseUrl);
     if (mtIsProd && isTestKey) {
       findings.push({
         rule: "STRIPE_KEY_MODE_MISMATCH",
-        severity: "error",
+        severity: "warning",
         file: "secrets.env",
-        message: `STRIPE_SECRET_KEY is a TEST key but MT_BASE_URL is production (${mtBaseUrl}). No real payment will ever settle.`,
+        summary: "TEST Stripe key against production — fine while you sandbox, swap it before you list",
+        message:
+          `STRIPE_SECRET_KEY is a TEST key but MT_BASE_URL is production (${mtBaseUrl}). ` +
+          "Expected while you are sandboxing — checkout works end to end and no real payment " +
+          "ever settles. Before you take a real customer, swap in the live `rk_live_` key AND " +
+          "the `whsec_` from the LIVE-mode endpoint: the two are independent, and a live key " +
+          "with a test-mode webhook secret fails silently.",
       });
     }
     if (!mtIsProd && !isTestKey) {
@@ -191,16 +226,21 @@ export async function probeStripeWiring(args: {
     });
     return findings;
   }
-  if (!account.ok) {
+  // A 403 here is the EXPECTED answer for a key built to the runbook, which grants no
+  // account-read permission at all — and nothing below reads `account`; it exists only to
+  // separate "key rejected" (401) from "key works". Warning about it asked the operator to
+  // widen a key's permissions to silence a check whose result is discarded, which is how a
+  // report teaches people to skim it. Anything OTHER than 403 is still worth surfacing,
+  // because then the call failed for a reason nobody has accounted for.
+  if (!account.ok && account.status !== 403) {
     findings.push({
       rule: "STRIPE_ACCOUNT_UNREADABLE",
       severity: "warning",
       file: "secrets.env",
       message:
         `could not read the Stripe account (${account.status}: ${account.json?.error?.message ?? "no detail"}) — ` +
-        "the key itself is accepted, so the endpoint checks below still ran. A restricted key " +
-        "needs the v1 \"Account\" read permission (`accounts_kyc_basic_read`) to silence this; " +
-        "Stripe's separate \"Account v2\" permission does NOT cover it.",
+        "the key was not rejected, so the webhook checks below still ran. This call is only a " +
+        "liveness probe; nothing depends on its result.",
     });
   }
 
@@ -210,9 +250,15 @@ export async function probeStripeWiring(args: {
       rule: "STRIPE_ENDPOINTS_UNREADABLE",
       severity: "warning",
       file: "secrets.env",
+      summary:
+        "the webhook check DID NOT RUN — grant this key Webhook Endpoints: Read, then re-run",
       message:
-        `could not list webhook endpoints (${eps.status}: ${eps.json?.error?.message ?? "no detail"}) — ` +
-        "a restricted key needs read access to Webhook Endpoints for this check.",
+        `could not list webhook endpoints (${eps.status}: ${eps.json?.error?.message ?? "no detail"}). ` +
+        "This is the check --check-stripe exists for, and it did NOT run: nothing here " +
+        "verified that your webhook endpoint is on YOUR Stripe account rather than someone " +
+        "else's. Grant this key the read-only \"Webhook Endpoints\" permission " +
+        "(`webhook_read`) in the Stripe dashboard, then run it again. Until then the wiring " +
+        "is UNVERIFIED — not verified-good.",
     });
     return findings;
   }
@@ -221,6 +267,6 @@ export async function probeStripeWiring(args: {
     url: String(e.url ?? ""),
     status: String(e.status ?? ""),
   }));
-  findings.push(...classifyEndpoints(endpoints, coalitionUrl));
+  findings.push(...classifyEndpoints(endpoints, coalitionUrl, isTestKey ? "test" : "live"));
   return findings;
 }

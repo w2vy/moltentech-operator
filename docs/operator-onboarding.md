@@ -343,6 +343,18 @@ are missing, with the `pveum role modify` line that adds them — and resolves
 `init` runs these same checks the moment you type the token; this is for re-runs and for
 files you filled in by hand.
 
+A **test** key against production is reported as a *warning*, not an error — sandboxing
+with `rk_test_` is a step in this runbook, not a mistake, and `doctor` should not exit 1
+while you take it. A **live** key against staging stays an error: that one charges real
+money on a test rental. Before you list for real, swap the key **and** the `whsec_` from
+the live-mode endpoint — they are independent, and a live key with a test-mode webhook
+secret fails silently.
+
+⚠️ `--check-stripe` needs **Webhook Endpoints: Read** on the restricted key (Step 3). A
+key without it returns 403, the endpoint comparison is skipped, and the report says so
+explicitly — a clean report from such a key means *not checked*, never *checked and fine*.
+A 403 on the *account* read is expected and is no longer reported: nothing depends on it.
+
 `--check-hub` is the only check that proves a **key** rather than a configuration. It
 presents `AGENT_KEY` to Flux Hub and `COALITION_KEY` to your **deployed** Coalition, and
 compares the manifest that Coalition serves against the one you signed here.
@@ -516,6 +528,16 @@ Your provider now exists at FH in status `pending`. Step 7 activates it.
    - Subscriptions: **Write**
    - Customer Portal: **Write** (Stripe renamed this from "Billing Portal" in the
      restricted-key permission list)
+   - Webhook Endpoints: **Read** — the Coalition never uses it; `mt-manifest doctor
+     --check-stripe` does, and without it that check **cannot run at all**
+
+   ⚠️ **Webhook Endpoints: Read is what makes `--check-stripe` work.** It is the only
+   permission on this list the Coalition itself does not need, and it is read-only
+   metadata — it cannot move money or read a customer. What it buys is the one check that
+   catches the costliest known failure: a webhook registered on the *wrong Stripe account*,
+   which charges your customer and relays the sale to somebody else's hardware, with
+   nothing wrong in any of your files. Omit it and `doctor` reports the wiring as
+   **unverified**, not as good.
 
    Do **not** grant Refunds, Balance, or Payouts. The free-trial model means every
    failure path is a *cancel*, never a refund — the key never needs to move money.
