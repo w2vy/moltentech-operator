@@ -480,6 +480,31 @@ async function askAnswers(minimums: Record<string, number> = TIER_FLOORS_CENTS):
   }
 }
 
+/**
+ * Render + sign a manifest from config.env. Shared by `sign` and by `init`, which now
+ * finishes the job rather than leaving the operator one undocumented command short of the
+ * artifact its own closing steps told them to paste at /onboard.
+ */
+function signManifestFromConfig(configText: string, keyPem: string): Record<string, unknown> {
+  const priv = importPrivateKeyPem(keyPem);
+  let body: Record<string, unknown>;
+  try {
+    body = renderManifestBodyFromConfig(configText);
+  } catch (e) {
+    die((e as Error).message);
+  }
+  // The key is the source of truth for pubkey; stamp a fresh publishedAt.
+  body.pubkey = publicKeyBase64FromPrivate(priv);
+  body.publishedAt = new Date().toISOString();
+
+  const parsed = ProviderManifestBody.safeParse(body);
+  if (!parsed.success) die(`manifest body invalid:\n${parsed.error.message}`);
+
+  const manifest = { ...body, signature: signManifestBody(body, priv) };
+  if (!verifyManifestObject(manifest)) die("self-verification failed (internal)");
+  return manifest;
+}
+
 const BODY_TEMPLATE = {
   schemaVersion: 2,
   provider: {
@@ -634,7 +659,10 @@ async function main() {
       // generator stays pure and `--answers` can pin an existing value to keep sessions.
       const sessionSecret = answers.sessionSecret?.trim() || randomBytes(32).toString("hex");
       const files = generateAll(answers, { manifestPubkey, manifestKey, sessionSecret });
-      const existing = Object.keys(files).filter((f) => existsSync(join(dir, f)));
+      // manifest.json is written below rather than by the generator, so it has to be named
+      // here too — otherwise the one file carrying a SIGNATURE is the only one init would
+      // clobber without asking.
+      const existing = [...Object.keys(files), "manifest.json"].filter((f) => existsSync(join(dir, f)));
       if (existing.length > 0 && !force) {
         die(`refusing to overwrite existing file(s): ${existing.join(", ")} — pass --force to replace them.`);
       }
@@ -643,22 +671,35 @@ async function main() {
         writeFileSync(join(dir, name), text, { mode });
       }
 
+      // ⭐ SIGN IT. init used to stop one command short of the artifact its own closing
+      // steps then told the operator to paste at /onboard — "paste your manifest" with no
+      // manifest anywhere on disk. Everything signing needs is in hand by now: the key it
+      // required at the top, and the config.env it just wrote.
+      //
+      // ⚠️ A signed manifest is a SNAPSHOT of config.env. Edit config.env afterwards and
+      // this file is stale — `doctor` compares the two and says so, which is the check
+      // that makes signing here safe to do automatically.
+      const manifest = signManifestFromConfig(files["config.env"]!, keyPem);
+      writeFileSync(join(dir, "manifest.json"), JSON.stringify(manifest, null, 2) + "\n", { mode: 0o644 });
+
       const prices = resolvedPrices(answers);
       // The full path, not `.`: this usually runs in a container whose /work IS the
       // operator's current directory, and "wrote them to ." leaves them looking for files
       // that are somewhere they cannot name.
       const outDir = resolve(dir);
       const where = outDir === "/work" ? `${outDir} (the directory you ran this from)` : outDir;
-      console.log(`Wrote ${Object.keys(files).join(", ")} to ${where}\n`);
+      console.log(`Wrote ${[...Object.keys(files), "manifest.json"].join(", ")} to ${where}\n`);
       // Only steps that are genuinely still OUTSTANDING belong in this list. It used to
       // open with "1. mt-manifest keygen" — which init now requires to have happened
       // already — and with a base64-and-paste step init performs itself.
       console.log("Already done, from the key in this directory:");
       console.log("  ✓ MANIFEST_KEY   filled in secrets.env and .env.operator");
       console.log("  ✓ MANIFEST_PUBKEY pinned in .env.operator (`mt-agent doctor` now compares, not skips)");
-      console.log("  ✓ SESSION_SECRET generated\n");
+      console.log("  ✓ SESSION_SECRET generated");
+      console.log("  ✓ manifest.json signed — this is the file you paste at /onboard");
+      console.log("    (edit config.env later and it goes stale; re-run `mt-manifest sign`)\n");
       console.log("Next, in order:");
-      console.log(`  1. open ${answers.mtBaseUrl}/onboard, paste your manifest, sign with ${answers.ownerAddress}`);
+      console.log(`  1. open ${answers.mtBaseUrl}/onboard, paste manifest.json, sign with ${answers.ownerAddress}`);
       console.log("     → issues AGENT_KEY, COALITION_KEY, COALITION_SIGNING_KEY for secrets.env");
       if (hasPaidTier(prices)) {
         console.log("  2. Stripe: create the webhook endpoint against your Coalition URL.");
@@ -696,6 +737,7 @@ async function main() {
         secretsEnv: read("secrets.env"),
         envOperator: read(".env.operator"),
         inventoryJson: inventory,
+        manifestJson: read("manifest.json"),
         tierMinimums,
       });
       // Opt-in, because it is the only check that puts a secret in memory and the only
@@ -778,27 +820,20 @@ async function main() {
       if (!fromConfig && !inPath) die("provide --from-config <config.env> or --in <body.json>");
       const outPath = flag(args, "--out");
 
-      const priv = importPrivateKeyPem(readFileSync(keyPath, "utf8"));
-      let body: Record<string, unknown>;
+      const keyPem = readFileSync(keyPath, "utf8");
+      let manifest: Record<string, unknown>;
       if (fromConfig) {
-        try {
-          body = renderManifestBodyFromConfig(readFileSync(fromConfig, "utf8"));
-        } catch (e) {
-          die((e as Error).message);
-        }
+        manifest = signManifestFromConfig(readFileSync(fromConfig, "utf8"), keyPem);
       } else {
-        body = JSON.parse(readFileSync(inPath!, "utf8"));
+        const priv = importPrivateKeyPem(keyPem);
+        const body = JSON.parse(readFileSync(inPath!, "utf8")) as Record<string, unknown>;
+        body.pubkey = publicKeyBase64FromPrivate(priv);
+        body.publishedAt = new Date().toISOString();
+        const parsed = ProviderManifestBody.safeParse(body);
+        if (!parsed.success) die(`manifest body invalid:\n${parsed.error.message}`);
+        manifest = { ...body, signature: signManifestBody(body, priv) };
+        if (!verifyManifestObject(manifest)) die("self-verification failed (internal)");
       }
-      // The key is the source of truth for pubkey; stamp a fresh publishedAt.
-      body.pubkey = publicKeyBase64FromPrivate(priv);
-      body.publishedAt = new Date().toISOString();
-
-      const parsed = ProviderManifestBody.safeParse(body);
-      if (!parsed.success) die(`manifest body invalid:\n${parsed.error.message}`);
-
-      const signature = signManifestBody(body, priv);
-      const manifest = { ...body, signature };
-      if (!verifyManifestObject(manifest)) die("self-verification failed (internal)");
 
       const out = JSON.stringify(manifest, null, 2) + "\n";
       if (outPath) {
