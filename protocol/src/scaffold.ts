@@ -578,6 +578,34 @@ export function allocateApiPort(base: number, index: number): number {
   return base + index * API_PORT_STRIDE;
 }
 
+/**
+ * The LAST port in the block: 16127, 16137 … 16197, and no further.
+ *
+ * This is not a style choice — it is the reason a WAN IP tops out at eight slots
+ * ([[project_flux_wan_ip_expansion]]). Flux takes a small block of consecutive ports per
+ * node from its own base, so the ninth node behind one public IP has nowhere to go; more
+ * capacity means another WAN IP, not another port.
+ */
+export const MAX_API_PORT = 16197;
+
+/** Ports are per WAN IP, so every WAN IP starts again at the base. Two nodes on 16127 is
+ * only a collision when they share a public address. */
+export const API_PORTS_PER_WAN = (MAX_API_PORT - DEFAULT_API_PORT) / API_PORT_STRIDE + 1;
+
+/**
+ * Is this a port Flux will actually serve on? In range, and on the stride — which is the
+ * same as saying it ends in 7. A port off the stride overlaps the previous node's block
+ * and fails as *that* node going unreachable, not as an error about the port typed here.
+ */
+export function isFluxApiPort(port: number): boolean {
+  return (
+    Number.isInteger(port) &&
+    port >= DEFAULT_API_PORT &&
+    port <= MAX_API_PORT &&
+    (port - DEFAULT_API_PORT) % API_PORT_STRIDE === 0
+  );
+}
+
 /** The agent's own fallback when nothing is declared (`agent/src/config.ts`). Written
  * out explicitly rather than relied on, so the value is visible in the file. */
 export const DEFAULT_NETWORK = "vmbr0";

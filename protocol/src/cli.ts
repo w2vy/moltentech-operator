@@ -39,7 +39,7 @@
  */
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { randomBytes } from "node:crypto";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { ProviderManifest, ProviderManifestBody, manifestOwnerMessage, unwrapManifest } from "./manifest";
 import { renderManifestBodyFromConfig, parseConfigEnv } from "./manifest-config";
@@ -53,8 +53,11 @@ import {
   type ProxmoxSurvey,
 } from "./proxmox-probe";
 import {
-  allocateApiPort,
   DEFAULT_API_PORT,
+  MAX_API_PORT,
+  API_PORT_STRIDE,
+  API_PORTS_PER_WAN,
+  isFluxApiPort,
   parseLanNetwork,
   slotLanIp,
   type LanNetwork,
@@ -195,10 +198,14 @@ async function askAnswers(minimums: Record<string, number> = TIER_FLOORS_CENTS):
     // Step 0.1 has already produced these by the time init runs, and leaving them for
     // later meant the agent could not make a single Proxmox call until the operator
     // hand-edited .env.operator. Asked, not derived — init holds no cluster to ask.
-    console.log("\nProxmox API token (from `pveum user token add` in Step 0.1):");
+    // Prompts are labelled with the ENVIRONMENT VARIABLE each answer becomes, not with a
+    // prose description of it. The operator is holding the output of Step 0.1 — two values
+    // the runbook names as PROXMOX_TOKEN_ID and PROXMOX_TOKEN_SECRET — and matching those
+    // names here removes the guess about which half goes where.
+    console.log("\nProxmox API token (onboarding Step 0.1):");
     const proxmoxUrl = await ask("  Proxmox URL (an IP is safest — this runs inside a container)", "https://192.168.1.10:8006");
-    const proxmoxTokenId = await ask("  token id, e.g. fluxhub@pve!agent");
-    const proxmoxTokenSecret = await ask("  token secret (printed once when you created it)");
+    const proxmoxTokenId = await ask("  PROXMOX_TOKEN_ID", "fluxhub@pve!agent");
+    const proxmoxTokenSecret = await ask("  PROXMOX_TOKEN_SECRET (printed once when you created it)");
 
     // ⭐ Proved HERE, not five steps later in `mt-agent doctor`. A mistyped secret, a
     // path-scoped token, a URL the container cannot resolve — all of them used to
@@ -208,6 +215,9 @@ async function askAnswers(minimums: Record<string, number> = TIER_FLOORS_CENTS):
     // VPN or momentarily down must still be able to generate their files.
     let survey: ProxmoxSurvey | undefined;
     if (proxmoxUrl && proxmoxTokenId && proxmoxTokenSecret) {
+      // Several seconds of silence with no cursor is indistinguishable from a hang, and
+      // this is the one prompt that goes to the network before answering.
+      console.log("  Wait while the token is verified…");
       const probe = await probeProxmox({
         url: proxmoxUrl,
         tokenId: proxmoxTokenId,
@@ -253,8 +263,12 @@ async function askAnswers(minimums: Record<string, number> = TIER_FLOORS_CENTS):
     let stripeWebhookSecret = "";
     if (tiers.length > 0) {
       console.log("\nStripe — you are merchant of record; Flux Hub never holds these.");
-      stripeSecretKey = await ask("  restricted secret key (rk_… / sk_…), blank to fill in later", "");
-      stripeWebhookSecret = await ask("  webhook signing secret (whsec_…), blank if the endpoint does not exist yet", "");
+      stripeSecretKey = await ask("  STRIPE_SECRET_KEY (rk_… / sk_…), blank to fill in later", "");
+      stripeWebhookSecret = await ask("  STRIPE_WEBHOOK_SECRET (whsec_…), blank if the endpoint does not exist yet", "");
+    } else {
+      // Said out loud, not silently skipped: a Supporter who sees nothing here cannot tell
+      // whether the tool forgot to ask or decided they do not need one.
+      console.log("\nStripe — skipped: a Supporter sells nothing and needs no Stripe account.");
     }
 
     // ── Inventory, last, one host at a time ──────────────────────────────────────
@@ -267,11 +281,15 @@ async function askAnswers(minimums: Record<string, number> = TIER_FLOORS_CENTS):
       .map((s) => s.trim())
       .filter(Boolean);
 
+    // Ports are a property of the WAN IP, not of the host — one public address can front
+    // slots on two different hypervisors, and those slots share the one block. Tracked
+    // across the whole scaffold so a WAN IP reused on a second host resumes where it left
+    // off instead of handing out 16127 twice.
+    const usedPorts = new Map<string, Set<number>>();
+
     // Asked once and carried forward: hosts usually share a LAN, and re-typing it per
     // host is how one of them ends up on a different prefix by accident.
     let lastNetwork: string | undefined;
-    let apiPortBase = DEFAULT_API_PORT;
-    let slotIndex = 0;
 
     for (const name of hostNames) {
       console.log(`\n— host ${name} —`);
@@ -293,10 +311,7 @@ async function askAnswers(minimums: Record<string, number> = TIER_FLOORS_CENTS):
           console.log("  ⚠ no storage on this host resolved to solid state — check the answer you give below.");
         }
       }
-      const storageImages = await ask(
-        `  storage pool for VM images on ${name} (must NOT be a spinning disk)`,
-        ssd[0]?.id
-      );
+      const storageImages = await ask(`  storage pool for VM images on ${name} (must be SSD)`, ssd[0]?.id);
       const chosen = options.find((o) => o.id === storageImages);
       if (chosen?.rotational === true) {
         console.log(`  ⚠ ${storageImages} is ROTATIONAL: ${chosen.why}`);
@@ -304,57 +319,126 @@ async function askAnswers(minimums: Record<string, number> = TIER_FLOORS_CENTS):
       }
       const storageIso = await ask(`  storage holding the ArcaneOS ISO on ${name}`, iso[0]?.id ?? "pve55-shared");
 
-      // ⭐ ONE answer for the whole LAN: gateway AND prefix. Asked separately, the prefix
-      // is what gets left off a lanIp — and a bare lanIp silently becomes /32, so the
-      // node boots with no route out and is reachable by nobody.
-      let net: LanNetwork | undefined;
-      while (!net) {
-        const answer = await ask("  LAN gateway WITH prefix, e.g. 192.168.87.1/24", lastNetwork);
-        try {
-          net = parseLanNetwork(answer);
-          lastNetwork = answer;
-        } catch (e) {
-          console.log(`    ${(e as Error).message}`);
-        }
-      }
-      console.log(`    → VMs on ${net.base}x/${net.prefix}, gateway ${net.gateway}`);
+      const capacity = Math.max(1, Math.trunc(Number(await ask(`  how many node slots does ${name} support?`, "1"))) || 1);
 
+      // ── Slots, grouped by WAN IP ────────────────────────────────────────────────
+      // A host is not one public address. pve40 fronts several, and each WAN IP carries
+      // its own LAN — so WAN IP is the OUTER loop and the LAN network is asked once per
+      // WAN IP, not once per host and not once per slot. Asked per slot (the old shape),
+      // the same address got retyped for every node on it, and Flux refuses a duplicated
+      // WAN IP + port pair with an error that names neither.
       const slots: SlotAnswer[] = [];
-      const count = Number(await ask(`  how many slots on ${name}?`, "1"));
-      if (slotIndex === 0) {
-        // Allocated, not asked 31 times. The block is contiguous so the operator has one
-        // range to open rather than a list to keep.
-        apiPortBase = Number(await ask("  first Flux API port (each slot takes the next +10)", String(DEFAULT_API_PORT)));
-      }
-      for (let i = 0; i < count; i++) {
-        console.log(`  · slot ${i + 1} of ${count}`);
-        const tier =
-          tiers.length > 0
-            ? await ask(`    tier (${tiers.join("/")})`, tiers[0])
-            : await ask(`    tier (${Object.keys(minimums).join("/")})`, "cumulus");
-        const vmName = await ask("    VM name");
-        const ipAddress = await ask("    public WAN IP");
-        let lanIp = "";
-        while (!lanIp) {
-          const answer = await ask(`    LAN address — host number (e.g. 5 for ${net.base}5) or a full IP`);
+      while (slots.length < capacity) {
+        const ipAddress = await ask(`  WAN IP (blank when done — ${slots.length}/${capacity} placed)`, "");
+        if (!ipAddress) break;
+
+        // ⭐ ONE answer for the whole LAN: gateway AND prefix. Asked separately, the prefix
+        // is what gets left off a lanIp — and a bare lanIp silently becomes /32, so the
+        // node boots with no route out and is reachable by nobody.
+        let net: LanNetwork | undefined;
+        while (!net) {
+          const answer = await ask("    LAN gateway WITH prefix, e.g. 192.168.87.1/24", lastNetwork);
           try {
-            lanIp = slotLanIp(answer, net);
+            net = parseLanNetwork(answer);
+            lastNetwork = answer;
           } catch (e) {
             console.log(`      ${(e as Error).message}`);
           }
         }
-        const apiPort = allocateApiPort(apiPortBase, slotIndex);
-        console.log(`    → ${lanIp}, gateway ${net.gateway}, API port ${apiPort}`);
-        slots.push({ tier, vmName, ipAddress, lanIp, gateway: net.gateway, apiPort });
-        slotIndex++;
+        console.log(`    → VMs on ${net.base}x/${net.prefix}, gateway ${net.gateway}`);
+
+        // ⭐ Ports restart at 16127 for every WAN IP. Two nodes on 16127 collide only when
+        // they share a public address.
+        const used = usedPorts.get(ipAddress) ?? new Set<number>();
+        usedPorts.set(ipAddress, used);
+        const firstFree = (): number => {
+          let p = DEFAULT_API_PORT;
+          while (used.has(p)) p += API_PORT_STRIDE;
+          return p;
+        };
+        let nextPort = firstFree();
+
+        while (slots.length < capacity) {
+          // The block runs out at 16197 — that is WHY a WAN IP carries at most eight
+          // slots. Rather than let the operator type a ninth port that Flux will not
+          // serve, the loop moves itself on to the next WAN IP and says so.
+          if (nextPort > MAX_API_PORT) {
+            console.log(
+              `    no port left on ${ipAddress}: ${DEFAULT_API_PORT}–${MAX_API_PORT} is the whole ` +
+                `block (${API_PORTS_PER_WAN} slots). More capacity needs another WAN IP.`
+            );
+            break;
+          }
+          // The port prompt doubles as the "another node behind this WAN IP?" question, so
+          // the common answer — Enter, take the next port — costs one keystroke, and moving
+          // on costs one word.
+          const portAnswer = await ask(`    Flux API port (Enter, or 'next' for the next WAN IP)`, String(nextPort));
+          if (portAnswer.toLowerCase() === "next") break;
+          const apiPort = Number(portAnswer);
+          if (!isFluxApiPort(apiPort)) {
+            // Named precisely, because both halves are load-bearing and neither is
+            // guessable: Flux serves this block only, and a port off the stride overlaps
+            // the previous node's ports — which surfaces as THAT node going unreachable.
+            console.log(
+              `      ${portAnswer} is not usable: Flux API ports run ${DEFAULT_API_PORT}–${MAX_API_PORT} ` +
+                `in steps of ${API_PORT_STRIDE}, so they all end in ${DEFAULT_API_PORT % 10}.`
+            );
+            continue;
+          }
+          if (used.has(apiPort)) {
+            console.log(`      ${apiPort} is already taken on ${ipAddress}.`);
+            continue;
+          }
+
+          console.log(`    · slot ${slots.length + 1} of ${capacity}`);
+          const tier =
+            tiers.length > 0
+              ? await ask(`      tier (${tiers.join("/")})`, tiers[0])
+              : await ask(`      tier (${Object.keys(minimums).join("/")})`, "cumulus");
+          const vmName = await ask("      VM name");
+          let lanIp = "";
+          while (!lanIp) {
+            const answer = await ask(`      LAN address — host number (e.g. 5 for ${net.base}5) or a full IP`);
+            try {
+              lanIp = slotLanIp(answer, net);
+            } catch (e) {
+              console.log(`        ${(e as Error).message}`);
+            }
+          }
+          // Per slot, defaulted to the host's pool. Almost always the default — but a host
+          // with two SSD pools has no other way to say which node lands where, and the
+          // agent already honours `slot.storagePool ?? host.storageImages`.
+          const storagePool = await ask("      storage pool (SSD)", storageImages);
+          console.log(
+            `    → ${lanIp}, gateway ${net.gateway}, WAN ${ipAddress}, API port ${apiPort}, storage ${storagePool}`
+          );
+          slots.push({
+            tier,
+            vmName,
+            ipAddress,
+            lanIp,
+            gateway: net.gateway,
+            apiPort,
+            ...(storagePool && storagePool !== storageImages ? { storagePool } : {}),
+          });
+          // Advance from the port that was USED, not from a running count: an operator who
+          // types 16157 to leave room for something else gets 16167 next, still on stride
+          // and still inside the block.
+          used.add(apiPort);
+          nextPort = Math.max(apiPort + API_PORT_STRIDE, firstFree());
+        }
       }
       hosts.push({ name, storageImages, storageIso, slots });
     }
-    if (slotIndex > 0) {
-      console.log(
-        `\nAPI ports ${apiPortBase}–${allocateApiPort(apiPortBase, slotIndex - 1)} must be reachable from ` +
-          `outside your LAN, or Flux Hub cannot pull stats from your nodes.`
-      );
+
+    // Printed as WAN IP → ports, because that is the shape of the port-forward the
+    // operator has to go and create. A flat range is not actionable when the slots sit
+    // behind more than one public address.
+    const byWan = new Map<string, number[]>();
+    for (const h of hosts) for (const s of h.slots) byWan.set(s.ipAddress, [...(byWan.get(s.ipAddress) ?? []), s.apiPort]);
+    if (byWan.size > 0) {
+      console.log("\nThese must be reachable from outside your LAN, or Flux Hub cannot pull stats:");
+      for (const [wan, ports] of byWan) console.log(`  ${wan} → ${ports.join(", ")}`);
     }
 
     // A Supporter lists nothing, so `tiers` is empty above and no price was asked.
@@ -362,15 +446,20 @@ async function askAnswers(minimums: Record<string, number> = TIER_FLOORS_CENTS):
     // per-tier minimum and 422s anything under it, so a 0 is not even expressible.
     const draft: Answers = { providerSlug, providerName, ownerAddress, mtBaseUrl, fluxAppName, hosts, level };
 
-    // How many to OFFER, defaulted to how many exist — the answer almost everyone
-    // wants, so the prompt only has to be read by someone holding slots back. MT
-    // clamps this to the live available count, so a number here can never oversell.
-    const availableSlots: Record<string, number> = {};
+    // DERIVED from the level, not asked. An Operator offers everything they declared; a
+    // Supporter offers nothing. Holding slots back is a real thing to want, but it is a
+    // later edit to config.env by someone who already knows why — not a question worth
+    // putting in front of every first-time onboarding, where the honest default was the
+    // answer every time. FH also clamps this to the live available count, so the number
+    // here can never oversell.
     const counts = slotCountsByTier(draft);
-    for (const tier of tiers) {
-      const have = counts[tier] ?? 0;
-      const offered = await ask(`How many of your ${have} ${tier} slot(s) to offer for sale`, String(have));
-      availableSlots[tier] = Math.trunc(Number(offered));
+    const availableSlots: Record<string, number> = {};
+    for (const tier of tiers) availableSlots[tier] = counts[tier] ?? 0;
+    if (tiers.length > 0) {
+      console.log(
+        `\nOffered for sale: ${tiers.map((t) => `${availableSlots[t]} ${t}`).join(", ")} ` +
+          `(all of them — edit AGENT_LISTING_JSON in config.env to hold any back).`
+      );
     }
 
     return {
@@ -464,6 +553,22 @@ async function main() {
       const answersPath = flag(args, "--answers");
       const force = args.includes("--force");
 
+      // ⭐ The key is a PRECONDITION, and it is checked BEFORE the first question. It used
+      // to be checked where its value is first USED — after every prompt and the MT_PUBKEY
+      // fetch — so an operator without a key answered the whole wizard and then lost all
+      // of it to a die(). A precondition that fires last is not a precondition.
+      //
+      // `keygen` first is the order the runbook teaches (Step 1) and the only one in which
+      // MANIFEST_PUBKEY reaches .env.operator without hand-editing. Requiring it is also
+      // the only way MANIFEST_KEY can be filled at all.
+      const keyPath = join(dir, "manifest-key.pem");
+      if (!existsSync(keyPath)) {
+        die(
+          `${keyPath} not found. Run \`mt-manifest keygen\` first — your signing key is your ` +
+            `provider identity, and init fills MANIFEST_KEY and MANIFEST_PUBKEY from it.`
+        );
+      }
+
       // Same rule as doctor: ask MT for the live minimums, fall back to the bundled
       // table. Done before the prompts so the wizard quotes the real floor.
       const liveMinimums = await fetchTierMinimums(
@@ -508,20 +613,6 @@ async function main() {
         answers.mtPubkey = await fetchMtPubkey(answers.mtBaseUrl);
       }
 
-      // ⭐ The key is a PRECONDITION, not a later step. `keygen` first is the order the
-      // runbook teaches (Step 1) and the only one in which MANIFEST_PUBKEY reaches
-      // .env.operator without hand-editing — but `init` used to print "1. mt-manifest
-      // keygen" in its closing steps regardless, so an operator who had just run it was
-      // told to run it again. Requiring it here collapses that whole class: the file
-      // either exists and every derived value is filled, or you are told exactly what to
-      // run. Refusing is also the only way MANIFEST_KEY can be filled at all.
-      const keyPath = join(dir, "manifest-key.pem");
-      if (!existsSync(keyPath)) {
-        die(
-          `${keyPath} not found. Run \`mt-manifest keygen\` first — your signing key is your ` +
-            `provider identity, and init fills MANIFEST_KEY and MANIFEST_PUBKEY from it.`
-        );
-      }
       const keyPem = readFileSync(keyPath, "utf8");
       // Exactly what the operator used to be told to produce by hand and paste into two
       // files. `base64 -w0` of the PEM — the single-line form agent/src/signing.ts decodes.
@@ -553,7 +644,12 @@ async function main() {
       }
 
       const prices = resolvedPrices(answers);
-      console.log(`Wrote ${Object.keys(files).join(", ")} to ${dir}\n`);
+      // The full path, not `.`: this usually runs in a container whose /work IS the
+      // operator's current directory, and "wrote them to ." leaves them looking for files
+      // that are somewhere they cannot name.
+      const outDir = resolve(dir);
+      const where = outDir === "/work" ? `${outDir} (the directory you ran this from)` : outDir;
+      console.log(`Wrote ${Object.keys(files).join(", ")} to ${where}\n`);
       // Only steps that are genuinely still OUTSTANDING belong in this list. It used to
       // open with "1. mt-manifest keygen" — which init now requires to have happened
       // already — and with a base64-and-paste step init performs itself.
