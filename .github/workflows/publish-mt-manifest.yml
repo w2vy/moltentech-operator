@@ -39,11 +39,22 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Build time as a fact about THIS build, not about the repository. (The tempting
+      # `github.event.repository.updated_at` is neither, and is absent on dispatch.)
+      - id: stamp
+        run: echo "at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
       - uses: docker/build-push-action@v6
         with:
           context: protocol
           file: protocol/Dockerfile
           push: true
+          # Baked in so `mt-manifest version` names the commit it was built from. An
+          # operator's image refreshes at most every 48h, so "merged" and "running" are
+          # different claims and this is what separates them.
+          build-args: |
+            MT_BUILD_SHA=${{ github.sha }}
+            MT_BUILD_TIME=${{ steps.stamp.outputs.at }}
           tags: |
             ghcr.io/w2vy/mt-manifest:latest
             ghcr.io/w2vy/mt-manifest:${{ github.sha }}
@@ -71,6 +82,9 @@ jobs:
           run keygen
           run sign --key manifest-key.pem --from-config config.env --out manifest.json
           run verify --in manifest.json
+          # The build args actually reached the image: a `version` that cannot name its
+          # own commit is worse than none, because it reads as authoritative.
+          docker run --rm ghcr.io/w2vy/mt-manifest:latest version | tee /dev/stderr | grep -q "$GITHUB_SHA"
           python3 - "$work/manifest.json" <<'PY'
           import json, sys
           m = json.load(open(sys.argv[1]))
