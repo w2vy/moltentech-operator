@@ -105,6 +105,24 @@ function isRejection(status: number): boolean {
   return status === 401;
 }
 
+/**
+ * Is the thing that answered actually the Coalition?
+ *
+ * Every Coalition response carries `X-Coalition-Version` — set on the raw response before
+ * any routing (`coalition/src/server.ts:54`), so it is present on 401, 400 and 503 alike.
+ * Flux's edge serves its OWN html 503 page (`Error 503 FDM-…`) for an app that is not
+ * deployed or not running, and that page has no such header.
+ *
+ * Without this test that page reads as a PASS: 503 sits on the accept side of the
+ * 401/not-401 split, so a Coalition that was never deployed reported its key as ACCEPTED
+ * (measured 2026-08-24 against an undeployed app). That is the worst direction for this
+ * check to fail — a stale key is exactly what it exists to catch before a customer does.
+ * Anything that does not identify itself as a Coalition proves nothing about the key.
+ */
+function isCoalitionResponse(res: { headers: Record<string, string> }): boolean {
+  return typeof res.headers["x-coalition-version"] === "string";
+}
+
 export async function probeHub(
   input: HubProbeInput,
   http: HubHttp = defaultHubHttp
@@ -201,7 +219,18 @@ export async function probeHub(
         // "key accepted" without creating anything.
         body: "{}",
       });
-      if (isRejection(res.status)) {
+      if (!isCoalitionResponse(res)) {
+        // Not the Coalition talking — most often Flux's own 503 for an app that is not
+        // deployed. Judging the status here would be judging the edge, not the key.
+        checks.push({
+          name: "COALITION_KEY → deployed Coalition",
+          status: "skip",
+          detail:
+            `${url} answered ${res.status}, but nothing there identifies itself as a Coalition ` +
+            `(no x-coalition-version). The Flux app is not deployed or not running, or ` +
+            `COALITION_URL points elsewhere — key validity is unproven.`,
+        });
+      } else if (isRejection(res.status)) {
         checks.push({ name: "COALITION_KEY → deployed Coalition", status: "fail", detail: `rejected (401) by ${url}` });
         findings.push({
           rule: "COALITION_KEY_STALE_DEPLOY",
