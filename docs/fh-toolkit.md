@@ -42,6 +42,15 @@ harness) fails with `command not found`.
 mt-manifest() {
   local img=ghcr.io/w2vy/mt-manifest:latest
   local stamp="${XDG_CACHE_HOME:-$HOME/.cache}/mt-manifest.pulled"
+  # `--refresh` is consumed HERE and never passed on: the CLI runs inside the container
+  # and cannot pull its own image. Alone it pulls and stops; followed by a command it
+  # pulls and then runs it. A failed pull aborts rather than quietly using the old image.
+  if [ "$1" = "--refresh" ]; then
+    shift
+    docker pull "$img" || return 1
+    mkdir -p "$(dirname "$stamp")" && touch "$stamp"
+    [ $# -eq 0 ] && return 0
+  fi
   # Refresh the image at most once every 48h, tracked by a stamp file.
   if [ ! -e "$stamp" ] || [ -n "$(find "$stamp" -mmin +2880 2>/dev/null)" ]; then
     if docker pull -q "$img" >/dev/null 2>&1; then
@@ -53,6 +62,11 @@ mt-manifest() {
   docker run --rm -i -v "$PWD:/work" -u "$(id -u):$(id -g)" "$img" "$@"
 }
 ```
+
+`mt-manifest --refresh` forces the pull the stamp would otherwise defer — alone it pulls
+and stops, and followed by a command (`mt-manifest --refresh doctor --check-hub`) it pulls
+and then runs it. It has to live in the wrapper: the CLI runs *inside* the container and
+cannot replace its own image.
 
 Three things in that wrapper are load-bearing:
 

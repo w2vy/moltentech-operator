@@ -213,6 +213,15 @@ capture harness, `sudo`, `watch`) fails with `command not found`.
 mt-manifest() {
   local img=ghcr.io/w2vy/mt-manifest:latest
   local stamp="${XDG_CACHE_HOME:-$HOME/.cache}/mt-manifest.pulled"
+  # `--refresh` is consumed HERE and never passed on: the CLI runs inside the container
+  # and cannot pull its own image. Alone it pulls and stops; followed by a command it
+  # pulls and then runs it. A failed pull aborts rather than quietly using the old image.
+  if [ "$1" = "--refresh" ]; then
+    shift
+    docker pull "$img" || return 1
+    mkdir -p "$(dirname "$stamp")" && touch "$stamp"
+    [ $# -eq 0 ] && return 0
+  fi
   # Refresh the image at most once every 48h, tracked by a stamp file.
   if [ ! -e "$stamp" ] || [ -n "$(find "$stamp" -mmin +2880 2>/dev/null)" ]; then
     if docker pull -q "$img" >/dev/null 2>&1; then
@@ -225,6 +234,12 @@ mt-manifest() {
 }
 mt-manifest keygen             # writes manifest-key.pem (KEEP SECRET, 0600) + prints your pubkey
 ```
+
+`mt-manifest --refresh` forces the pull the 48h stamp would otherwise defer — alone it
+pulls and stops, or followed by a command it pulls and then runs it. The flag has to live
+in the wrapper: the CLI runs *inside* the container and cannot replace its own image.
+`mt-manifest version` prints the commit the running image was built from, which is how you
+tell a stale image from a missing feature.
 
 ⚠️ **The `-i` is load-bearing.** Without it the container gets no stdin, and `init` — the
 only subcommand that asks questions — prints its first prompt and exits at EOF, with no
