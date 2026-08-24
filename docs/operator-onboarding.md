@@ -5,6 +5,18 @@ you choose to — customers rent them through Flux Hub (FH) and **pay you direct
 your own Stripe account. FH never holds your Proxmox or Stripe credentials and never
 opens an inbound connection to you.
 
+## The other two documents
+
+This one is the ordered path from nothing to live. Two companions carry what a runbook
+should not:
+
+- **[`fh-toolkit.md`](fh-toolkit.md)** — every `mt-manifest` and `mt-agent` command with
+  its options, defaults and refusals, plus operating the agent day to day. Look here for
+  "what does this flag do".
+- **[`FluxHub-overview.md`](FluxHub-overview.md)** — what each file in your operator
+  directory is, who reads it, and what a change to it costs. Look here for "which file
+  holds this, and what breaks if I edit it".
+
 ## Which are you?
 
 | | **Flux Hub Supporter** | **Flux Hub Operator** |
@@ -745,9 +757,14 @@ The agent asserts this to FH (`PUT /api/agent/inventory`) on startup and each he
 **provider-scoped**: FH upserts your `ProxmoxHost`/`Slot` rows, never touches another
 operator's inventory, and never hard-deletes a rented slot.
 
-⚠️ **The assert is upsert-only.** Deleting a host or slot from this file removes
-*nothing* at FH — the rows stay, and the slots stay sellable. Retiring hardware is an
-admin action, not a file edit.
+⚠️ **The assert is upsert-only, and there is no removal path yet.** Deleting a host or
+slot from this file removes *nothing* at FH: the rows stay, and **any `available` slot on
+that host stays sellable** — a checkout or an idle-fill can rent a slot on a machine you
+have already repurposed. Verified in code (`api/agent/inventory/route.ts`): the ingest is a
+pure upsert loop, and nothing reconciles `ProxmoxHost` or `Slot` rows.
+
+Until the hub grows a real one, retiring a host is a three-step manual procedure — see
+**Retiring a host** under Ongoing operations. Do not treat it as a file edit.
 
 Because the agent **re-reads the file every heartbeat**, edits apply without a restart —
 **only if you mount `./data` as a directory** (Step 6). (Alternative: inline
@@ -1074,9 +1091,9 @@ Proxmox credentials, and never the private half of anything you generated.
   whole inventory assert** with a 409 naming the unattested host — that is the point of
   the attestation, so plan a host addition around a signing session, not a config edit.
   (Removing a host from `HOSTS` narrows what the agent may declare; it does **not**
-  delete existing rows — see Step 5.)
+  delete existing rows — see **Retiring a host** below.)
 - **Add or remove slots on an attested host**: edit `inventory.json`. No re-sign, no
-  restart. Removals do not delete (upsert-only).
+  restart. Removals do not delete (upsert-only) — see **Retiring a host** below.
 - **Change identity** (name, location, contact, Coalition URL): edit `config.env`,
   re-`sign`, re-paste at `/onboard`, re-run `mt-manifest env`, re-import `env.json`.
 - **Rotate your manifest key**: `keygen` a new one, re-`sign`, re-paste at `/onboard`
@@ -1091,6 +1108,41 @@ Proxmox credentials, and never the private half of anything you generated.
   fresh update — so keep the agent and Coalition running.
 - **Customer cancel/refund**: cancellation is free during the trial; afterward you are
   merchant of record — refunds/disputes are handled in your Stripe dashboard.
+
+### Retiring a host — no supported path yet
+
+⚠️ **This is a known gap, not a documented procedure.** Nothing in the toolkit or the hub
+removes a host, and removing it from `inventory.json` is the one action that *looks* like
+it should work and does not: the ingest is upsert-only, so the rows survive and any
+`available` slot on the retired machine stays sellable. The failure is a customer renting
+a node on hardware you no longer run.
+
+Until the hub grows a real removal, do all three, **in this order**:
+
+1. **Set the host's slots to `maintenance` at FH first.** Nothing else takes them out of
+   the sellable pool. A hub-side status change survives the next heartbeat —
+   `api/agent/inventory/route.ts` excludes `status`/`vmId`/health from the upsert on
+   purpose — so this sticks. (Config fields *are* clobbered, so IP/tier/price edits still
+   belong in `inventory.json`.)
+2. **Reduce the count in `AGENT_LISTING_JSON`** and recreate the container. Inventory says
+   what you *have*; the listing says what you *offer*, and they are independent. Skip this
+   and FH keeps advertising capacity that no longer exists.
+3. **Then remove the host from `inventory.json`.** Optionally narrow `HOSTS` in
+   `config.env` too — that needs a re-sign and a re-paste, and it only restricts what the
+   agent may declare in future. It deletes nothing.
+
+Verify with `GET /api/agent/nodes`, which is the only thing that will tell you FH's view
+differs from yours.
+
+⚠️ **Inventory is a declaration, not a boundary.** It does not stop the agent reaching a
+host: an agent pointed at a cluster endpoint can still touch a machine you removed from
+the file. The real boundary is the **Proxmox API token path ACL**.
+
+**Where the fix belongs:** the operator console at the hub's `/operator`, alongside the
+other admin-shaped actions being moved there — slot `available` ↔ `maintenance` is already
+planned as a Tier 2 (session-auth, reversible) action, and host retirement is the same
+shape: operator-scoped, reversible, guarded against slots holding a live rental. See
+workstream C of `partitioned-sprouting-horizon.md`.
 
 ## Trust model (why this is safe)
 

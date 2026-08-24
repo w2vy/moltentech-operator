@@ -234,10 +234,19 @@ can then reach nothing. `doctor` flags it as `LANIP_NO_CIDR`.
 One machine can carry slots on different bridges or pools — which is also how a single
 slot quietly ends up on a spinning pool while its neighbours are fine.
 
-⚠️ **This file is authoritative, and the agent overwrites from it.** Editing slots
-anywhere else — including in FH's database — loses to the next inventory assert. Edit here.
-Removing a host from this file does **not** delete anything upstream; inventory is
-upsert-only.
+⚠️ **This file is authoritative for CONFIG, and the agent overwrites from it.** Editing a
+slot's IP, tier or price anywhere else — including in FH's database — loses to the next
+inventory assert. Edit here. `status`, `vmId` and health are the exception: the ingest
+excludes them on purpose, so a hub-side `maintenance` toggle survives the heartbeat.
+
+⚠️ **Removing a host from this file deletes nothing upstream, and the slots stay
+sellable.** The ingest is a pure upsert; nothing reconciles `ProxmoxHost` or `Slot` rows.
+So a machine you have repurposed can still be rented out from under you. There is no
+supported removal path yet — retiring a host is a three-step manual procedure
+(`maintenance` at FH → shrink `AGENT_LISTING_JSON` → then edit this file), written out
+under **Retiring a host** in [`operator-onboarding.md`](operator-onboarding.md). The real
+fix belongs in the hub's `/operator` console; see workstream C of
+`partitioned-sprouting-horizon.md`.
 
 ## `manifest.json` — your signed identity
 
