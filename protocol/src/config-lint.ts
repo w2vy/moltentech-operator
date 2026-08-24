@@ -670,6 +670,18 @@ export interface DoctorReport {
   /** Whether price rules came from the live API or the bundled fallback. Reported,
    * because "your price is fine" means less if it was checked against stale numbers. */
   minimumsSource: "api" | "bundled";
+  /**
+   * Live checks that ran but proved NOTHING — a probe that could not reach its target,
+   * or reached something that was not the thing it meant to test. Named, not counted
+   * only, because which one went unproven is the whole information.
+   *
+   * They are not findings: nothing is known to be wrong, so they are neither errors nor
+   * warnings and they do not fail the exit code. But they must not be silent either.
+   * Measured 2026-08-24: an operator whose Coalition was never deployed got three dead
+   * probes above a summary that read `0 error(s), 0 warning(s)` / `everything agrees.`
+   * — a green verdict on an app that did not exist.
+   */
+  unproven?: string[];
 }
 
 /**
@@ -900,8 +912,10 @@ export function formatReport(report: DoctorReport): { text: string; ok: boolean 
     }
   }
   if (lines.length > 0) lines.push("");
+  const unproven = report.unproven ?? [];
   lines.push(
-    `checked ${report.filesChecked.join(", ")} — ${errors.length} error(s), ${warnings.length} warning(s)`
+    `checked ${report.filesChecked.join(", ")} — ${errors.length} error(s), ${warnings.length} warning(s)` +
+      (unproven.length > 0 ? `, ${unproven.length} unproven` : "")
   );
   if (report.minimumsSource === "bundled") {
     lines.push(
@@ -909,7 +923,16 @@ export function formatReport(report: DoctorReport): { text: string; ok: boolean 
         "bundled copy, which may be out of date."
     );
   }
-  if (errors.length === 0 && warnings.length === 0) lines.push("everything agrees.");
+  if (errors.length === 0 && warnings.length === 0) {
+    // "everything agrees" is a claim about what was CHECKED. With a live check unproven
+    // it would also be read as a claim about the thing that check could not reach.
+    if (unproven.length === 0) {
+      lines.push("everything agrees.");
+    } else {
+      lines.push("every file agrees, but these live checks proved nothing:");
+      for (const name of unproven) lines.push(`  ? ${name}`);
+    }
+  }
   if (actionable.length > 0) {
     lines.push("");
     for (const f of actionable) {
