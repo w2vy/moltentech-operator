@@ -16,27 +16,19 @@ opens an inbound connection to you.
 
 A **Supporter** lends the capacity they are not using: Flux Hub places Foundation nodes
 on their spare slots, alongside their own. Nothing is listed for sale, so there is no
-price to set, no Stripe account to create, and three of the steps below do not apply.
+price to set, no Stripe account to create.
 
 An **Operator** does all of that and also offers hardware for rent.
 
-`mt-manifest init` asks which you are as its first question, and the answer is published
-in your signed manifest (`PROVIDER_LEVEL`), so FH has an explicit answer rather than
-guessing from whether you happened to list a tier. You can change it later by re-signing
-and re-pasting your manifest — nothing else about you changes.
+`mt-manifest init` is an installstion script you run once you have all the prerequisites configured
+and it also asks if you are a Supporter or Operator during that process. Upgrading to an
+Operator later is a simple process, mostly requiring setting up your Stripe account.
 
-> Steps marked **(Operator only)** can be skipped by a Supporter.
+mt-manifest also have commands to test your configuration setting without exposing your keys.
 
-Either way you can still *receive* nodes: a rental an admin **assigns** to you involves
-no payment method at all. Stripe is what lets strangers buy from you.
-
-> **Rewritten 2026-08-08 from the first from-zero onboarding ever performed.** The
-> previous revision documented a CLI ownership ceremony (`mt-manifest authorize` →
-> Zelcore deep link → `--signature`) and required the Coalition to exist *before* you
-> could onboard. Both are gone: onboarding is now a **paste-and-sign web flow** at
-> `{MT_BASE_URL}/onboard` that needs no Coalition and issues your keys inline, so the
-> Coalition is deployed **once**, already holding its real keys. Every ⚠️ in this
-> document is a trap that actually bit during that run.
+Either way you can still deploy your own nodes: the admin can **Assign Free Rental** to you and it
+no payment at all. In the near future an operator will be able to assign free rentals from their fleet.
+Stripe is what lets strangers buy from you.
 
 ## What you run
 
@@ -44,8 +36,8 @@ Two small components (both in the `moltentech-operator` repo):
 
 | Component | Where it runs | Direction | Holds |
 |---|---|---|---|
-| **Agent** | on/beside your Proxmox (Docker + LAN reach to `:8006`) | **outbound only** | your Proxmox API token + your manifest key |
-| **Coalition** | on the Flux Network (RunOnFlux.com) | **inbound** (manifest/stats/payments) | your restricted Stripe key + webhook secret |
+| **Agent** | beside your Proxmox (Docker + LAN reach to `:8006`) | **outbound only** | your Proxmox API token + your manifest key |
+| **Coalition** | Deployed as a Flux Application | **inbound** (manifest/stats/payments) | your restricted Stripe key + webhook secret |
 
 ```
                  ┌─────────────── Flux Hub (the only inbound-facing side) ───────────────┐
@@ -61,9 +53,9 @@ customer ─buy──▶ │ storefront → calls your Coalition /checkout → S
 ```
 Step 0  Proxmox: token, storage, ISO          ← on your Proxmox
 Step 1  keygen + config.env  ─────────────┐   ← on your agent host
-Step 2  /onboard: paste + wallet-sign      ├─▶ THREE KEYS, issued once
+Step 2  /onboard: paste + wallet-sign     ├─▶ THREE KEYS, issued once
 Step 3  Stripe (Operator only)  ──────────┘   (webhook needs your Coalition URL, which
-Step 4  Deploy the Coalition on Flux            you already chose in Step 1 — see below)
+Step 4  Deploy the Coalition on Flux           you already chose in Step 1 — see below)
 Step 5  Declare inventory.json
 Step 6  Run the agent
 Step 7  FH activates you → you are live
@@ -75,17 +67,20 @@ Step 1, write the URL into `config.env`, and everything downstream — the signe
 manifest, the Stripe webhook endpoint, the agent's courier — can be filled in before the
 app exists.
 
+It is important to note that an agent can only control one ProxMox system,
+so in order to run more than one host machine from your agent you will need to
+enable ProxMox Clustering. The agent automatically detects is Cluster mode is enabled.
+
 ## Prerequisites
 
-- **Proxmox** host(s) with an API **token** (not the root password) and an ISO storage
+- **Proxmox** host(s) with an API **token** (not the root password) and an ISO (Shared??) storage
   every host can read. Step 0 creates the token; the agent stages the ISO for you.
 - A trusted, always-on host with **Docker** and LAN line-of-sight to Proxmox `:8006`
-  and outbound 443 (a sidecar VM/LXC is the clean default). The agent image bundles
-  Node + Python + `arcane-mage`, so nothing else is needed on that host.
-- A **Flux** account with enough FLUX to register an app (the Coalition is a small,
-  stateless container).
-- A **Stripe** account (you are merchant of record).
-- A **Flux wallet** (SSP or Zelcore) holding the address you will use as your
+  and outbound 443 (a sidecar VM/LXC has not yet been tested, isolation seems simpler).
+  The agent image bundles Node + Python + `arcane-mage`, so nothing else is needed on that host.
+- A **Flux** account with enough FLUX to register an app (the Coalition is a small, stateless container).
+- A **Stripe** account (you are merchant of record) - **Operator Only**.
+- A **Flux wallet** (Zelcore or SSP) holding the ZelID/SSPID you will use as your
   `OWNER_ADDRESS`. This wallet signs onboarding and every privileged node action
   forever after — use one you will still control in a year.
 - Public reachability for your Coalition URL (Flux provides it) and your nodes' public
@@ -131,12 +126,6 @@ Keep both to hand. `init` **proves them on the spot**, so a mistyped secret or a
 that cannot allocate is caught here rather than five steps later — and it reuses the
 connection to read your storage and node list, which is what fills in Step 0.2 for you.
 
-⚠️ **Already onboarded under the old names? Keep them.** Operators set up before this
-rename have a `MoltenTechAgent` role and a `moltentech@pve!agent` token. That token id is
-baked into the `PROXMOX_TOKEN_ID` your agent authenticates with — it is a credential, not
-a label. Renaming it breaks every Proxmox call the agent makes; there is nothing to gain
-by changing it.
-
 If a provision later fails with a 403 naming a privilege, add it to the role
 (`pveum role modify FluxHubAgent -privs "…"`) rather than escalating to `PVEAdmin`.
 
@@ -145,7 +134,7 @@ If a provision later fails with a 403 naming a privilege, add it to the role
 ⚠️ **Do not accept `local-lvm` because it is the default.** On a mixed-disk host the
 default LVM volume group frequently sits on a spinning disk while the SSD is a separate
 pool. Nothing errors: VMs provision fine, then every node **fails its benchmark** with
-no cause you can see.
+no cause you can see. `init` **discovers them by type automatically**
 
 ```sh
 pvesm status                        # the storage IDs — this is what PROXMOX_STORAGE_* wants
@@ -188,9 +177,17 @@ record of your node names: `ARCANE_ISO` then stays whatever you set by hand, and
 provision against a stale build fails outright. If you are staging an ISO manually for
 that reason, note its filename too.
 
----
+### Step 0.4 Pick your Agent Host
 
-## Step 1 — Generate your signing key + config
+The host should have direct access to the Proxmox Host and should be able to run docker images.
+It has only been run on Ubuntu, but is dsigned to be self contained and running on Windows will be supported.
+
+You need to pick a specific location on the filesystem that is out of the way and secure.
+
+That directory will contain all the config files, secrets and Flux App configuration (Environment)
+there will also be a /data directory that will contain the node inventory your host(s) provide.
+
+### Step 0.5 mt-manifest utility shell function
 
 The signing tool is the published image **`ghcr.io/w2vy/mt-manifest`** — no source
 checkout, no Node install. It's secret-free: your key is generated into the mounted
@@ -231,6 +228,11 @@ says so once and runs the cached image rather than blocking you.
 `find -mmin +2880` is deliberate: `-mtime +2` rounds to whole days and would mean *older
 than 72h*, which you would only notice as a refresh that did not happen. To pull on every
 invocation instead, drop the whole block and add `--pull always` to the `docker run`.
+
+---
+
+## Step 1 — Generate your signing key + config
+
 
 **Run `keygen` before `init`, in that order.** `init` requires the key: it fills
 `MANIFEST_KEY` in both env files from it and pins `MANIFEST_PUBKEY`, and it refuses to
@@ -568,7 +570,7 @@ Your provider now exists at FH in status `pending`. Step 7 activates it.
 
 ## Step 4 — Deploy the Coalition on Flux
 
-The Coalition runs as a **published Docker image** (`w2vy/coalition:0.2.8`) deployed as
+The Coalition runs as a **published Docker image** (`w2vy/coalition:latest`) deployed as
 a Flux App. Config, secrets, and your signed manifest are all supplied as **Flux
 environment variables** — nothing to mount. Because Step 2 already gave you the real
 keys, this is a **single deploy**; there is no placeholder-then-re-import round trip.
@@ -634,7 +636,7 @@ You never set a variable on the Flux app by hand: non-secret settings live in
 any variable with no value, so leaving `SESSION_SECRET=` in `secrets.env` is identical
 to never listing it, and the console will withhold the node dashboard.
 
-**2. Register the Flux App:** Docker image `w2vy/coalition:0.2.8`, container port
+**2. Register the Flux App:** Docker image `w2vy/coalition:latest`, container port
 **8088**, then supply `env.json` as the app's environment.
 
 🔒 **Register it as an ENTERPRISE app.** That is the whole answer to both problems
@@ -663,21 +665,27 @@ re-import** of a fresh `env.json`, then Flux's **Free Deploy**.
 re-import is a silent no-op. Always verify downstream (`/health`, a real checkout)
 rather than trusting that the import took.
 
-⚠️ **Pin the version this guide names; do not pin an OLDER one.** A published image
-predating a protocol change cannot complete onboarding — `coalition:0.2.4` was built one
-day before the protocol gained owner-attested `hardware[]`, and the hub 409s an unattested
-host, so that tag can never finish onboarding no matter how carefully you follow this.
+⚠️ **Use `:latest` — do not pin an older version.** A published image predating a
+protocol change cannot complete onboarding: `coalition:0.2.4` was built one day before the
+protocol gained owner-attested `hardware[]`, and the hub 409s an unattested host, so that
+tag can never finish onboarding no matter how carefully you follow this guide. Every image
+here — `coalition`, `mt-agent`, `mt-manifest` — tracks `latest`, which is what the fleet
+runs and what `init` writes into `flux-app-spec.json` and `compose.yaml`.
 
-The versions above (`coalition:0.2.8`, `mt-agent:0.3.0`) are what production runs and are
-known to complete the whole flow. `:latest` also works and is what the fleet tracks, but
-pinning is what makes YOUR onboarding reproducible: if a run half-succeeds, you want to be
-able to say which image did it.
+The cost of tracking `latest` is that **"which build is live" is no longer answerable from
+your own files.** A redeploy can pick up a new image without the spec changing. That is
+what `mt-manifest doctor --check-hub` is for: it reports the deployed Coalition build, so
+you can still say which code answered a request. If a run half-succeeds, record the build
+it names.
 
-⚠️ **`mt-manifest` is the exception — use `:latest` for it.** Its publish workflow emits
-only `latest` and a commit SHA, so its `0.1.0`/`0.2.0` tags are stale hand-pushed
-leftovers: `0.2.0` has no `doctor` and no `authorize` subcommand at all, so pinning it
-would break this guide's own instructions. Pin it to a commit SHA if you need
-reproducibility today.
+⚠️ **Getting a newer `latest` takes an explicit pull.** Neither `docker run` nor `docker
+compose up -d` re-pulls on its own — both use the image already on the host. Run `docker
+compose pull` (or `docker pull`) first, then `docker compose up -d --force-recreate`. The
+`mt-manifest` shell function in Step 0.5 handles this itself with a 48-hour stamp file.
+
+If you need byte-level reproducibility for a specific run, pin a **digest**
+(`w2vy/coalition@sha256:…`) rather than a version tag — a digest cannot go stale
+underneath you the way `0.2.8` did, and cannot silently move the way `latest` does.
 
 ---
 
@@ -837,7 +845,7 @@ Before any VM is created, run the credentialed checks — read-only, creates not
 
 ```sh
 docker run --rm --env-file .env.operator -v "$PWD/data:/data:ro" \
-  w2vy/mt-agent:0.3.0 doctor
+  w2vy/mt-agent:latest doctor
 ```
 
 It exits non-zero if anything fails, so it works as a gate. It checks that Proxmox is
@@ -863,7 +871,7 @@ Validate connectivity/auth to FH first, **without touching Proxmox**:
 
 ```sh
 docker run --rm --env-file .env.operator -v "$PWD/data:/data:ro" \
-  -e AGENT_DRY_RUN=1 w2vy/mt-agent:0.3.0
+  -e AGENT_DRY_RUN=1 w2vy/mt-agent:latest
 # expect: provider=… mt=… dryRun=true auth=signature ownerAuth=enforced courier=on
 ```
 
@@ -892,7 +900,7 @@ The equivalent without compose, if you prefer:
 
 ```sh
 docker run -d --name mt-agent --restart unless-stopped \
-  --env-file .env.operator -v "$PWD/data:/data:ro" w2vy/mt-agent:0.3.0
+  --env-file .env.operator -v "$PWD/data:/data:ro" w2vy/mt-agent:latest
 # any env edit then needs: docker rm -f mt-agent && the above again
 ```
 
