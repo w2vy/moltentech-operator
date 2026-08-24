@@ -1237,11 +1237,14 @@ async function main() {
       }
       break;
     }
+    case "help":
+    case "--help":
+    case "-h":
     default:
       console.log("usage: mt-manifest <keygen|init|doctor|sign|env|verify|authorize> [options]\n");
       console.log("  keygen    [--out <dir>]");
       console.log("  init      [--out <dir>] [--answers <answers.json>] [--force]");
-      console.log("  doctor    [--dir <dir>]");
+      console.log("  doctor    [--dir <dir>] [--check-proxmox] [--check-stripe] [--check-hub]");
       console.log("  sign      [--dir <dir>] [--key <pem>] [--from-config <config.env>|--in <body.json>]");
       console.log("            [--out <manifest.json>] [--stdout]   defaults to what `init` wrote");
       console.log("  env       [--dir <dir>] [--from-config <config.env>] [--secrets <secrets.env>]");
@@ -1249,7 +1252,18 @@ async function main() {
       console.log("            defaults to the files `init` wrote in the current directory");
       console.log("  verify    --in <manifest.json>");
       console.log("  authorize --in <manifest.json> [--signature <b64> --out <signed-manifest.json>]");
-      process.exit(cmd ? 1 : 0);
+      console.log("  help      this list\n");
+      console.log("Every path defaults to the file `init` wrote in the current directory,");
+      console.log("so `doctor`, `sign` and `env` normally take no arguments at all.\n");
+      console.log("doctor's live checks are opt-in and read-only:");
+      console.log("  --check-proxmox  the token works, and the VM storage does not spin");
+      console.log("  --check-stripe   the webhook is registered, on YOUR account");
+      console.log("  --check-hub      Flux Hub and your Coalition still accept your keys\n");
+      console.log("The agent is a separate command; `mt-agent doctor` is its preflight.");
+      console.log("Full reference: docs/fh-toolkit.md in the moltentech-operator repo.");
+      // `help` asked for this; an unknown subcommand got it as an error message.
+      const asked = cmd === undefined || cmd === "help" || cmd === "--help" || cmd === "-h";
+      process.exit(asked ? 0 : 1);
   }
 }
 

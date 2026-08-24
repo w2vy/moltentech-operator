@@ -113,8 +113,9 @@ docker run --rm --env-file .env.operator -v "$PWD/data:/data:ro" \
 mt-manifest <keygen|init|doctor|sign|env|verify|authorize> [options]
 ```
 
-Run with no subcommand to print usage (exit 0); an unknown subcommand prints the same and
-exits 1.
+`mt-manifest help` (also `--help`, `-h`, or no subcommand at all) prints the whole command
+list, `doctor`'s live-check flags, and a pointer back to this document — exit 0. An unknown
+subcommand prints the same list and exits 1.
 
 **Every path option defaults to the file `init` wrote in the current directory.** Standing
 in your operator directory, `doctor`, `sign` and `env` take no arguments at all.
@@ -128,6 +129,7 @@ in your operator directory, `doctor`, `sign` and `env` take no arguments at all.
 | `env` | assemble the Flux environment blob | config + secrets + manifest | `env.json` |
 | `verify` | re-check a signature you were handed | a manifest | — |
 | `authorize` | LEGACY owner-signature wrapper | a manifest | `signed-manifest.json` |
+| `help` | the whole command list | — | — |
 
 ---
 
@@ -509,21 +511,74 @@ docker run --rm --env-file .env.operator -v "$PWD/data:/data:ro" \
 # provider=… mt=… auth=signature ownerAuth=enforced courier=on dryRun=true poll=10000ms
 ```
 
-Read that banner — it is the agent telling you what it decided:
-
-- `auth=signature` — `MANIFEST_KEY` loaded (asymmetric). `auth=bearer` means it fell back
-  to the legacy `AGENT_KEY`.
-- `ownerAuth=enforced` — `OWNER_ADDRESS` is set. `off` means privileged actions are not
-  owner-checked.
-- `courier=on` — the owner-authorization courier is live.
-- `dryRun=true` — also forced on automatically when `PROXMOX_URL` or
-  `PROXMOX_TOKEN_SECRET` is missing, so an unexpected `true` here means a credential did
-  not load.
+Read that banner — it is the agent reporting every decision it made about its own
+configuration. **Reading the startup banner**, below, decodes each field.
 
 ⚠️ **The courier switches itself off silently** unless `MANIFEST_KEY` **and**
 `COALITION_URL` **and** `OWNER_ADDRESS` are all set. There is no warning — you simply never
 receive authorization requests, and deletes and reprovisions sit forever.
 (`mt-manifest doctor` catches this as `COURIER_SILENT_OFF`.)
+
+## Operating the agent
+
+`init` writes `compose.yaml`, so day-to-day operation is plain compose in your operator
+directory. There is no `mt-manifest start` — and deliberately so: `mt-manifest` runs as a
+container with only your working directory mounted, and giving it control of the host's
+Docker would mean handing `/var/run/docker.sock` to the one tool that holds your signing
+key. Compose is already the right interface.
+
+| Want to | Run |
+|---|---|
+| start it | `docker compose up -d` |
+| is it running? | `docker compose ps` |
+| watch it | `docker compose logs -f` (Ctrl-C stops watching, not the agent) |
+| recent logs only | `docker compose logs --tail 50` |
+| stop it | `docker compose down` |
+| **apply a settings change** | `docker compose up -d --force-recreate` |
+| take a newer build | `docker compose pull && docker compose up -d --force-recreate` |
+| run a one-off check | `docker compose run --rm agent doctor` |
+
+⚠️ **`restart` is not on that list, and its absence is the point.** `docker compose
+restart` re-reads nothing; neither does `docker restart`. The agent comes back on the old
+values and fails in exactly the same way, which reads as "my fix didn't work". Always
+`--force-recreate` after touching `.env.operator`.
+
+### Reading the startup banner
+
+The agent's first log line is a summary of every decision it made about its own
+configuration. Read it before anything else:
+
+```
+[agent] provider=acme mt=https://www.moltentech.us auth=signature ownerAuth=enforced \
+        courier=on dryRun=false poll=10000ms listing=60000ms
+```
+
+| Field | Good | What the other value means |
+|---|---|---|
+| `auth=` | `signature` | `bearer` — it fell back to the legacy `AGENT_KEY`; `MANIFEST_KEY` did not load |
+| `ownerAuth=` | `enforced` | `off` — `OWNER_ADDRESS` is unset; privileged actions are not owner-checked |
+| `courier=` | `on` | `off` — **you will never receive authorization requests**, and deletes/reprovisions sit forever |
+| `dryRun=` | `false` | `true` — it is pretending. Forced on when `PROXMOX_URL` or `PROXMOX_TOKEN_SECRET` did not load |
+
+### When something is wrong
+
+1. `mt-manifest doctor` — do the files still agree? Changes nothing; its last line is
+   usually the command to run next.
+2. `mt-manifest doctor --check-proxmox --check-hub` — do the credentials still work?
+3. `docker compose logs --tail 50` — and read the banner above.
+
+| Symptom | Cause |
+|---|---|
+| a corrected key still 401s | the container was `restart`ed, not `--force-recreate`d |
+| deletes and reprovisions never complete | `courier=off` — needs `MANIFEST_KEY` **and** `COALITION_URL` **and** `OWNER_ADDRESS` |
+| nodes provision fine, then fail every benchmark | VM storage is on a spinning disk — `mt-agent doctor` |
+| `self-signed certificate in certificate chain` | the image is missing its CA store; not your network, not Proxmox |
+| inventory edits have no effect | `data/` was mounted as a file, not a directory |
+| your listing vanished from Flux Hub | agent or Coalition unreachable; FH hides it and restores it on its own |
+| checkout 502s | Coalition price ≠ listing price (`mt-manifest doctor`) |
+| checkout 401s | `MT_PUBKEY` empty in the Coalition's environment |
+
+---
 
 ## `.env.operator` reference
 

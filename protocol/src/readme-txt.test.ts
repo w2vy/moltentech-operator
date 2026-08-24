@@ -77,9 +77,22 @@ test("it says which half runs where — the thing that is actually confusing", (
 });
 
 test("a Supporter is not told to manage prices they do not have", () => {
-  assert.doesNotMatch(renderReadme(supporter), /Changed a PRICE/);
-  assert.match(renderReadme(operator), /Changed a PRICE/);
+  assert.doesNotMatch(renderReadme(supporter), /a PRICE/);
+  assert.match(renderReadme(operator), /Changing a PRICE/);
   assert.match(renderReadme(supporter), /You are a Flux Hub Supporter/);
+});
+
+test("⭐ it stays a one-screen card, not a second copy of the file reference", () => {
+  // Its job is the reminder you want three weeks later: who you are, how to start and
+  // stop the agent, what usually breaks. What each file IS lives in
+  // docs/FluxHub-overview.md, and a README that drifts back into duplicating it is one
+  // nobody reads to the end of.
+  for (const a of [operator, supporter]) {
+    const lines = renderReadme(a).split("\n").length;
+    assert.ok(lines <= 100, `README.txt has grown to ${lines} lines`);
+  }
+  assert.match(renderReadme(operator), /fh-toolkit\.md/);
+  assert.match(renderReadme(operator), /FluxHub-overview\.md/);
 });
 
 test("it warns about the two unrecoverable losses, in the operator's own terms", () => {
