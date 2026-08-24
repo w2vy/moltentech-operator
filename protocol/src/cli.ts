@@ -60,6 +60,7 @@ import {
 } from "./config-lint";
 import { probeStripeWiring } from "./stripe-wiring";
 import { probeHub } from "./hub-probe";
+import { readBuildInfo, formatBuildInfo } from "./build-info";
 import {
   probeProxmox,
   formatProbe,
@@ -1266,11 +1267,28 @@ async function main() {
       }
       break;
     }
+    // Which build am I? The image refreshes at most every 48h, so "the fix is merged"
+    // and "the fix is what just ran" are different claims. This is how to tell them apart
+    // without diffing help text against the repo.
+    case "version":
+    case "--version":
+    case "-v": {
+      const pkgVersion = ((): string => {
+        try {
+          const pkg = JSON.parse(readFileSync(join(import.meta.dirname, "..", "package.json"), "utf8"));
+          return typeof pkg.version === "string" ? pkg.version : "unknown";
+        } catch {
+          return "unknown";
+        }
+      })();
+      console.log(formatBuildInfo(readBuildInfo(process.env, pkgVersion)));
+      break;
+    }
     case "help":
     case "--help":
     case "-h":
     default:
-      console.log("usage: mt-manifest <keygen|init|doctor|sign|env|verify|authorize> [options]\n");
+      console.log("usage: mt-manifest <keygen|init|doctor|sign|env|verify|authorize|version> [options]\n");
       console.log("  keygen    [--out <dir>]");
       console.log("  init      [--out <dir>] [--answers <answers.json>] [--force]");
       console.log("  doctor    [--dir <dir>] [--check-proxmox] [--check-stripe] [--check-hub]");
@@ -1281,6 +1299,7 @@ async function main() {
       console.log("            defaults to the files `init` wrote in the current directory");
       console.log("  verify    --in <manifest.json>");
       console.log("  authorize --in <manifest.json> [--signature <b64> --out <signed-manifest.json>]");
+      console.log("  version   which build of this CLI is running (paste it into a bug report)");
       console.log("  help      this list\n");
       console.log("Every path defaults to the file `init` wrote in the current directory,");
       console.log("so `doctor`, `sign` and `env` normally take no arguments at all.\n");

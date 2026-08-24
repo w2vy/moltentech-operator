@@ -68,6 +68,20 @@ Three things in that wrapper are load-bearing:
   72h*, which you would only notice as a refresh that did not happen. To pull every time
   instead, drop the block and add `--pull always` to the `docker run`.
 
+  Because of that window, a change that has merged can be up to two days from reaching
+  your box. `mt-manifest version` says which build is actually answering:
+
+  ```console
+  $ mt-manifest version
+  mt-manifest 0.1.0
+    build   9c6f819c8600429701eeb50640cf3ca30ae1fe41
+    built   2026-08-24T19:42:00Z
+  ```
+
+  The SHA is a commit in `moltentech-operator`, so `git log 9c6f819` says exactly what is
+  and is not in the CLI you just ran — paste it into any bug report. A build with no
+  image metadata reports `source checkout` instead of guessing.
+
 ### `mt-agent` — compose, written for you
 
 `mt-manifest init` writes `compose.yaml` (pinned image, `./data` mounted read-only, its
