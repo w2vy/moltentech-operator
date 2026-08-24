@@ -763,25 +763,30 @@ async function main() {
       // able to read .env.operator or manifest-key.pem.
       const outPathFor = (name: string): string =>
         name === "inventory.json" ? join(dir, "data", name) : join(dir, name);
-      mkdirSync(join(dir, "data"), { recursive: true, mode: 0o700 });
-      // ⭐ 0600 for EVERY generated file, not just the ones holding secrets.
+      // 0755: the agent has to traverse it, and what it holds is public.
+      mkdirSync(join(dir, "data"), { recursive: true, mode: 0o755 });
+      // ⭐ 0600 for every generated file EXCEPT inventory.json.
       //
       // Two of these are credential files that were 0644 for no better reason than that
       // they are not called "secrets": `.env.operator` carries a live Proxmox token, and
       // env.json (written by `env`) carries the Stripe key. The rest are not secret, but a
       // per-file judgement is a rule someone has to re-make correctly every time a file is
       // added — and the one time it is made wrong is a token readable by every account on
-      // the host. A uniform mode has no such failure mode.
+      // the host. 0600 is the default because it has no such failure mode.
       //
-      // Nothing needs the group/other bits: `docker compose` reads .env.operator as the
-      // INVOKING user, and the agent container runs as root, which reads a 0600 host file
-      // through the bind mount regardless of its owner.
+      // Nothing in that set needs the group/other bits: `docker compose` reads
+      // .env.operator as the INVOKING user, not as the daemon.
       //
-      // ⚠️ Unless Docker runs with userns-remap, where the container's root maps to an
-      // unprivileged host uid that cannot read data/inventory.json. That setup needs the
-      // file group-readable and the group mapped — a deliberate change, not this default.
+      // inventory.json is the exception, and a real one rather than an oversight: its
+      // contents are PUBLISHED — host names, tiers, ports, the LAN addressing of nodes
+      // that are meant to be reachable — so there is nothing in it to protect. It is also
+      // the one file read from INSIDE the container, so leaving it world-readable is what
+      // keeps the mount working on a host running Docker with userns-remap, where the
+      // container's root maps to an unprivileged uid that could not read 0600.
+      // Tightening it would buy nothing and break that setup silently.
       for (const name of Object.keys(files)) {
-        writeFileSync(outPathFor(name), files[name as keyof typeof files]!, { mode: 0o600 });
+        const mode = name === "inventory.json" ? 0o644 : 0o600;
+        writeFileSync(outPathFor(name), files[name as keyof typeof files]!, { mode });
       }
 
       // ⭐ SIGN IT. init used to stop one command short of the artifact its own closing

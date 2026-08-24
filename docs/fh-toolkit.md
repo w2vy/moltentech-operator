@@ -176,14 +176,18 @@ refuses to run rather than writing files with three holes in them.
 
 | File | Mode | What it is |
 |---|---|---|
-| `config.env` | 0644 | non-secret configuration; the source the manifest is rendered from |
+| `config.env` | 0600 | non-secret configuration; the source the manifest is rendered from |
 | `secrets.env` | 0600 | secret skeleton — `/onboard` fills in the three issued keys |
-| `.env.operator` | 0644 | the agent's environment (Proxmox creds land here) |
-| `data/inventory.json` | 0644 | your declared hosts and slots |
-| `flux-app-spec.json` | 0644 | the Flux app definition for the Coalition |
-| `compose.yaml` | 0644 | pinned `mt-agent` service, ready to `up -d` |
-| `README.txt` | 0644 | plain-language explanation of every file here |
-| `manifest.json` | 0644 | **signed** — this is what you paste at `/onboard` |
+| `.env.operator` | 0600 | the agent's environment (Proxmox creds land here) |
+| `data/inventory.json` | **0644** | your declared hosts and slots — published content, and the only file read from inside the container |
+| `flux-app-spec.json` | 0600 | the Flux app definition for the Coalition |
+| `compose.yaml` | 0600 | pinned `mt-agent` service, ready to `up -d` |
+| `README.txt` | 0600 | your operating card: how to start, stop and watch the agent |
+| `manifest.json` | 0600 | **signed** — this is what you paste at `/onboard` |
+
+0600 is the default because a per-file judgement is a rule someone has to get right every
+time a file is added, and getting it wrong once means a live Proxmox token readable by
+every account on the host. `inventory.json` is the deliberate exception.
 
 ⭐ `inventory.json` goes in **`data/`**, not beside the rest. That directory is
 bind-mounted into the agent at `/data`, and the mount is the **directory, not the file** —
@@ -298,7 +302,7 @@ to this tool's bundled copy — the minimum is FH's to set.
 | `LANIP_NO_CIDR` | a bare `lanIp` (silently becomes `/32`) |
 | `INVENTORY_MALFORMED` / `LISTING_MALFORMED` / `LISTING_NOT_AN_ARRAY` | shape errors |
 | `COURIER_SILENT_OFF` | the courier will disable itself with no warning (see below) |
-| `SECRET_IN_NONSECRET_CONFIG` | a secret sitting in a 0644 file |
+| `SECRET_IN_NONSECRET_CONFIG` | a secret sitting in a non-secret config file |
 | `ENV_DUPLICATED_ACROSS_FILES` | the same key in two files, able to drift |
 | `CFG_INLINE_COMMENT` | a trailing `# note` — it becomes part of the value |
 | `ENVFILE_QUOTED_VALUE` / `ENVFILE_NO_EXPANSION` | quoting and `$VAR` traps in env-file syntax |

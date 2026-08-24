@@ -31,29 +31,31 @@ operator/                       0700  ← you create this; the mode is on you
 ├── flux-app-spec.json          0600     the Flux app definition
 ├── compose.yaml                0600     the agent service
 ├── README.txt                  0600     this directory, in plain language. No secrets.
-└── data/                       0700
-    └── inventory.json          0600     your hosts and slots — the ONLY thing the agent may read here
+└── data/                       0755
+    └── inventory.json          0644     your hosts and slots — the ONLY thing the agent may read here
 ```
 
-**Everything is 0600.** Not because every file is secret — `README.txt` and
-`manifest-pubkey.txt` plainly are not — but because a per-file judgement is a rule someone
-has to re-make correctly each time a file is added, and the one time it is made wrong is a
-live Proxmox token readable by every account on the host. Nothing here needs the group or
-other bits: `docker compose` reads `.env.operator` as the **invoking user**, and the agent
-container runs as **root**, which reads a 0600 host file through the bind mount whatever
-its owner.
+**0600 is the default, and `inventory.json` is the deliberate exception.**
 
-⚠️ **Docker with `userns-remap` is the exception.** There the container's root maps to an
-unprivileged host uid that cannot read `data/inventory.json` at 0600. That setup needs the
-file group-readable and the group mapped — a deliberate change on a host configured that
-way, not something to pre-empt here.
+Not every file is secret — `README.txt` and `manifest-pubkey.txt` plainly are not — but a
+per-file judgement is a rule someone has to re-make correctly each time a file is added,
+and the one time it is made wrong is a live Proxmox token readable by every account on the
+host. Nothing in that set needs the group or other bits: `docker compose` reads
+`.env.operator` as the **invoking user**, not as the daemon.
+
+`data/inventory.json` is different. Its contents are **published** — host names, tiers,
+ports, the LAN addressing of nodes that are meant to be reachable — so there is nothing in
+it to protect. It is also the only file read from *inside* the container, and leaving it
+world-readable is what keeps the mount working under Docker `userns-remap`, where the
+container's root maps to an unprivileged uid. Tightening it would buy nothing and break
+that setup silently.
 
 ⚠️ **Modes are applied at CREATE time only.** A directory scaffolded before this change
 keeps its old 0644s — re-running `init` over it will not fix them. Tighten an existing one
 by hand:
 
 ```sh
-chmod 700 . data && chmod 600 * data/*
+chmod 700 . && chmod 600 * && chmod 755 data && chmod 644 data/inventory.json
 ```
 
 ### Three boundaries this layout enforces
@@ -204,8 +206,12 @@ What matters *about the file*:
 
 ## `data/inventory.json` — your hosts and slots
 
-**Written by** `init`. **Read by** the agent (mounted read-only at `/data/inventory.json`)
-and by `doctor`, which looks in both `data/` and the current directory.
+**Written by** `init`, mode 0644. **Read by** the agent (mounted read-only at
+`/data/inventory.json`) and by `doctor`, which looks in both `data/` and the current
+directory.
+
+**The one generated file that is not 0600**, because its contents are published anyway and
+it is the only one read from inside the container.
 
 A JSON **array** of hosts. This is the declaration of what hardware you actually have —
 distinct from `HOSTS` in `config.env`, which is the *signed attestation* of which machines
