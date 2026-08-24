@@ -112,7 +112,7 @@ function flag(args: string[], name: string): string | undefined {
 function backfillManifestPubkey(path: string, pubkey: string): "filled" | "already-set" | "no-file" {
   if (!existsSync(path)) return "no-file";
   const { text, result } = fillManifestPubkey(readFileSync(path, "utf8"), pubkey);
-  if (result === "filled") writeFileSync(path, text, { mode: 0o644 });
+  if (result === "filled") writeFileSync(path, text, { mode: 0o600 });
   return result;
 }
 
@@ -628,7 +628,7 @@ async function main() {
       }
       const { publicKeyBase64, privateKey } = generateEd25519();
       writeFileSync(keyPath, exportPrivateKeyPem(privateKey), { mode: 0o600 });
-      writeFileSync(join(dir, "manifest-pubkey.txt"), publicKeyBase64 + "\n");
+      writeFileSync(join(dir, "manifest-pubkey.txt"), publicKeyBase64 + "\n", { mode: 0o600 });
       // The documented order is keygen THEN init, and `init` now REFUSES without a key —
       // so on a first run there is no .env.operator here yet and this is a no-op ("no-file").
       // It still earns its place for the ROTATION path (`keygen --force` beside files that
@@ -763,10 +763,25 @@ async function main() {
       // able to read .env.operator or manifest-key.pem.
       const outPathFor = (name: string): string =>
         name === "inventory.json" ? join(dir, "data", name) : join(dir, name);
-      mkdirSync(join(dir, "data"), { recursive: true });
-      for (const [name, text] of Object.entries(files)) {
-        const mode = name === "secrets.env" ? 0o600 : 0o644;
-        writeFileSync(outPathFor(name), text, { mode });
+      mkdirSync(join(dir, "data"), { recursive: true, mode: 0o700 });
+      // ⭐ 0600 for EVERY generated file, not just the ones holding secrets.
+      //
+      // Two of these are credential files that were 0644 for no better reason than that
+      // they are not called "secrets": `.env.operator` carries a live Proxmox token, and
+      // env.json (written by `env`) carries the Stripe key. The rest are not secret, but a
+      // per-file judgement is a rule someone has to re-make correctly every time a file is
+      // added — and the one time it is made wrong is a token readable by every account on
+      // the host. A uniform mode has no such failure mode.
+      //
+      // Nothing needs the group/other bits: `docker compose` reads .env.operator as the
+      // INVOKING user, and the agent container runs as root, which reads a 0600 host file
+      // through the bind mount regardless of its owner.
+      //
+      // ⚠️ Unless Docker runs with userns-remap, where the container's root maps to an
+      // unprivileged host uid that cannot read data/inventory.json. That setup needs the
+      // file group-readable and the group mapped — a deliberate change, not this default.
+      for (const name of Object.keys(files)) {
+        writeFileSync(outPathFor(name), files[name as keyof typeof files]!, { mode: 0o600 });
       }
 
       // ⭐ SIGN IT. init used to stop one command short of the artifact its own closing
@@ -778,7 +793,7 @@ async function main() {
       // this file is stale — `doctor` compares the two and says so, which is the check
       // that makes signing here safe to do automatically.
       const manifest = signManifestFromConfig(files["config.env"]!, keyPem);
-      writeFileSync(join(dir, "manifest.json"), JSON.stringify(manifest, null, 2) + "\n", { mode: 0o644 });
+      writeFileSync(join(dir, "manifest.json"), JSON.stringify(manifest, null, 2) + "\n", { mode: 0o600 });
 
       const prices = resolvedPrices(answers);
       // The full path, not `.`: this usually runs in a container whose /work IS the
@@ -987,7 +1002,10 @@ async function main() {
 
       const out = JSON.stringify(manifest, null, 2) + "\n";
       if (outPath) {
-        writeFileSync(outPath, out);
+        // Same 0600 rule as everything `init` writes. Note writeFileSync only applies a
+        // mode when it CREATES the file — re-signing over an existing manifest.json keeps
+        // whatever mode that file already has.
+        writeFileSync(outPath, out, { mode: 0o600 });
         console.log(`Wrote signed manifest to ${outPath}. Publish it at your Coalition's /.well-known/mt-provider.json`);
       } else {
         process.stdout.write(out);
@@ -1209,7 +1227,7 @@ async function main() {
       const signed = { manifest: raw, ownerSignature: signature };
       const out = JSON.stringify(signed, null, 2) + "\n";
       if (outPath) {
-        writeFileSync(outPath, out);
+        writeFileSync(outPath, out, { mode: 0o600 });
         console.log(
           `Wrote signed manifest to ${outPath}. Publish it at your Coalition's ` +
             `/.well-known/mt-provider.json (or hand it to the MT admin to ingest).`

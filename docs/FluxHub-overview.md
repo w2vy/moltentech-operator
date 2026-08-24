@@ -20,25 +20,41 @@ staring at a directory trying to remember which file the agent actually reads.
 `env.json`, which `mt-manifest env` produces once `/onboard` has filled in `secrets.env`.
 
 ```
-operator/
-├── manifest-key.pem        0600  🔑 your permanent identity. Irreplaceable.
-├── manifest-pubkey.txt     0644     its public half
-├── config.env              0644     non-secret configuration — the manifest is rendered FROM this
-├── secrets.env             0600  🔑 the Coalition's secrets
-├── .env.operator           0644  🔑 the AGENT's environment — holds Proxmox credentials
-├── manifest.json           0644     signed. This is what you paste at /onboard
-├── env.json                0600  🔑 assembled Flux environment — import target
-├── flux-app-spec.json      0644     the Flux app definition
-├── compose.yaml            0644     the agent service
-├── README.txt              0644     this directory, in plain language. No secrets.
-└── data/
-    └── inventory.json      0644     your hosts and slots — the ONLY thing the agent may read here
+operator/                       0700  ← you create this; the mode is on you
+├── manifest-key.pem            0600  🔑 your permanent identity. Irreplaceable.
+├── manifest-pubkey.txt         0600     its public half (not secret — just uniform)
+├── config.env                  0600     non-secret configuration — the manifest is rendered FROM this
+├── secrets.env                 0600  🔑 the Coalition's secrets
+├── .env.operator               0600  🔑 the AGENT's environment — holds Proxmox credentials
+├── manifest.json               0600     signed. This is what you paste at /onboard
+├── env.json                    0600  🔑 assembled Flux environment — import target
+├── flux-app-spec.json          0600     the Flux app definition
+├── compose.yaml                0600     the agent service
+├── README.txt                  0600     this directory, in plain language. No secrets.
+└── data/                       0700
+    └── inventory.json          0600     your hosts and slots — the ONLY thing the agent may read here
 ```
 
-⚠️ **`.env.operator` is 0644 and holds a live Proxmox token.** That is the generator's
-choice — Docker's `env_file` must be readable by the invoking user — but it means the
-directory's permissions are doing the work. Keep the directory itself private, and never
-commit it.
+**Everything is 0600.** Not because every file is secret — `README.txt` and
+`manifest-pubkey.txt` plainly are not — but because a per-file judgement is a rule someone
+has to re-make correctly each time a file is added, and the one time it is made wrong is a
+live Proxmox token readable by every account on the host. Nothing here needs the group or
+other bits: `docker compose` reads `.env.operator` as the **invoking user**, and the agent
+container runs as **root**, which reads a 0600 host file through the bind mount whatever
+its owner.
+
+⚠️ **Docker with `userns-remap` is the exception.** There the container's root maps to an
+unprivileged host uid that cannot read `data/inventory.json` at 0600. That setup needs the
+file group-readable and the group mapped — a deliberate change on a host configured that
+way, not something to pre-empt here.
+
+⚠️ **Modes are applied at CREATE time only.** A directory scaffolded before this change
+keeps its old 0644s — re-running `init` over it will not fix them. Tighten an existing one
+by hand:
+
+```sh
+chmod 700 . data && chmod 600 * data/*
+```
 
 ### Three boundaries this layout enforces
 
@@ -245,7 +261,7 @@ fields the signer never signed, and the signature stops verifying.
 
 ## `env.json` 🔑 — the Flux import blob
 
-**Written by** `env`, mode 0600. **Read by** you, once, when you import it into your Flux
+**Written by** `env`. **Read by** you, once, when you import it into your Flux
 app's Environment Variables. **Contains secrets — never commit it.**
 
 A JSON array of `"KEY=value"` strings: the non-secret config, the secrets, and the signed
