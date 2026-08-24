@@ -51,7 +51,13 @@ import { join, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { ProviderManifest, ProviderManifestBody, manifestOwnerMessage, unwrapManifest } from "./manifest";
 import { renderManifestBodyFromConfig, parseConfigEnv } from "./manifest-config";
-import { runDoctor, formatReport, fetchTierMinimums, TIER_FLOORS_CENTS } from "./config-lint";
+import {
+  runDoctor,
+  formatReport,
+  fetchTierMinimums,
+  TIER_FLOORS_CENTS,
+  type DoctorReport,
+} from "./config-lint";
 import { probeStripeWiring } from "./stripe-wiring";
 import { probeHub } from "./hub-probe";
 import {
@@ -61,6 +67,7 @@ import {
   isoStorages,
   describeStorage,
   type ProxmoxSurvey,
+  type ProbeResult,
 } from "./proxmox-probe";
 import {
   DEFAULT_API_PORT,
@@ -114,6 +121,21 @@ function backfillManifestPubkey(path: string, pubkey: string): "filled" | "alrea
   const { text, result } = fillManifestPubkey(readFileSync(path, "utf8"), pubkey);
   if (result === "filled") writeFileSync(path, text, { mode: 0o600 });
   return result;
+}
+
+/**
+ * A probe check that came back `skip` ran and proved nothing — unreachable, or answered
+ * by something that was not the target. Carry those names into the summary so a report
+ * that ends `0 error(s), 0 warning(s)` cannot also read as a clean bill of health for a
+ * Coalition that is not deployed (measured 2026-08-24).
+ *
+ * A skip is not a failure: the exit code is unchanged, because nothing is known to be
+ * wrong. What changes is that the report says so out loud.
+ */
+function noteUnproven(report: DoctorReport, scope: string, checks: ProbeResult[]): void {
+  const skipped = checks.filter((c) => c.status === "skip").map((c) => `${scope}: ${c.name}`);
+  if (skipped.length === 0) return;
+  report.unproven = [...(report.unproven ?? []), ...skipped];
 }
 
 function die(msg: string): never {
@@ -913,6 +935,7 @@ async function main() {
           const probe = await probeProxmox({ url, tokenId, tokenSecret });
           console.log(`proxmox (live) — ${url}`);
           console.log(formatProbe(probe.checks) + "\n");
+          noteUnproven(report, "proxmox", probe.checks);
           for (const check of probe.checks) {
             if (check.status !== "fail") continue;
             report.findings.push({
@@ -966,6 +989,7 @@ async function main() {
           });
           console.log(`hub (live) — ${mtBaseUrl}`);
           console.log(formatProbe(probe.checks) + "\n");
+          noteUnproven(report, "hub", probe.checks);
           report.findings.push(...probe.findings);
           report.filesChecked.push("hub (live)");
         }

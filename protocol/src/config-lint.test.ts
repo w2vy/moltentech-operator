@@ -58,6 +58,25 @@ test("a clean set of files produces no findings", () => {
   assert.match(text, /everything agrees/);
 });
 
+test("⭐ an unproven live check must not report as `everything agrees`", () => {
+  // Measured 2026-08-24: an operator whose Coalition was never deployed saw three dead
+  // probes above `0 error(s), 0 warning(s)` / `everything agrees.` — a green verdict on
+  // an app that did not exist. Skips are not failures, so the exit code stays 0; what
+  // must change is that the summary stops claiming the unreachable thing was checked.
+  const report = runDoctor({
+    configEnv: GOOD_CONFIG,
+    envOperator: GOOD_OPERATOR,
+    inventoryJson: GOOD_INVENTORY,
+  });
+  report.unproven = ["hub: COALITION_KEY → deployed Coalition", "hub: deployed manifest"];
+  const { ok, text } = formatReport(report);
+  assert.equal(ok, true, "an unproven check is not a failure");
+  assert.doesNotMatch(text, /everything agrees/);
+  assert.match(text, /0 error\(s\), 0 warning\(s\), 2 unproven/);
+  assert.match(text, /proved nothing/);
+  assert.match(text, /COALITION_KEY/);
+});
+
 test("parseEnvLines keeps 1-indexed line numbers and ignores full-line comments", () => {
   const entries = parseEnvLines("# note\n\nA=1\nB=2\n");
   assert.deepEqual(entries, [
