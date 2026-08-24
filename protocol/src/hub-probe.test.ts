@@ -35,7 +35,12 @@ function fakeHttp(overrides: Record<string, { status: number; text?: string; hea
   return async (req) => {
     const hit = routes[`${req.method} ${req.url}`];
     if (!hit) throw new Error(`unexpected request: ${req.method} ${req.url}`);
-    return { status: hit.status, text: hit.text ?? "", headers: hit.headers ?? {} };
+    // A real Coalition stamps X-Coalition-Version on EVERY response, before routing —
+    // so a fixture without it is a fixture of something that is not the Coalition.
+    // Routes that mean to be that (Flux's edge 503) set `headers` explicitly.
+    const headers =
+      hit.headers ?? (req.url.startsWith(COALITION) ? { "x-coalition-version": "0.2.8" } : {});
+    return { status: hit.status, text: hit.text ?? "", headers };
   };
 }
 
@@ -96,6 +101,28 @@ test("503 payments-disabled also passes — a Supporter sells nothing and still 
   );
   assert.deepEqual(findings, []);
   assert.equal(check(checks, "COALITION_KEY").status, "pass");
+});
+
+test("⭐ Flux's own 503 for an UNDEPLOYED app must not read as an accepted key", async () => {
+  // Measured 2026-08-24: a Coalition that was never deployed answered every route with
+  // Flux's edge page (`Error 503 FDM-USA-1-1`, text/html). 503 is on the accept side of
+  // the 401/not-401 split, so the probe reported COALITION_KEY as ACCEPTED — the one
+  // direction this check must never fail in. The header is what separates them: the edge
+  // page has none, and a real Coalition sets it on 503 too.
+  const { checks, findings } = await probeHub(
+    INPUT,
+    fakeHttp({
+      [`POST ${COALITION}/checkout`]: {
+        status: 503,
+        text: "<html><head><title>Error 503 FDM-USA-1-1</title></head></html>",
+        headers: {},
+      },
+    })
+  );
+  assert.deepEqual(findings, []);
+  assert.equal(check(checks, "COALITION_KEY").status, "skip");
+  assert.match(check(checks, "COALITION_KEY").detail, /unproven/);
+  assert.doesNotMatch(check(checks, "COALITION_KEY").detail, /accepted/);
 });
 
 test("⭐ only 401 means rejected — a 403 must never send the operator to rotate a working key", async () => {

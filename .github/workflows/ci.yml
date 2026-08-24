@@ -295,11 +295,13 @@ jobs:
               assert entry["priceCents"] == prices[entry["tier"]], (entry, prices)
           print("AGENT_LISTING_JSON OK:", listing)
 
-          # The Flux app spec is a signed artifact: :latest makes two registrations of
-          # "the same" spec deploy different code with nothing recording the difference.
+          # Deliberately :latest (c3a3468, and see COALITION_IMAGE): a version pin ages,
+          # and an operator onboarding months later against a stale tag hits protocol
+          # failures the doc cannot warn them about. What must still hold is that the
+          # generator and the doc name the SAME image, asserted just below.
           spec = json.load(open(work / "flux-app-spec.json"))
           repotag = spec["compose"][0]["repotag"]
-          assert not repotag.endswith(":latest"), f"generated spec deploys {repotag}"
+          assert repotag.endswith(":latest"), f"generated spec pins {repotag}"
           doc = pathlib.Path("docs/operator-onboarding.md").read_text()
           assert repotag in doc, f"{repotag} is not the image docs/operator-onboarding.md pins"
 
