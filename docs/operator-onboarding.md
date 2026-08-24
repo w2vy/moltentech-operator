@@ -323,6 +323,12 @@ Re-runnable and scriptable: `mt-manifest init --answers answers.json` takes the 
 answers as a file and runs the same generator, so you can fix one typo without
 re-answering everything.
 
+**What a run actually looks like:** a full redacted transcript, `keygen` through the
+signed manifest, is in
+[docs/examples/mt-manifest-init-transcript.md](examples/mt-manifest-init-transcript.md).
+Every secret in it is a scrambled stand-in — read it for the shape of the run, do not
+copy values out of it.
+
 ### Check your work at any point: `mt-manifest doctor`
 
 ```sh
