@@ -693,25 +693,33 @@ export function renderInventoryJson(a: Answers): string {
 }
 
 /**
- * The Coalition image the generated Flux app spec deploys, PINNED.
+ * The Coalition image the generated Flux app spec deploys: `:latest`, deliberately.
  *
- * `:latest` deploys correctly today and breaks reproducibility invisibly: a Flux app
- * spec is a signed, on-chain artifact, so two operators registering "the same" spec
- * weeks apart get different code with nothing recording that they differ. The doc
- * pins for the same reason (docs/operator-onboarding.md, #49) — this is that decision
- * applied to the generator, and `scaffold.test.ts` fails if the two drift apart.
+ * This used to be a version pin, for reproducibility — a Flux app spec is a signed
+ * artifact, so two operators registering "the same" spec weeks apart could get
+ * different code with nothing recording that they differ. That trade is off: a
+ * version pin ages, and an operator onboarding six months from now against a stale
+ * tag hits protocol failures the doc cannot warn them about (`coalition:0.2.4` was
+ * built one day before the protocol gained owner-attested `hardware[]`, and could
+ * never finish onboarding at all). Tracking `latest` is what the fleet already does.
  *
- * Bump this WITH the doc when a new Coalition version is published.
+ * ⚠️ The cost is real and is now the operator's to manage: a Flux redeploy can pick up
+ * a new image without the spec changing, so "which build is live" is only answerable
+ * from the outside — `mt-manifest doctor --check-hub` reports the deployed Coalition
+ * build, and that is the check that replaces the pin.
+ *
+ * `scaffold.test.ts` still asserts the doc and the generator name the SAME image.
  */
-export const COALITION_IMAGE = "w2vy/coalition:0.2.8";
+export const COALITION_IMAGE = "w2vy/coalition:latest";
 
 /**
- * The agent image, pinned for the same reason `COALITION_IMAGE` is, and asserted against
- * the doc by `scaffold.test.ts` so the two cannot drift.
+ * The agent image, on `:latest` for the same reason `COALITION_IMAGE` is, and asserted
+ * against the doc by `agent-compose.test.ts` so the two cannot drift.
  *
- * Bump this WITH the doc when a new agent version is published.
+ * ⚠️ Compose does not re-pull on its own: `docker compose up -d` runs the image it
+ * already has. Getting a newer `latest` takes `docker compose pull` first.
  */
-export const AGENT_IMAGE = "w2vy/mt-agent:0.3.0";
+export const AGENT_IMAGE = "w2vy/mt-agent:latest";
 
 /**
  * `README.txt` — the directory explaining itself, in the words of someone who has never

@@ -19,7 +19,7 @@ your operator directory *is*, see [`FluxHub-overview.md`](FluxHub-overview.md).
 
 | | `mt-manifest` | `mt-agent` |
 |---|---|---|
-| Image | `ghcr.io/w2vy/mt-manifest:latest` | `w2vy/mt-agent:0.3.0` |
+| Image | `ghcr.io/w2vy/mt-manifest:latest` | `w2vy/mt-agent:latest` |
 | Lifetime | one-shot, run by hand | long-running daemon |
 | Runs where | your agent host, in your operator directory | same host, via `compose.yaml` |
 | Holds secrets | no — your key is generated into the mounted directory, never baked in | yes — Proxmox token, manifest key |
@@ -84,11 +84,25 @@ docker compose down           # stop and remove
 `env_file`'s *contents* varies by compose version. This is the single most common reason
 a corrected key keeps returning 401.
 
+⚠️ **All three images track `:latest`, and nothing re-pulls on its own.** `docker run` and
+`docker compose up -d` both use the image already on the host, so you keep running whatever
+you first pulled — indefinitely. To take a newer build:
+
+```sh
+docker compose pull && docker compose up -d --force-recreate
+```
+
+The `mt-manifest` function above does this for you with its 48-hour stamp file; the agent
+and the Coalition do not. Because the tag moves, **your files no longer record which build
+is live** — `mt-manifest doctor --check-hub` reports the deployed Coalition build, and that
+is what replaces a version pin. For a run you need to reproduce byte-for-byte, deploy a
+digest (`w2vy/coalition@sha256:…`) instead of a tag.
+
 One-shot invocations (`doctor`, dry runs) go direct:
 
 ```sh
 docker run --rm --env-file .env.operator -v "$PWD/data:/data:ro" \
-  w2vy/mt-agent:0.3.0 [doctor]
+  w2vy/mt-agent:latest [doctor]
 ```
 
 ---
@@ -467,7 +481,7 @@ before the first provision rather than after a wasted benchmark cycle.
 
 ```sh
 docker run --rm --env-file .env.operator -v "$PWD/data:/data:ro" \
-  w2vy/mt-agent:0.3.0 doctor
+  w2vy/mt-agent:latest doctor
 ```
 
 It checks that Proxmox is reachable and the token accepted; that the CA trust store is
@@ -491,7 +505,7 @@ Validates connectivity and auth to Flux Hub **without touching Proxmox**:
 
 ```sh
 docker run --rm --env-file .env.operator -v "$PWD/data:/data:ro" \
-  -e AGENT_DRY_RUN=1 w2vy/mt-agent:0.3.0
+  -e AGENT_DRY_RUN=1 w2vy/mt-agent:latest
 # provider=… mt=… auth=signature ownerAuth=enforced courier=on dryRun=true poll=10000ms
 ```
 

@@ -332,16 +332,15 @@ test("fillManifestPubkey appends a slot to a file written by an older init", () 
   assert.equal(parseConfigEnv(text).MANIFEST_PUBKEY, "PUB");
 });
 
-test("the generated Flux app spec pins the Coalition image, and pins what the doc pins", () => {
-  // `:latest` deploys fine today and breaks reproducibility invisibly — a Flux app spec
-  // is a signed artifact, so two operators registering "the same" spec weeks apart get
-  // different code with nothing recording that they differ.
+test("the generated Flux app spec deploys the Coalition image the doc names", () => {
+  // Deliberately `:latest` (see COALITION_IMAGE): a version pin ages, and an operator
+  // onboarding against a stale tag hits protocol failures the doc cannot warn them
+  // about. What still must hold is that the generator and the doc name the SAME image.
   const spec = JSON.parse(generateAll(ANSWERS)["flux-app-spec.json"]) as {
     compose: Array<{ repotag: string }>;
   };
   assert.equal(spec.compose[0]!.repotag, COALITION_IMAGE);
-  assert.doesNotMatch(COALITION_IMAGE, /:latest$/, "the generated spec must not deploy :latest");
-  assert.match(COALITION_IMAGE, /^w2vy\/coalition:\d+\.\d+\.\d+$/);
+  assert.match(COALITION_IMAGE, /^w2vy\/coalition:latest$/);
 
   // The doc and the generator pin the SAME version, or an operator following the doc
   // and an operator running `init` deploy different code from the same instructions.

@@ -61,10 +61,9 @@ test("⭐ the project name is explicit, not inherited from the directory", () =>
   assert.match(compose(), /^name: fh-agent-acme-nodes$/m);
 });
 
-test("the image is pinned, and pinned to what the doc says", () => {
+test("the image is the one the doc says", () => {
   assert.match(compose(), new RegExp(`^ {4}image: ${AGENT_IMAGE.replace("/", "\\/")}$`, "m"));
-  assert.doesNotMatch(AGENT_IMAGE, /:latest$/);
-  assert.match(AGENT_IMAGE, /^w2vy\/mt-agent:\d+\.\d+\.\d+$/);
+  assert.match(AGENT_IMAGE, /^w2vy\/mt-agent:latest$/);
 
   // Same rule the Coalition image already lives under: an operator following the doc and
   // an operator running `init` must deploy the same code.
