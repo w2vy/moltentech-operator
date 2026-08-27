@@ -42,6 +42,13 @@ function seedKeypair() {
   };
 }
 
+/** Read a signature header, failing the test if the signer omitted it. */
+function hdr(headers: Record<string, string>, name: string): string {
+  const v = headers[name];
+  assert.ok(v, `signer omitted ${name}`);
+  return v;
+}
+
 /** Rebuild the envelope exactly as MT does: trusted method/path/body + header slug/ts/nonce. */
 function rebuild(
   headers: Record<string, string>,
@@ -52,9 +59,9 @@ function rebuild(
   return {
     method,
     path,
-    slug: headers[HEADER_COALITION_SLUG],
-    issuedAt: headers[HEADER_COALITION_TIMESTAMP],
-    nonce: headers[HEADER_COALITION_NONCE],
+    slug: hdr(headers, HEADER_COALITION_SLUG),
+    issuedAt: hdr(headers, HEADER_COALITION_TIMESTAMP),
+    nonce: hdr(headers, HEADER_COALITION_NONCE),
     bodyHash: bodyHash(rawBody),
   };
 }
@@ -65,11 +72,11 @@ test("MT verifies a Coalition signature over the exact request", () => {
   const body = JSON.stringify({ providerSlug: SLUG, nodes: [] });
   const h = signCoalitionRequest(key, "POST", "/api/agent/lifecycle", SLUG, body);
 
-  assert.ok(checkFreshness(h[HEADER_COALITION_TIMESTAMP]));
+  assert.ok(checkFreshness(hdr(h, HEADER_COALITION_TIMESTAMP)));
   assert.ok(
     verifyRequest(
       rebuild(h, "POST", "/api/agent/lifecycle", body),
-      h[HEADER_COALITION_SIGNATURE],
+      hdr(h, HEADER_COALITION_SIGNATURE),
       publicKeyBase64
     )
   );
@@ -80,7 +87,7 @@ test("both issued key forms load: MT's raw 32-byte seed and a PKCS#8 PEM", () =>
     const key = loadCoalitionKey(value)!;
     const h = signCoalitionRequest(key, "GET", "/api/agent/nodes", SLUG, "");
     assert.ok(
-      verifyRequest(rebuild(h, "GET", "/api/agent/nodes", ""), h[HEADER_COALITION_SIGNATURE], publicKeyBase64),
+      verifyRequest(rebuild(h, "GET", "/api/agent/nodes", ""), hdr(h, HEADER_COALITION_SIGNATURE), publicKeyBase64),
       "a key form MT can issue must verify"
     );
   }
@@ -94,7 +101,7 @@ test("a tampered body fails: the signature covers sha256(body)", () => {
 
   const tampered = JSON.stringify({ amount: 70000 });
   assert.equal(
-    verifyRequest(rebuild(h, "POST", "/api/agent/payment", tampered), h[HEADER_COALITION_SIGNATURE], publicKeyBase64),
+    verifyRequest(rebuild(h, "POST", "/api/agent/payment", tampered), hdr(h, HEADER_COALITION_SIGNATURE), publicKeyBase64),
     false
   );
 });
@@ -104,8 +111,8 @@ test("path and method are covered too — a valid signature is not portable", ()
   const key = loadCoalitionKey(value)!;
   const h = signCoalitionRequest(key, "GET", "/api/agent/nodes", SLUG, "");
 
-  assert.equal(verifyRequest(rebuild(h, "GET", "/api/agent/jobs/claim", ""), h[HEADER_COALITION_SIGNATURE], publicKeyBase64), false);
-  assert.equal(verifyRequest(rebuild(h, "POST", "/api/agent/nodes", ""), h[HEADER_COALITION_SIGNATURE], publicKeyBase64), false);
+  assert.equal(verifyRequest(rebuild(h, "GET", "/api/agent/jobs/claim", ""), hdr(h, HEADER_COALITION_SIGNATURE), publicKeyBase64), false);
+  assert.equal(verifyRequest(rebuild(h, "POST", "/api/agent/nodes", ""), hdr(h, HEADER_COALITION_SIGNATURE), publicKeyBase64), false);
 });
 
 test("a forged slug fails — the slug is inside the signed envelope", () => {
@@ -113,7 +120,7 @@ test("a forged slug fails — the slug is inside the signed envelope", () => {
   const key = loadCoalitionKey(value)!;
   const h = signCoalitionRequest(key, "GET", "/api/agent/nodes", SLUG, "");
   const forged = { ...h, [HEADER_COALITION_SLUG]: "someone-elses-provider" };
-  assert.equal(verifyRequest(rebuild(forged, "GET", "/api/agent/nodes", ""), h[HEADER_COALITION_SIGNATURE], publicKeyBase64), false);
+  assert.equal(verifyRequest(rebuild(forged, "GET", "/api/agent/nodes", ""), hdr(h, HEADER_COALITION_SIGNATURE), publicKeyBase64), false);
 });
 
 test("the wrong provider's pubkey rejects a well-formed signature", () => {
@@ -121,7 +128,7 @@ test("the wrong provider's pubkey rejects a well-formed signature", () => {
   const theirs = seedKeypair();
   const key = loadCoalitionKey(mine.value)!;
   const h = signCoalitionRequest(key, "GET", "/api/agent/nodes", SLUG, "");
-  assert.equal(verifyRequest(rebuild(h, "GET", "/api/agent/nodes", ""), h[HEADER_COALITION_SIGNATURE], theirs.publicKeyBase64), false);
+  assert.equal(verifyRequest(rebuild(h, "GET", "/api/agent/nodes", ""), hdr(h, HEADER_COALITION_SIGNATURE), theirs.publicKeyBase64), false);
 });
 
 test("stale timestamps are outside the freshness window", () => {
@@ -134,7 +141,7 @@ test("nonces are single-use per request, never reused across calls", () => {
   const key = loadCoalitionKey(value)!;
   const a = signCoalitionRequest(key, "GET", "/api/agent/nodes", SLUG, "");
   const b = signCoalitionRequest(key, "GET", "/api/agent/nodes", SLUG, "");
-  assert.notEqual(a[HEADER_COALITION_NONCE], b[HEADER_COALITION_NONCE]);
+  assert.notEqual(hdr(a, HEADER_COALITION_NONCE), hdr(b, HEADER_COALITION_NONCE));
 });
 
 test("dual-accept: no signing key configured keeps the legacy bearer", () => {
@@ -156,8 +163,8 @@ test("with a signing key configured the bearer is GONE, not sent alongside", () 
     ""
   );
   assert.equal(h.Authorization, undefined);
-  assert.ok(h[HEADER_COALITION_SIGNATURE]);
-  assert.equal(h[HEADER_COALITION_SLUG], SLUG);
+  assert.ok(hdr(h, HEADER_COALITION_SIGNATURE));
+  assert.equal(hdr(h, HEADER_COALITION_SLUG), SLUG);
 });
 
 test("a garbage COALITION_SIGNING_KEY throws at load, it does not silently fall back", () => {
