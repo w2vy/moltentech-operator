@@ -5,6 +5,7 @@ import {
   type LifecycleReport,
 } from "@moltentech/protocol";
 import type { CoalitionConfig } from "./config";
+import { mtAuthHeaders } from "./coalition-signing";
 
 /**
  * Collateral-confirmation guard, operator side. Flux rejects a fluxnode START
@@ -41,7 +42,7 @@ export function getCollateralSnapshot(): LifecycleNodeStatus[] {
  */
 async function fetchWatchedNodes(cfg: CoalitionConfig, fetchImpl: typeof fetch): Promise<AgentNode[]> {
   const res = await fetchImpl(`${cfg.mtBaseUrl}/api/agent/nodes`, {
-    headers: { Authorization: `Bearer ${cfg.agentKey}` },
+    headers: mtAuthHeaders(cfg, "GET", "/api/agent/nodes", ""),
   });
   if (!res.ok) throw new Error(`nodes list failed: ${res.status}`);
   const body = (await res.json()) as { nodes?: unknown[] };
@@ -213,10 +214,16 @@ async function postLifecycleReport(
     reportedAt: new Date().toISOString(),
     nodes,
   };
+  // Serialize ONCE: the signature covers sha256(rawBody), so re-stringifying for the
+  // body would risk signing bytes other than the ones sent.
+  const rawBody = JSON.stringify(payload);
   const res = await fetchImpl(`${cfg.mtBaseUrl}/api/agent/lifecycle`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${cfg.agentKey}` },
-    body: JSON.stringify(payload),
+    headers: {
+      "Content-Type": "application/json",
+      ...mtAuthHeaders(cfg, "POST", "/api/agent/lifecycle", rawBody),
+    },
+    body: rawBody,
   });
   if (!res.ok) throw new Error(`lifecycle report failed: ${res.status}`);
 }

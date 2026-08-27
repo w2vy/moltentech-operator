@@ -635,6 +635,34 @@ async function main() {
   const [cmd, ...args] = process.argv.slice(2);
 
   switch (cmd) {
+    case "coalition-keygen": {
+      // Operator-held custody for the Phase D Coalition signing key. The DEFAULT path
+      // is not this command: MT auto-issues a Coalition keypair at first ingest and
+      // hands the operator the private half once, alongside AGENT_KEY/COALITION_KEY.
+      // This exists for the operator who would rather MT never saw the private key at
+      // all, and for backfilling a provider onboarded before auto-issue existed.
+      //
+      // Unlike `keygen`, this key is NOT a permanent identity — it is rotatable by
+      // definition (an admin re-pins the new pubkey), so there is no --force guard and
+      // no .env backfill. It prints to stdout and writes nothing by default, because
+      // the value's destination is a Flux app env var, not a file on this machine.
+      const { publicKeyBase64, privateKey } = generateEd25519();
+      const out = flag(args, "--out");
+      const secret = Buffer.from(exportPrivateKeyPem(privateKey), "utf8").toString("base64");
+      if (out) {
+        writeFileSync(join(out, "coalition-key.pem"), exportPrivateKeyPem(privateKey), { mode: 0o600 });
+        console.log(`Wrote ${join(out, "coalition-key.pem")} (KEEP SECRET).`);
+      }
+      console.log("COALITION_SIGNING_KEY (SECRET — paste into your Coalition's env):");
+      console.log(secret);
+      console.log("\nPublic key — send THIS to MT, and ask an admin to pin it on your provider:");
+      console.log(publicKeyBase64);
+      console.log(
+        "\nOrder matters: MT must pin the public key BEFORE you set COALITION_SIGNING_KEY " +
+          "and redeploy, or your Coalition signs with a key MT cannot verify and its reports 401."
+      );
+      break;
+    }
     case "keygen": {
       const dir = flag(args, "--out") ?? ".";
       const keyPath = join(dir, "manifest-key.pem");
@@ -1160,6 +1188,15 @@ async function main() {
       }
       put("SESSION_SECRET", secrets.SESSION_SECRET);
 
+      // Phase D. Optional, and carried through only when the operator actually holds one:
+      // an empty value would make `loadCoalitionKey` throw at boot instead of falling back
+      // to the bearer, turning a not-yet-cut-over operator into a Coalition that will not
+      // start. Present-and-set is the cutover; absent is the status quo.
+      //
+      // Without this line the key had nowhere to go: /onboard shows it once, secrets.env
+      // stores it, and env.json — the thing that becomes the Flux app env — dropped it.
+      if (secrets.COALITION_SIGNING_KEY) put("COALITION_SIGNING_KEY", secrets.COALITION_SIGNING_KEY);
+
       // The signed manifest (bare, or the whole SignedProviderManifest wrapper),
       // minified to one line, served verbatim at /.well-known/mt-provider.json.
       put("MANIFEST_JSON", JSON.stringify(manifestObj));
@@ -1288,8 +1325,11 @@ async function main() {
     case "--help":
     case "-h":
     default:
-      console.log("usage: mt-manifest <keygen|init|doctor|sign|env|verify|authorize|version> [options]\n");
-      console.log("  keygen    [--out <dir>]");
+      console.log(
+        "usage: mt-manifest <keygen|coalition-keygen|init|doctor|sign|env|verify|authorize|version> [options]\n"
+      );
+      console.log("  keygen           [--out <dir>]");
+      console.log("  coalition-keygen [--out <dir>]   Phase D signing key (operator-held custody)");
       console.log("  init      [--out <dir>] [--answers <answers.json>] [--force]");
       console.log("  doctor    [--dir <dir>] [--check-proxmox] [--check-stripe] [--check-hub]");
       console.log("  sign      [--dir <dir>] [--key <pem>] [--from-config <config.env>|--in <body.json>]");

@@ -7,6 +7,7 @@ import {
   PaymentEvent,
 } from "@moltentech/protocol";
 import type { CoalitionConfig } from "./config";
+import { mtAuthHeaders, type MtCallerConfig } from "./coalition-signing";
 import { ensurePrice, type StripeLike, type StripeEvent } from "./stripe";
 
 /** Mint a subscription Checkout Session (with trial) on the operator's Stripe account. */
@@ -178,14 +179,19 @@ export type RelayResult = {
  * to the caller intact; `handleWebhook` decides what to tell Stripe.
  */
 export async function relayPaymentEvent(
-  cfg: Pick<CoalitionConfig, "mtBaseUrl" | "agentKey">,
+  cfg: Pick<CoalitionConfig, "mtBaseUrl"> & MtCallerConfig,
   ev: PaymentEvent,
   fetchImpl: typeof fetch = fetch
 ): Promise<RelayResult> {
+  // One serialization, signed and sent — see the lifecycle relay for why.
+  const rawBody = JSON.stringify(ev);
   const res = await fetchImpl(`${cfg.mtBaseUrl}/api/agent/payment`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${cfg.agentKey}` },
-    body: JSON.stringify(ev),
+    headers: {
+      "Content-Type": "application/json",
+      ...mtAuthHeaders(cfg, "POST", "/api/agent/payment", rawBody),
+    },
+    body: rawBody,
   });
   if (!res.ok) return { delivered: false, accepted: false };
 
