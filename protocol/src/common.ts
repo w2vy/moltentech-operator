@@ -73,6 +73,21 @@ export const HEADER_AGENT_SIGNATURE = "x-agent-signature";
 export const HEADER_AGENT_TIMESTAMP = "x-agent-timestamp";
 export const HEADER_AGENT_NONCE = "x-agent-nonce";
 export const HEADER_AGENT_SLUG = "x-agent-slug";
+/**
+ * Coalition → MT request-envelope signature (Phase D, replaces the symmetric
+ * `agentKey` bearer on the Coalition's four outbound reports).
+ *
+ * Deliberately NOT the `x-agent-*` headers, even though the envelope shape and the
+ * verifier are identical: the Coalition signs with its own `COALITION_SIGNING_KEY`
+ * (private half of `Provider.coalitionPubkey`), never the agent's manifest key, and
+ * the two processes are separate deploy targets with separate compromise stories.
+ * Distinct header names keep "which identity signed this" unambiguous in logs and in
+ * MT's verifier, which admits the Coalition identity on only three routes.
+ */
+export const HEADER_COALITION_SIGNATURE = "x-coalition-signature";
+export const HEADER_COALITION_TIMESTAMP = "x-coalition-timestamp";
+export const HEADER_COALITION_NONCE = "x-coalition-nonce";
+export const HEADER_COALITION_SLUG = "x-coalition-slug";
 /** Stripe-style idempotency: dedupe retried deliveries of the same logical event. */
 export const HEADER_IDEMPOTENCY_KEY = "idempotency-key";
 

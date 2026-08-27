@@ -1,6 +1,6 @@
 {
   "name": "@moltentech/operator-coalition",
-  "version": "0.2.9",
+  "version": "0.2.11",
   "private": true,
   "type": "module",
   "license": "MIT",
@@ -8,7 +8,7 @@
   "scripts": {
     "start": "tsx src/index.ts",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test src/auth.test.ts src/console-manifest.test.ts src/console-state-gate.test.ts src/config-stripe-optional.test.ts src/collateral-endpoint.test.ts src/console-pending-precedence.test.ts src/payments-invoice-subscription.test.ts"
+    "test": "tsx --test src/coalition-signing.test.ts src/auth.test.ts src/console-manifest.test.ts src/console-state-gate.test.ts src/config-stripe-optional.test.ts src/collateral-endpoint.test.ts src/console-pending-precedence.test.ts src/payments-invoice-subscription.test.ts"
   },
   "dependencies": {
     "@moltentech/protocol": "file:../protocol",

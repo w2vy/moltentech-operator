@@ -6,6 +6,7 @@ import {
   type TierKey,
 } from "@moltentech/protocol";
 import type { CoalitionConfig } from "./config";
+import { mtAuthHeaders } from "./coalition-signing";
 
 // In-memory only — stats are regenerable, never persisted (the Coalition is stateless
 // and runs on a Syncthing-replicated data partition where mutable files conflict).
@@ -19,7 +20,7 @@ const NODE_TIMEOUT_MS = 10_000;
 /** Fetch the provider's live node list from MT (authoritative). */
 async function fetchNodes(cfg: CoalitionConfig, fetchImpl: typeof fetch): Promise<AgentNode[]> {
   const res = await fetchImpl(`${cfg.mtBaseUrl}/api/agent/nodes`, {
-    headers: { Authorization: `Bearer ${cfg.agentKey}` },
+    headers: mtAuthHeaders(cfg, "GET", "/api/agent/nodes", ""),
   });
   if (!res.ok) throw new Error(`nodes list failed: ${res.status}`);
   const body = (await res.json()) as { nodes?: unknown[] };

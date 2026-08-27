@@ -94,7 +94,7 @@ test("a failed payment reads the same relocated field", () => {
 
 // ── the silence ────────────────────────────────────────────────────────────────
 
-const cfg = { mtBaseUrl: "https://mt.test", agentKey: "k" };
+const cfg = { mtBaseUrl: "https://mt.test", agentKey: "k", providerSlug: SLUG };
 const mtSays = (status: number, body: unknown) =>
   (async () =>
     new Response(JSON.stringify(body), {
@@ -117,7 +117,7 @@ const webhook = (status: number, body: unknown, event = renewal()) => {
   const stripe = { webhooks: { constructEvent: () => event } } as unknown as StripeLike;
   return handleWebhook(
     stripe,
-    { providerSlug: SLUG, stripeWebhookSecret: "whsec_x", ...cfg } as any,
+    { stripeWebhookSecret: "whsec_x", ...cfg } as any,
     "{}",
     "sig",
     mtSays(status, body)

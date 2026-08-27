@@ -97,6 +97,37 @@ export function importPrivateKeyPem(pem: string): KeyObject {
   return createPrivateKey(pem);
 }
 
+/**
+ * Load an ed25519 private key from either wire form an operator can be handed:
+ *
+ * - **base64 of a raw 32-byte seed** — what `issueProviderKeys()` returns as
+ *   `coalitionSigningKey` (it exports PKCS#8 DER and keeps the trailing 32 bytes), and
+ *   therefore what an operator actually pastes into `COALITION_SIGNING_KEY`.
+ * - **base64 of a PKCS#8 PEM** — the `MANIFEST_KEY` convention, and what
+ *   `mt-manifest coalition-keygen` emits for an operator who wants their own custody.
+ *
+ * Both exist in the wild, so accepting one and not the other would strand half the
+ * operators on a value that looks right and fails at load. The seed is re-wrapped in the
+ * fixed 16-byte PKCS#8 prefix for Ed25519 — the exact inverse of the `subarray(-32)` that
+ * produced it.
+ */
+export function importEd25519PrivateKey(value: string): KeyObject {
+  const raw = Buffer.from(value, "base64");
+  const asText = raw.toString("utf8");
+  if (asText.includes("-----BEGIN")) return createPrivateKey(asText);
+  if (value.includes("-----BEGIN")) return createPrivateKey(value);
+  if (raw.length !== 32) {
+    throw new Error(
+      `ed25519 private key: expected a base64 32-byte seed or a base64 PKCS#8 PEM, got ${raw.length} bytes`
+    );
+  }
+  const pkcs8 = Buffer.concat([
+    Buffer.from("302e020100300506032b657004220420", "hex"),
+    raw,
+  ]);
+  return createPrivateKey({ key: pkcs8, format: "der", type: "pkcs8" });
+}
+
 /** Derive the base64 raw ed25519 public key (the manifest `pubkey`) from a private key. */
 export function publicKeyBase64FromPrivate(key: KeyObject): string {
   const jwk = createPublicKey(key).export({ format: "jwk" }) as { x: string };
