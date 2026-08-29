@@ -1103,6 +1103,12 @@ is in front of you:
 - `/operator` is convenient when you are already signed in to Flux Hub, and it does not
   depend on your Coalition being reachable.
 
+⚠️ **Only `/operator` can _decline_ a request.** The coalition→agent wire carries a
+signature and nothing else, so from your Coalition console an unwanted request can only be
+*ignored* — it lapses on its own 7 days after it was made (`authExpiresAt`), and nothing is
+touched in the meantime. To reject one immediately, and record who did, sign in at
+`/operator` and use **Decline** there.
+
 The trust model is identical either way. Flux Hub is a **dumb relay**: it shape-checks
 the signed claim, binds it to the slot it names, and stores it. **Your agent re-verifies
 the signature against its own pinned owner address before it deletes anything**, so a
