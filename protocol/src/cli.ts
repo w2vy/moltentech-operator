@@ -1357,6 +1357,22 @@ async function main() {
       console.log(formatBuildInfo(readBuildInfo(process.env, pkgVersion)));
       break;
     }
+    // Reaching the CLI at all means the shell function did NOT consume it — so the
+    // operator is on an alias, a hand-written `docker run`, or a wrapper predating
+    // `--refresh`. That is the actual finding, and it is worth more than "unknown
+    // command": the image cannot pull itself, so the fix is always in the wrapper.
+    case "--refresh":
+      console.log(
+        "`--refresh` is handled by the mt-manifest SHELL FUNCTION, not by this CLI —\n" +
+          "the CLI runs inside the container and cannot replace its own image. Reaching\n" +
+          "me means your wrapper predates it, or you are not using the wrapper.\n\n" +
+          "Pull directly:\n" +
+          "  docker pull ghcr.io/w2vy/mt-manifest:latest\n\n" +
+          "Or re-paste the current shell function from Step 0.5 of\n" +
+          "docs/operator-onboarding.md — it also mounts /etc/hosts, so Proxmox\n" +
+          "hostnames resolve inside the container."
+      );
+      process.exit(1);
     case "help":
     case "--help":
     case "-h":
@@ -1383,6 +1399,15 @@ async function main() {
       console.log("  --check-proxmox  the token works, and the VM storage does not spin");
       console.log("  --check-stripe   the webhook is registered, on YOUR account");
       console.log("  --check-hub      Flux Hub and your Coalition still accept your keys\n");
+      // Documented HERE even though the wrapper implements it: the operator has no way
+      // to tell which half of `mt-manifest` a flag belongs to, and the one flag they
+      // need when this CLI is out of date is the one it cannot carry out itself.
+      console.log("Updating this tool:");
+      console.log("  mt-manifest --refresh          pull the newest image, then stop");
+      console.log("  mt-manifest --refresh <cmd>    pull, then run <cmd>");
+      console.log("Handled by the shell function, not by this CLI — a container cannot replace");
+      console.log("its own image. Without it the wrapper re-pulls at most every 48h, so `version`");
+      console.log("above is what is RUNNING and may trail what is merged.\n");
       console.log("The agent is a separate command; `mt-agent doctor` is its preflight.");
       console.log("Full reference: docs/fh-toolkit.md in the moltentech-operator repo.");
       // `help` asked for this; an unknown subcommand got it as an error message.
