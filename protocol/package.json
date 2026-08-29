@@ -43,7 +43,7 @@
   "scripts": {
     "build": "tsc",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test src/signing.test.ts src/wallet.test.ts src/sign-launcher.test.ts src/manifest-config.test.ts src/manifest.test.ts src/cli-verify.test.ts src/cli-refresh-help.test.ts src/cli-init-pubkey.test.ts src/config-lint.test.ts src/scaffold.test.ts src/stripe-wiring.test.ts src/cli-init-fills.test.ts src/manifest-literals.test.ts src/proxmox-probe.test.ts src/level.test.ts src/lan-and-ports.test.ts src/manifest-freshness.test.ts src/report-format.test.ts src/agent-compose.test.ts src/prompt-validation.test.ts src/readme-txt.test.ts src/hub-probe.test.ts src/build-info.test.ts",
+    "test": "tsx --test src/signing.test.ts src/wallet.test.ts src/sign-launcher.test.ts src/manifest-config.test.ts src/manifest.test.ts src/cli-verify.test.ts src/cli-refresh-help.test.ts src/cli-init-pubkey.test.ts src/config-lint.test.ts src/storage-agreement.test.ts src/scaffold.test.ts src/stripe-wiring.test.ts src/cli-init-fills.test.ts src/manifest-literals.test.ts src/proxmox-probe.test.ts src/level.test.ts src/lan-and-ports.test.ts src/manifest-freshness.test.ts src/report-format.test.ts src/agent-compose.test.ts src/prompt-validation.test.ts src/readme-txt.test.ts src/hub-probe.test.ts src/build-info.test.ts",
     "manifest": "tsx src/cli.ts"
   },
   "dependencies": {

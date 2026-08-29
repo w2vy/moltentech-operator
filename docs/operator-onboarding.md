@@ -117,6 +117,7 @@ pveum role add FluxHubAgent -privs \
 VM.Config.HWType,VM.Config.Memory,VM.Config.Network,VM.Config.Options,\
 VM.Console,VM.PowerMgmt,\
 Datastore.Allocate,Datastore.AllocateSpace,Datastore.AllocateTemplate,Datastore.Audit,\
+SDN.Audit,SDN.Use,\
 Sys.Audit"
 pveum user add fluxhub@pve
 pveum acl modify / --users fluxhub@pve --roles FluxHubAgent
@@ -140,6 +141,21 @@ connection to read your storage and node list, which is what fills in Step 0.2 f
 
 If a provision later fails with a 403 naming a privilege, add it to the role
 (`pveum role modify FluxHubAgent -privs "…"`) rather than escalating to `PVEAdmin`.
+
+⚠️ **`SDN.Audit` + `SDN.Use` are not optional on PVE 8+, and their absence does not look
+like a permission problem.** Bridges are behind SDN permissions, so without them
+`GET /nodes/<node>/network` quietly **filters your bridge out of the response** instead of
+returning 403. The provision then fails with **`Network not present on hypervisor`** —
+naming a bridge that is present, up, and correctly configured, which sends you to debug
+your networking instead of your token. Verify what the TOKEN sees, not what `ip link`
+shows:
+
+```sh
+# as root — the bridge is here
+pvesh get /nodes/<node>/network --output-format json | grep -o '"iface":"[^"]*"'
+```
+
+If root lists `vmbr0` and a provision still says the network is absent, it is this.
 
 ⚠️ **If `role add` aborts** (e.g. `invalid privilege '…'` on a PVE build that renamed
 one), the role is not created — but the later `user add` and `token add` still run and

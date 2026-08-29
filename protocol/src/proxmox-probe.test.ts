@@ -7,6 +7,7 @@ import {
   ssdImageStorages,
   isoStorages,
   describeStorage,
+  REQUIRED_PRIVS,
   type ProxmoxCreds,
 } from "./proxmox-probe";
 
@@ -31,6 +32,11 @@ const ALL_PRIVS = {
     "VM.PowerMgmt": 1,
     "Datastore.AllocateSpace": 1,
     "Sys.Audit": 1,
+    // On PVE 8+ these are what make a bridge VISIBLE. Without them the network list is
+    // filtered rather than refused, so a provision fails with "Network not present on
+    // hypervisor" against a bridge that is up and correct.
+    "SDN.Use": 1,
+    "SDN.Audit": 1,
   },
 };
 
@@ -62,6 +68,12 @@ function fakeGet(overrides: Record<string, unknown> = {}) {
     "/api2/json/storage/ssd": { vgname: "ssd" },
     "/api2/json/storage/local-lvm": { vgname: "pve" },
     "/api2/json/storage/pve55-shared": {},
+    // The probe now EXERCISES a read instead of trusting /access/permissions. A healthy
+    // hypervisor answers this; the 2026-08-29 host returned 403 here while reporting every
+    // Datastore privilege about itself.
+    "/api2/json/nodes/pve30/storage/pve55-shared/content": [
+      { volid: "pve55-shared:iso/FluxLive-1775071308.iso", format: "iso" },
+    ],
     ...overrides,
   };
   return async <T>(_c: ProxmoxCreds, path: string): Promise<T> => {
@@ -189,4 +201,61 @@ test("an authenticating token that sees no node is a failure, not an empty pass"
   const probe = await probeProxmox(CREDS, fakeGet({ "/api2/json/nodes": [] }));
   assert.equal(probe.ok, false);
   assert.match(probe.checks.find((c) => c.name.includes("nodes"))!.detail, /sees no node/);
+});
+
+// ── The 2026-08-29 pve50 incident: five attempts, three distinct causes ────────────────
+// Each of these asserts a check that would have named a cause BEFORE the first provision.
+
+test("⭐ a token that reports every privilege but reads no storage FAILS", async () => {
+  // The exact shape measured on pve50: /access/permissions returned the complete
+  // Datastore.* set (pvedaemon had a stale ACL after the node left its cluster), while
+  // /nodes/<node>/storage returned `200 {"data":[]}` — no error to catch. Before this the
+  // probe reported a clean pass and the wizard simply offered no storage options.
+  const probe = await probeProxmox(CREDS, fakeGet({ "/api2/json/nodes/pve30/storage": [] }));
+  assert.equal(probe.ok, false, "an empty storage list is a permission result, not an empty host");
+  const check = probe.checks.find((c) => c.name.includes("storage readable"))!;
+  assert.equal(check.status, "fail");
+  // Must contradict the passing privilege line above it, or the two together are confusing.
+  assert.match(check.detail, /asks the token about itself/);
+  // And name the fix that actually worked.
+  assert.match(check.detail, /restart pvedaemon pveproxy/);
+});
+
+test("⭐ privileges claimed but a storage read that 403s is caught by the exercised check", async () => {
+  const probe = await probeProxmox(
+    CREDS,
+    fakeGet({ "/api2/json/nodes/pve30/storage/pve55-shared/content": new Error("HTTP 403") })
+  );
+  assert.equal(probe.ok, false);
+  const priv = probe.checks.find((c) => c.name.includes("privileges"))!;
+  const read = probe.checks.find((c) => c.name.includes("storage readable"))!;
+  assert.equal(priv.status, "pass", "the self-report still passes — that is the whole point");
+  assert.match(priv.detail, /self-reported/);
+  assert.equal(read.status, "fail", "the exercised read is what catches it");
+});
+
+test("⭐ SDN privileges are required — a bridge is invisible without them", async () => {
+  // Not a hypothetical: PVEAdmin carries SDN.* incidentally, so every provision on the
+  // reference fleet passed while the documented least-privilege role could not see vmbr0.
+  assert.ok(REQUIRED_PRIVS.includes("SDN.Use"));
+  assert.ok(REQUIRED_PRIVS.includes("SDN.Audit"));
+  const probe = await probeProxmox(
+    CREDS,
+    fakeGet({
+      "/api2/json/access/permissions": {
+        "/": { "VM.Allocate": 1, "VM.Config.Disk": 1, "VM.Config.Network": 1, "VM.PowerMgmt": 1, "Datastore.AllocateSpace": 1, "Sys.Audit": 1 },
+      },
+    })
+  );
+  const priv = probe.checks.find((c) => c.name.includes("privileges"))!;
+  assert.equal(priv.status, "fail");
+  assert.match(priv.detail, /SDN\.Use/);
+  assert.match(priv.detail, /SDN\.Audit/);
+});
+
+test("a healthy hypervisor reports the storage it read, so a pass is legible", async () => {
+  const probe = await probeProxmox(CREDS, fakeGet());
+  const read = probe.checks.find((c) => c.name.includes("storage readable"))!;
+  assert.equal(read.status, "pass");
+  assert.match(read.detail, /pve55-shared/);
 });
