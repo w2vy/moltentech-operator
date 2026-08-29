@@ -66,6 +66,7 @@ import {
   formatProbe,
   ssdImageStorages,
   isoStorages,
+  storageContentProblem,
   describeStorage,
   type ProxmoxSurvey,
   type ProbeResult,
@@ -429,7 +430,15 @@ async function askAnswers(minimums: Record<string, number> = TIER_FLOORS_CENTS):
           console.log("  ⚠ no storage on this host resolved to solid state — check the answer you give below.");
         }
       }
-      const storageImages = await ask(`  storage pool for VM images on ${name} (must be SSD)`, ssd[0]?.id);
+      // `askUntil` rather than `ask`: when the probe answered, a storage that cannot hold the
+      // content it is being named for is PROVABLY wrong, and the prompt is the only place the
+      // operator is still holding the context to fix it. With no survey the rule is inert and
+      // this behaves exactly as `ask` did — silence means "not disproved", never "checked".
+      const storageImages = await askUntil(
+        `  storage pool for VM images on ${name} (must be SSD)`,
+        (v) => storageContentProblem(v, options, "images"),
+        ssd[0]?.id
+      );
       const chosen = options.find((o) => o.id === storageImages);
       if (chosen?.rotational === true) {
         console.log(`  ⚠ ${storageImages} is ROTATIONAL: ${chosen.why}`);
@@ -441,7 +450,15 @@ async function askAnswers(minimums: Record<string, number> = TIER_FLOORS_CENTS):
       if (iso[0]?.shared) {
         console.log(`  ${iso[0].id} is shared — one ISO for the whole cluster, refreshed in one place.`);
       }
-      const storageIso = await ask(`  storage holding the ArcaneOS ISO on ${name}`, iso[0]?.id ?? "pve55-shared");
+      // The default is `iso[0]` when the probe answered. The bare fallback is deliberately NOT
+      // a storage name any more: `pve55-shared` was one operator's NFS mount, meaningless to
+      // everyone else, and it read as a recommendation. With no survey there is no honest
+      // default, so ask for one rather than suggest a stranger's.
+      const storageIso = await askUntil(
+        `  storage holding the ArcaneOS ISO on ${name}`,
+        (v) => (v ? storageContentProblem(v, options, "iso") : "name the storage that holds the ArcaneOS ISO."),
+        iso[0]?.id
+      );
 
       const capacity = Math.max(1, Math.trunc(Number(await ask(`  how many node slots does ${name} support?`, "1"))) || 1);
 
@@ -1014,6 +1031,7 @@ async function main() {
           // exists because a `local-lvm` default on a WD Red provisions fine and then
           // fails every benchmark with nothing in any log to say why.
           const images = operator.PROXMOX_STORAGE_IMAGES;
+          const iso = operator.PROXMOX_STORAGE_ISO;
           for (const [node, options] of Object.entries(probe.survey?.storages ?? {})) {
             const chosen = options.find((o) => o.id === images);
             if (chosen?.rotational === true) {
@@ -1025,6 +1043,24 @@ async function main() {
                   `PROXMOX_STORAGE_IMAGES="${images}" is ROTATIONAL on ${node} (${chosen.why}) — ` +
                   `nodes provision fine and then fail every benchmark, with no visible cause.`,
               });
+            }
+            // Can each storage hold what it was named for? Proxmox states this outright, so
+            // it is knowable rather than guessed — and the ISO half went unchecked until an
+            // operator set it to `local-lvm` (LVM-thin, no ISO content) and lost two
+            // provisions to a pydantic error on an empty `iso_name`, four hours downstream.
+            for (const [name, id, need] of [
+              ["PROXMOX_STORAGE_ISO", iso, "iso"],
+              ["PROXMOX_STORAGE_IMAGES", images, "images"],
+            ] as const) {
+              const problem = storageContentProblem(id ?? "", options, need);
+              if (problem) {
+                report.findings.push({
+                  severity: "error",
+                  rule: "STORAGE_CANNOT_HOLD_CONTENT",
+                  file: ".env.operator",
+                  message: `${name} on ${node}: ${problem}`,
+                });
+              }
             }
           }
           report.filesChecked.push("proxmox (live)");

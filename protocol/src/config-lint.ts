@@ -595,6 +595,65 @@ export function normalizeInventory(parsed: unknown): InventoryHost[] | null {
 }
 
 /** Rules 2 + 3, over inventory.json. */
+/**
+ * ⭐ Two sources, one fact: `inventory.json` vs the agent's `PROXMOX_STORAGE_*`.
+ *
+ * These describe the same storage twice and only ONE of them reaches the hypervisor.
+ * `inventory.json` is what the agent DECLARES to Flux Hub — it becomes `ProxmoxHost.storageIso`
+ * in the hub's database, so it is what every dashboard, every query and every operator
+ * eyeballing the DB will show. But `buildProvisionYaml` reads `cfg.host`, which comes from
+ * the ENV VARS alone (`agent/src/config.ts`), so the env is what actually provisions.
+ *
+ * Measured 2026-08-29: an operator corrected `storageIso` in `inventory.json`, the hub's DB
+ * duly updated to the right value, the correction was verified there — and the next provision
+ * failed identically, because `PROXMOX_STORAGE_ISO` still held the old one. The DB agreeing
+ * with you is not evidence, and that is precisely what makes this worth a check: the obvious
+ * place to look is authoritative for everything EXCEPT the thing being debugged.
+ *
+ * Errors rather than warns on the ISO/images pair — a divergence here does not degrade, it
+ * fails a provision — but only when both files are present and both name the same host.
+ */
+export function lintStorageAgreement(
+  inventoryText: string,
+  operator: Record<string, string>,
+  file = ".env.operator"
+): Finding[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(inventoryText);
+  } catch {
+    return []; // lintInventory reports malformed JSON; no need to say it twice.
+  }
+  const hosts = Array.isArray(parsed) ? parsed : [];
+  const findings: Finding[] = [];
+  for (const raw of hosts) {
+    const h = raw as Record<string, unknown>;
+    const name = typeof h.name === "string" ? h.name : "(unnamed host)";
+    for (const [key, invField] of [
+      ["PROXMOX_STORAGE_ISO", "storageIso"],
+      ["PROXMOX_STORAGE_IMAGES", "storageImages"],
+      ["PROXMOX_NETWORK", "network"],
+    ] as const) {
+      const declared = h[invField];
+      const used = operator[key];
+      // Only compare when the inventory actually states it. An absent field means "use the
+      // agent default", which is not a disagreement.
+      if (typeof declared !== "string" || !declared || !used || declared === used) continue;
+      findings.push({
+        rule: "STORAGE_DECLARED_NOT_USED",
+        severity: "error",
+        file,
+        message:
+          `${key}="${used}" but data/inventory.json declares ${invField}="${declared}" for host ` +
+          `${name}. The ENV value is what provisions; the inventory value is only what Flux Hub ` +
+          `is told. Checking the hub's database would show "${declared}" and look correct while ` +
+          `every provision uses "${used}". Set both.`,
+      });
+    }
+  }
+  return findings;
+}
+
 export function lintInventory(
   inventoryText: string,
   hostsFromConfig: string[],
@@ -819,6 +878,10 @@ export function runDoctor(input: DoctorInput): DoctorReport {
   if (input.inventoryJson != null) {
     filesChecked.push("inventory.json");
     findings.push(...lintInventory(input.inventoryJson, hostsFromConfig));
+    // Needs both files, so it lives here rather than in either one's own linter.
+    if (input.envOperator != null) {
+      findings.push(...lintStorageAgreement(input.inventoryJson, operatorRec));
+    }
   }
 
   if (input.manifestJson != null && input.configEnv != null) {

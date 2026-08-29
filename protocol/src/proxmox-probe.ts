@@ -267,6 +267,18 @@ export const REQUIRED_PRIVS = [
   "VM.PowerMgmt",
   "Datastore.AllocateSpace",
   "Sys.Audit",
+  // ⭐ On PVE 8+, bridges are behind SDN permissions: without these, GET
+  // /nodes/<node>/network FILTERS the bridge out of the response rather than erroring, and
+  // arcane-mage's `validate_network` finds no match and fails with "Network not present on
+  // hypervisor" — a message that sends you to check a bridge which is present, up, and
+  // correctly configured.
+  //
+  // Missing here until 2026-08-29 because no provision had ever RUN as this role. Every
+  // provision on the reference fleet used a PVEAdmin token (`arcane-mage@pam!provisioner`,
+  // `mt-agent@pve`), and PVEAdmin carries SDN.* incidentally. The first least-privilege
+  // provision failed on it, four other failures deep.
+  "SDN.Use",
+  "SDN.Audit",
 ];
 
 /**
@@ -304,7 +316,11 @@ export async function probeProxmox(
         ? {
             name: "token holds the privileges the agent needs",
             status: "pass",
-            detail: `${REQUIRED_PRIVS.length} checked at /`,
+            // Says where the answer came from, because this line has been WRONG in practice:
+            // /access/permissions is the token describing itself, and on 2026-08-29 it listed
+            // the full Datastore set for a token that could not read a single storage. The
+            // `storage readable` check below is the one that exercises it.
+            detail: `${REQUIRED_PRIVS.length} checked at / (self-reported by /access/permissions)`,
           }
         : {
             name: "token holds the privileges the agent needs",
@@ -374,6 +390,50 @@ export async function probeProxmox(
         });
       }
       survey.storages[node] = options;
+
+      // ⭐ EXERCISED, not self-reported. Measured 2026-08-29 on pve50: `/access/permissions`
+      // returned the complete `Datastore.*` set while EVERY real storage call failed — the
+      // list came back `200 {"data":[]}` and a content read 403'd on `/storage/local`. The
+      // privilege check above passed a token that could not do its job, and the operator's
+      // first sight of it was an unreadable arcane-mage traceback two failed provisions later.
+      //
+      // A token describing its own privileges is a claim; a storage it can actually read is a
+      // fact. An empty list is the load-bearing case: it does not throw, so before this it
+      // produced NO finding at all and the wizard simply offered no storage options.
+      if (options.length === 0) {
+        checks.push({
+          name: `${node}: storage readable`,
+          status: "fail",
+          detail:
+            `the token authenticates and can see ${node}, but that node reports NO storage. ` +
+            `That is a permission result, not an empty hypervisor — and note the privilege ` +
+            `check above can still PASS, because it asks the token about itself. Known cause: ` +
+            `pvedaemon/pveproxy serving a stale ACL after the node was separated from a ` +
+            `cluster (\`systemctl restart pvedaemon pveproxy\` on ${node}).`,
+        });
+      } else {
+        // One real read, against a storage the agent will actually use. ISO first: it is the
+        // one the provision path needs and the one whose absence surfaces last and worst.
+        const target = options.find((o) => o.active && o.content.includes("iso")) ?? options.find((o) => o.active);
+        if (target) {
+          try {
+            await get<unknown>(creds, `/api2/json/nodes/${node}/storage/${target.id}/content`);
+            checks.push({
+              name: `${node}: storage readable`,
+              status: "pass",
+              detail: `read ${target.id} (${options.length} storage(s) visible)`,
+            });
+          } catch (e) {
+            checks.push({
+              name: `${node}: storage readable`,
+              status: "fail",
+              detail:
+                `${node} lists ${target.id}, but reading it failed: ${(e as Error).message}. ` +
+                `The privilege check above is self-reported and does not catch this.`,
+            });
+          }
+        }
+      }
     } catch (e) {
       checks.push({ name: `${node}: storage list`, status: "fail", detail: (e as Error).message });
     }
@@ -413,6 +473,53 @@ export function isoStorages(options: StorageOption[]): StorageOption[] {
  * media question is the wrong question for a network share, and a storage that is not
  * active here is not a choice at all.
  */
+/**
+ * Can the storage the operator NAMED actually hold what they named it for?
+ *
+ * This exists because of a real provision failure (2026-08-29, pve50): `PROXMOX_STORAGE_ISO`
+ * was set to `local-lvm`, which is LVM-thin and cannot hold ISO content at all. Nothing
+ * objected. The agent found no ArcaneOS ISO, emitted a config with an empty `iso_name`, and
+ * the operator's first sight of the problem was a Python traceback from `arcane-mage` four
+ * hours later — a pydantic pattern failure on `^FluxLive-\d{10}\.iso$`, which names neither
+ * the storage nor the setting that caused it.
+ *
+ * Proxmox states what each storage may hold, so this is *knowable* rather than a heuristic —
+ * which is the whole argument for checking it: `content.includes("iso")` is one comparison,
+ * and skipping it costs a provision cycle and an unreadable stack trace.
+ *
+ * Returns `undefined` when there is nothing to say, INCLUDING when it cannot be judged (no
+ * survey, e.g. the probe was skipped). Silence here means "not disproved", never "verified" —
+ * callers that want to distinguish those must check `options.length` themselves.
+ */
+export function storageContentProblem(
+  id: string,
+  options: StorageOption[],
+  need: "iso" | "images"
+): string | undefined {
+  if (!id || options.length === 0) return undefined;
+  const found = options.find((o) => o.id === id);
+  if (!found) {
+    return `"${id}" is not a storage this token can see. Available: ${options.map((o) => o.id).join(", ") || "none"}.`;
+  }
+  if (!found.content.includes(need)) {
+    return (
+      `"${id}" is ${found.type} and cannot hold ${need} content ` +
+      `(Proxmox says it holds: ${found.content.join(", ") || "nothing"}). ` +
+      (need === "iso"
+        ? `The agent would find no ArcaneOS ISO there, and the provision fails later inside ` +
+          `arcane-mage on an empty iso_name rather than here.`
+        : `VM disks cannot be created on it.`)
+    );
+  }
+  // Ordered after the content check on purpose: a storage that is BOTH the wrong type and
+  // inactive should be reported as the wrong type, which is the fact that does not change
+  // when the node comes back.
+  if (!found.active) {
+    return `"${id}" is defined but not active on this node, so the agent cannot use it from here.`;
+  }
+  return undefined;
+}
+
 export function describeStorage(o: StorageOption): string {
   if (!o.active) return "elsewhere in the cluster";
   if (o.rotational === true) return "HDD";
