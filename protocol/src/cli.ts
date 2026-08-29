@@ -263,19 +263,50 @@ async function askAnswers(minimums: Record<string, number> = TIER_FLOORS_CENTS):
     // prose description of it. The operator is holding the output of Step 0.1 — two values
     // the runbook names as PROXMOX_TOKEN_ID and PROXMOX_TOKEN_SECRET — and matching those
     // names here removes the guess about which half goes where.
-    console.log("\nProxmox API token (onboarding Step 0.1):");
-    const proxmoxUrl = await ask("  Proxmox URL (an IP is safest — this runs inside a container)", "https://192.168.1.10:8006");
-    const proxmoxTokenId = await ask("  PROXMOX_TOKEN_ID", "fluxhub@pve!agent");
-    const proxmoxTokenSecret = await ask("  PROXMOX_TOKEN_SECRET (printed once when you created it)");
-
     // ⭐ Proved HERE, not five steps later in `mt-agent doctor`. A mistyped secret, a
     // path-scoped token, a URL the container cannot resolve — all of them used to
     // surface long after the step that caused them, in a different tool.
     //
-    // Never fatal: this is a scaffolder, and an operator whose hypervisor is behind a
-    // VPN or momentarily down must still be able to generate their files.
+    // The probe is not only validation: a PASS fills `survey`, and `survey` supplies the
+    // defaults for the node names and storage ids asked further down. A failed probe
+    // used to print a warning and carry on, which quietly demoted the rest of the wizard
+    // to hand-typing exactly the two answers that fail SILENTLY later — a node name that
+    // does not exist, and `local-lvm` on a spinning disk. So we now ask again instead of
+    // accepting the failure by default.
+    //
+    // Still escapable: this is a scaffolder, and an operator whose hypervisor is behind a
+    // VPN or momentarily down must be able to generate their files. `skip` is spelled out
+    // at the retry prompt, so going on without a verified token is a decision rather than
+    // the path of least resistance.
+    console.log("\nProxmox API token (onboarding Step 0.1):");
+    let proxmoxUrl = "";
+    let proxmoxTokenId = "";
+    let proxmoxTokenSecret = "";
     let survey: ProxmoxSurvey | undefined;
-    if (proxmoxUrl && proxmoxTokenId && proxmoxTokenSecret) {
+    for (;;) {
+      proxmoxUrl = await ask(
+        "  Proxmox URL (an IP always works; a name must resolve INSIDE the container) — or `skip`",
+        proxmoxUrl || "https://192.168.1.10:8006"
+      );
+      if (proxmoxUrl.toLowerCase() === "skip") {
+        proxmoxUrl = "";
+        console.log("  → skipped. Fill PROXMOX_* in .env.operator, then `mt-manifest doctor --check-proxmox`.");
+        break;
+      }
+      proxmoxTokenId = await ask("  PROXMOX_TOKEN_ID", proxmoxTokenId || "fluxhub@pve!agent");
+      // The captured secret is deliberately NOT offered back as a default: `ask` echoes
+      // defaults in brackets, and a retry loop would then print the token secret to the
+      // terminal on every round. Enter re-uses it without showing it.
+      const secretPrompt = proxmoxTokenSecret
+        ? "  PROXMOX_TOKEN_SECRET (Enter keeps the one you typed)"
+        : "  PROXMOX_TOKEN_SECRET (printed once when you created it)";
+      proxmoxTokenSecret = (await ask(secretPrompt)) || proxmoxTokenSecret;
+
+      if (!proxmoxUrl || !proxmoxTokenId || !proxmoxTokenSecret) {
+        console.log("    all three are needed to verify the token.");
+        continue;
+      }
+
       // Several seconds of silence with no cursor is indistinguishable from a hang, and
       // this is the one prompt that goes to the network before answering.
       console.log("  Wait while the token is verified…");
@@ -285,9 +316,14 @@ async function askAnswers(minimums: Record<string, number> = TIER_FLOORS_CENTS):
         tokenSecret: proxmoxTokenSecret,
       });
       console.log(formatProbe(probe.checks));
-      survey = probe.survey;
-      if (!probe.ok) {
-        console.log("  → continuing anyway; fix the above, then re-run `mt-manifest doctor --check-proxmox`.");
+      if (probe.ok) {
+        survey = probe.survey;
+        break;
+      }
+      const again = await ask("  → fix the above and retry, or `skip` to go on unverified", "retry");
+      if (again.toLowerCase().startsWith("s")) {
+        console.log("  → going on unverified; re-run `mt-manifest doctor --check-proxmox` once it is fixed.");
+        break;
       }
     }
 

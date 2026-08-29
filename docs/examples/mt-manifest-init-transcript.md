@@ -44,7 +44,7 @@ Flux app name for your Coalition [coalition-victor-yankee]:
   → COALITION_URL will be https://coalition-victor-yankee.app.runonflux.io
 
 Proxmox API token (onboarding Step 0.1):
-  Proxmox URL (an IP is safest — this runs inside a container) [https://192.168.1.10:8006]: https://pve30:8006
+  Proxmox URL (an IP always works; a name must resolve INSIDE the container) — or `skip` [https://192.168.1.10:8006]: https://pve30:8006
   PROXMOX_TOKEN_ID [fluxhub@pve!agent]:
   PROXMOX_TOKEN_SECRET (printed once when you created it): 229fb838-2934-96ee-f4d7-177c4776d754
   Wait while the token is verified…

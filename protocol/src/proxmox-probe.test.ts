@@ -169,6 +169,22 @@ test("loopback is explained as the container's own loopback", () => {
   assert.match(detail, /refused|container itself/);
 });
 
+test("⭐ a NAME that resolved to loopback is named as such, not blamed on the port", () => {
+  // The trap that mounting the host's /etc/hosts introduces: Debian maps a bare hostname
+  // to 127.0.1.1, so the URL string looks nothing like loopback while the address is.
+  const err = Object.assign(new Error("connect ECONNREFUSED 127.0.1.1:8006"), { address: "127.0.1.1" });
+  const detail = explainProxmoxError(err, "https://pve50:8006");
+  assert.match(detail, /127\.0\.1\.1/);
+  assert.match(detail, /CONTAINER/);
+  assert.match(detail, /token is not implicated/);
+  assert.doesNotMatch(detail, /wrong port/);
+});
+
+test("a real ECONNREFUSED against a LAN address still reads as a port problem", () => {
+  const err = Object.assign(new Error("connect ECONNREFUSED 192.168.102.50:8006"), { address: "192.168.102.50" });
+  assert.match(explainProxmoxError(err, "https://pve50:8006"), /wrong port/);
+});
+
 test("an authenticating token that sees no node is a failure, not an empty pass", async () => {
   const probe = await probeProxmox(CREDS, fakeGet({ "/api2/json/nodes": [] }));
   assert.equal(probe.ok, false);

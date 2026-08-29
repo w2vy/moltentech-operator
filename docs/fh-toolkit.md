@@ -59,7 +59,9 @@ mt-manifest() {
       echo "note: could not refresh $img — using the cached image" >&2
     fi
   fi
-  docker run --rm -i -v "$PWD:/work" -u "$(id -u):$(id -g)" "$img" "$@"
+  # /etc/hosts read-only so hostnames resolve inside the container as they do at your
+  # prompt — see the caveat in operator-onboarding.md Step 0.5 for the loopback edge.
+  docker run --rm -i -v "$PWD:/work" -v /etc/hosts:/etc/hosts:ro -u "$(id -u):$(id -g)" "$img" "$@"
 }
 ```
 

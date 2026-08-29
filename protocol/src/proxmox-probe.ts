@@ -204,12 +204,30 @@ interface StorageRow {
  * on the host and fails inside — and reporting that as "token invalid" sends the
  * operator to regenerate a credential that was never wrong.
  */
+/** `127.0.0.0/8` or IPv6 `::1` — inside a container these are the container itself. */
+function isLoopbackAddress(addr: string): boolean {
+  return /^127\./.test(addr) || addr === "::1";
+}
+
 export function explainProxmoxError(err: Error, url: string): string {
   const msg = err.message;
   if (/EAI_AGAIN|ENOTFOUND|getaddrinfo/i.test(msg)) {
     return (
       `cannot resolve the hostname in ${url}. Inside a container, names resolve in the ` +
       `CONTAINER — use an IP address, or a name this container can resolve. The token is not implicated.`
+    );
+  }
+  // The name resolved, but to a loopback address — which the URL string alone cannot
+  // show. Debian maps a bare hostname to `127.0.1.1` in /etc/hosts, so mounting the
+  // host's /etc/hosts to make names resolve can hand the container an address that
+  // points back at ITSELF. Left to the generic ECONNREFUSED text below this reads as a
+  // wrong port, and the operator changes the one thing that was right.
+  const addr = (err as Error & { address?: string }).address;
+  if (addr && isLoopbackAddress(addr)) {
+    return (
+      `the name in ${url} resolved to ${addr}, which inside a container is the CONTAINER, ` +
+      `not the hypervisor. Its /etc/hosts maps that name to loopback — use the ` +
+      `hypervisor's LAN IP in the URL. The token is not implicated.`
     );
   }
   if (/ECONNREFUSED/i.test(msg)) {

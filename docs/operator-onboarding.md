@@ -115,7 +115,7 @@ cluster, understand that this token can allocate VMs on any node in it.
 pveum role add FluxHubAgent -privs \
   "VM.Allocate,VM.Clone,VM.Audit,VM.Config.CDROM,VM.Config.CPU,VM.Config.Disk,\
 VM.Config.HWType,VM.Config.Memory,VM.Config.Network,VM.Config.Options,\
-VM.Console,VM.Monitor,VM.PowerMgmt,\
+VM.Console,VM.PowerMgmt,\
 Datastore.Allocate,Datastore.AllocateSpace,Datastore.AllocateTemplate,Datastore.Audit,\
 Sys.Audit"
 pveum user add fluxhub@pve
@@ -140,6 +140,17 @@ connection to read your storage and node list, which is what fills in Step 0.2 f
 
 If a provision later fails with a 403 naming a privilege, add it to the role
 (`pveum role modify FluxHubAgent -privs "…"`) rather than escalating to `PVEAdmin`.
+
+⚠️ **If `role add` aborts** (e.g. `invalid privilege '…'` on a PVE build that renamed
+one), the role is not created — but the later `user add` and `token add` still run and
+leave a privilege-less `fluxhub@pve` / `fluxhub@pve!agent` behind. Tear those down before
+retrying, or the second `user add` errors:
+
+```sh
+pveum user token remove fluxhub@pve agent
+pveum user delete fluxhub@pve
+pveum role delete FluxHubAgent   # harmless "does not exist" if it never got created
+```
 
 ### 0.2 Pick the right storage — this one fails silently
 
@@ -230,7 +241,10 @@ mt-manifest() {
       echo "note: could not refresh $img — using the cached image" >&2
     fi
   fi
-  docker run --rm -i -v "$PWD:/work" -u "$(id -u):$(id -g)" "$img" "$@"
+  # /etc/hosts is mounted read-only so hostnames resolve the same INSIDE the container as
+  # they do at your prompt — on a Proxmox node that file already names every peer, so
+  # `https://pve50:8006` just works instead of needing an IP.
+  docker run --rm -i -v "$PWD:/work" -v /etc/hosts:/etc/hosts:ro -u "$(id -u):$(id -g)" "$img" "$@"
 }
 mt-manifest keygen             # writes manifest-key.pem (KEEP SECRET, 0600) + prints your pubkey
 ```
@@ -240,6 +254,14 @@ pulls and stops, or followed by a command it pulls and then runs it. The flag ha
 in the wrapper: the CLI runs *inside* the container and cannot replace its own image.
 `mt-manifest version` prints the commit the running image was built from, which is how you
 tell a stale image from a missing feature.
+
+⚠️ **The `/etc/hosts` mount has one edge.** It hands the container *your* name→address
+map, and any name your host maps to a **loopback** address (`127.0.0.1`, or the
+`127.0.1.1` Debian gives a bare hostname) then points at the container itself, not at the
+hypervisor. Proxmox nodes map their own name to the real LAN IP, so this is rare — and
+the probe detects it by the *resolved address* and says so, rather than reporting a wrong
+port. If you hit it, put the LAN IP in `PROXMOX_URL`. Drop the `-v /etc/hosts` mount
+entirely if you would rather the container resolve nothing but DNS.
 
 ⚠️ **The `-i` is load-bearing.** Without it the container gets no stdin, and `init` — the
 only subcommand that asks questions — prints its first prompt and exits at EOF, with no
@@ -311,6 +333,15 @@ than merely being checked for:
 - **Questions are in the order you can answer them**: who you are, then what you sell,
   then a per-host stock-take of the hardware last — with your Proxmox's own node and
   storage names offered as the defaults, because `init` has already connected by then.
+- **The token is proved before the wizard goes on, and a failure re-asks.** The probe is
+  not only validation: a pass is what lets `init` offer your real node names and storage
+  ids as defaults. So a failed probe now loops back to the URL / token id / secret
+  prompts instead of warning and carrying on — carrying on silently demoted the rest of
+  the run to hand-typing the two answers that fail *silently* later, a node name that
+  does not exist and `local-lvm` on a spinning disk. Enter re-uses the secret you already
+  typed without echoing it. Answer `skip` (offered at both prompts) if your hypervisor is
+  behind a VPN or down and you need the files anyway — then fix `PROXMOX_*` in
+  `.env.operator` and run `mt-manifest doctor --check-proxmox`.
 - Prices are asked in **dollars** and converted, so an extra zero cannot slip in.
   Each tier has a minimum FH will accept; `init` defaults to it and refuses less.
 
@@ -414,9 +445,11 @@ Flux Hub keeps it encrypted and only uses it outbound. That copy matches by cons
 you pasted what `/onboard` issued — so the drift worth checking is the deployed app, which
 is exactly what this covers.
 
-⚠️ **Prefer an IP address in `PROXMOX_URL`.** `mt-manifest` runs in a container, so a
-hostname is resolved by the *container*, not by your shell — `pve30` can work at your
-prompt and fail inside. The probe tells those apart rather than blaming your token.
+⚠️ **`PROXMOX_URL` is resolved by the container, not by your shell.** With the
+`-v /etc/hosts:/etc/hosts:ro` mount from Step 0.5 a hostname works, because the container
+inherits your map; without it, `pve30` can work at your prompt and fail inside, and an IP
+address is the safe answer. The probe tells all of these apart — unresolvable name,
+resolved-to-loopback, no route, wrong port, bad token — rather than blaming your token.
 
 ⚠️ The deeper agent-side checks (CA trust store, the ISO actually present in the ISO
 storage, `MANIFEST_KEY` matching the pinned pubkey) still run in the agent image as
