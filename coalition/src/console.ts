@@ -35,6 +35,7 @@ import {
   HEADER_AGENT_SLUG,
   COLLATERAL_MIN_CONFIRMATIONS,
   unwrapManifest,
+  FOUNDATION_VM_PREFIX,
 } from "@moltentech/protocol";
 import { getCollateralSnapshot } from "./collateral";
 import { bodyHash, checkFreshness, verifyRequest, type RequestEnvelope } from "@moltentech/protocol/signing";
@@ -208,6 +209,21 @@ export function handleAgentPending(cfg: CoalitionConfig, rawBody: Buffer, header
   return json(200, { ok: true, pending: pending.size, ...(collapsed ? { collapsed } : {}) });
 }
 
+/**
+ * Is this a Foundation (idle-fill) node rather than a customer's?
+ *
+ * 🔒 Derived HERE, from the VM name, and never accepted as a flag from MT. A spoofable
+ * "no customer" label is a lever for getting an operator to sign away a real customer's
+ * node, which is the same reason the agent's delete exemption keys on the VM name and not
+ * on a job field. The name is the identity of the object on the hypervisor; a field in a
+ * payload is whatever the sender says it is.
+ */
+function isFoundationVm(vmName: string): boolean {
+  return FOUNDATION_VM_PREFIX.length > 0 && vmName.toLowerCase().startsWith(FOUNDATION_VM_PREFIX);
+}
+
+const FOUNDATION_BADGE = `<span class="badge" title="Idle-fill placement — donated capacity, no customer and no billing.">Foundation node — no customer</span>`;
+
 /** POST /agent/state — replace the dashboard's slot-state snapshot. */
 export function handleAgentState(cfg: CoalitionConfig, rawBody: Buffer, headers: IncomingHttpHeaders): ConsoleResult {
   if (!verifyAgentRequest(cfg, "POST", "/agent/state", rawBody, headers)) return json(401, { error: "Unauthorized" });
@@ -298,7 +314,13 @@ export function handleConsoleIndex(cfg: CoalitionConfig): ConsoleResult {
   const stateRows = nodeState.length
     ? nodeState
         .map((n) => {
-          const rental = n.rentalCode ? `<code>${escapeHtmlAttribute(n.rentalCode)}</code>` : `<span class="muted">—</span>`;
+          // A Foundation fill carries a normal-looking MT-#### code, so the code alone
+          // never says "nobody is paying for this" — the badge replaces it outright.
+          const rental = isFoundationVm(n.vmName)
+            ? FOUNDATION_BADGE
+            : n.rentalCode
+              ? `<code>${escapeHtmlAttribute(n.rentalCode)}</code>`
+              : `<span class="muted">—</span>`;
           return `<tr><td class="mono">${escapeHtmlAttribute(n.nodeName)}</td><td class="mono">${escapeHtmlAttribute(n.vmName)}</td><td>${escapeHtmlAttribute(n.tier)}</td><td>${statusBadge(n.status)}</td><td>${rental}</td></tr>`;
         })
         .join("")
@@ -320,7 +342,13 @@ export function handleConsoleIndex(cfg: CoalitionConfig): ConsoleResult {
     ? actions
         .map((it) => {
           const vm = escapeHtmlAttribute(`${it.vmName}@${it.nodeName}`);
-          const code = !stateGated
+          // Expected to be rare-to-never: an eviction's delete is exempt from owner auth by
+          // the same `fh-` prefix, so a Foundation VM has little reason to reach this queue.
+          // Badged anyway — if one ever does appear, the operator must not read it as a
+          // customer's node.
+          const code = isFoundationVm(it.vmName)
+            ? FOUNDATION_BADGE
+            : !stateGated
             ? `<span class="badge badge-warn">hidden</span>`
             : it.rentalCode
               ? `<code>${escapeHtmlAttribute(it.rentalCode)}</code>`
