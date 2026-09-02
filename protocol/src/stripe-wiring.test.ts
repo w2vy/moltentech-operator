@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { classifyEndpoints, probeStripeWiring } from "./stripe-wiring";
+import { classifyEndpoints, isProdHub, probeStripeWiring } from "./stripe-wiring";
 
 const MINE = "https://coalition-test1.app.runonflux.io";
 const rules = (fs: ReturnType<typeof classifyEndpoints>) => fs.map((f) => f.rule).sort();
@@ -287,11 +287,98 @@ test("⭐ a LIVE key against staging stays an ERROR — that one charges real mo
   );
 });
 
+/**
+ * ⭐ REGRESSION, 2026-09-02. The hub moved to fluxhub.moltentech.us and the prod check was
+ * a substring match — /(^|\/\/)(www\.)?moltentech\.us/ && !/staging/ — which the new
+ * canonical hostname FAILS. Every branch of the money check inverted at once, and the
+ * whole suite stayed green because every case in it pinned the old host.
+ *
+ * That is the real lesson here: these tests were not wrong, they were incomplete in
+ * exactly the direction that mattered. Keep a case per accepted production hostname.
+ */
+test("⭐ the CANONICAL hub host is production — a live key there is a matched pair, not an error", async () => {
+  await withStubbedFetch(
+    () => ({ status: 200, body: { data: [{ url: `${MY_URL}/webhook`, status: "enabled" }] } }),
+    async () => {
+      const findings = await probeStripeWiring({
+        stripeSecretKey: "rk_live_fake",
+        coalitionUrl: MY_URL,
+        mtBaseUrl: "https://fluxhub.moltentech.us",
+      });
+      assert.deepEqual(
+        findings.filter((f) => f.rule === "STRIPE_KEY_MODE_MISMATCH"),
+        [],
+        "a live key on the canonical prod hub must not be reported as a staging mistake"
+      );
+    }
+  );
+});
+
+test("⭐ a TEST key against the canonical hub still WARNS — the sandbox nudge must not go silent", async () => {
+  await withStubbedFetch(
+    () => ({ status: 200, body: { data: [{ url: `${MY_URL}/webhook`, status: "enabled" }] } }),
+    async () => {
+      const findings = await probeStripeWiring({
+        stripeSecretKey: "rk_test_fake",
+        coalitionUrl: MY_URL,
+        mtBaseUrl: "https://fluxhub.moltentech.us",
+      });
+      const f = findings.find((x) => x.rule === "STRIPE_KEY_MODE_MISMATCH")!;
+      assert.ok(f, "the swap-before-you-list nudge must still fire on the new host");
+      assert.equal(f.severity, "warning");
+      assert.match(f.message, /whsec_/);
+    }
+  );
+});
+
+test("an UNRECOGNISED host is not production, and fails loud rather than silent", async () => {
+  // A live key against a host we do not know must raise the error, never be waved through
+  // because the string happened to contain "moltentech.us".
+  await withStubbedFetch(
+    () => ({ status: 200, body: { data: [{ url: `${MY_URL}/webhook`, status: "enabled" }] } }),
+    async () => {
+      for (const url of [
+        "https://evil-moltentech.us.example.com",
+        "https://staging.moltentech.us",
+        "not a url at all",
+      ]) {
+        const findings = await probeStripeWiring({
+          stripeSecretKey: "rk_live_fake",
+          coalitionUrl: MY_URL,
+          mtBaseUrl: url,
+        });
+        const f = findings.find((x) => x.rule === "STRIPE_KEY_MODE_MISMATCH")!;
+        assert.equal(f?.severity, "error", url);
+      }
+    }
+  );
+});
+
+test("isProdHub accepts the accepted hostnames and nothing else", () => {
+  for (const ok of [
+    "https://fluxhub.moltentech.us",
+    "https://fluxhub.moltentech.us/",
+    "https://FLUXHUB.MOLTENTECH.US",
+    "fluxhub.moltentech.us",
+    "https://www.moltentech.us",
+    "https://moltentech.us",
+  ]) assert.equal(isProdHub(ok), true, ok);
+
+  for (const no of [
+    "https://staging.moltentech.us",
+    "https://fluxapp-staging.moltentech.us",
+    "https://moltentech.us.attacker.example",
+    "https://notmoltentech.us",
+    "",
+  ]) assert.equal(isProdHub(no), false, no);
+});
+
 test("a matched pair in either mode reports no mismatch at all", async () => {
   await withStubbedFetch(
     () => ({ status: 200, body: { data: [{ url: `${MY_URL}/webhook`, status: "enabled" }] } }),
     async () => {
       for (const [key, url] of [
+        ["rk_live_fake", "https://fluxhub.moltentech.us"],
         ["rk_live_fake", "https://www.moltentech.us"],
         ["rk_test_fake", "https://staging.moltentech.us"],
       ] as const) {
