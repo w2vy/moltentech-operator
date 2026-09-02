@@ -11,7 +11,7 @@ import { loadConfig } from "./config";
 
 const BASE = {
   PROVIDER_SLUG: "acme-nodes",
-  MT_BASE_URL: "https://www.moltentech.us",
+  MT_BASE_URL: "https://fluxhub.moltentech.us",
   AGENT_KEY: "agent-key",
   COALITION_KEY: "coalition-key",
 };

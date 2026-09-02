@@ -18,7 +18,7 @@ const BASE: Answers = {
   providerSlug: "acme-nodes",
   providerName: "Acme Nodes",
   ownerAddress: "t1ownerWallet",
-  mtBaseUrl: "https://www.moltentech.us",
+  mtBaseUrl: "https://fluxhub.moltentech.us",
   fluxAppName: "coalition-acme",
   hosts: [
     {

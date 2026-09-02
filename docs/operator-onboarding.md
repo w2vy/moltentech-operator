@@ -500,7 +500,7 @@ PROVIDER_SLUG=your-slug
 PROVIDER_NAME=Your Operator Name
 PROVIDER_LOCATION=City, Country
 PROVIDER_CONTACT=ops@example.com
-MT_BASE_URL=https://www.moltentech.us
+MT_BASE_URL=https://fluxhub.moltentech.us
 # COALITION_URL — the stable HTTPS URL your Coalition will serve at. Flux app URLs are
 # deterministic: https://<your-flux-app-name>.app.runonflux.io. Choose the app name NOW
 # and fill this in; the app itself is created in Step 4.
@@ -870,7 +870,7 @@ your Proxmox token + manifest key, so it must live on infrastructure you control
 Put its config in a private **`.env.operator`** (never commit, `chmod 600`):
 
 ```sh
-MT_BASE_URL=https://www.moltentech.us
+MT_BASE_URL=https://fluxhub.moltentech.us
 PROVIDER_SLUG=your-slug
 # Auth. MANIFEST_KEY (asymmetric signing) is preferred; AGENT_KEY is the legacy bearer.
 # At least one must be set — keep both while you roll over.

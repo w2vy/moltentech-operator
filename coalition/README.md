@@ -29,7 +29,7 @@ Stripe ────▶ POST /webhook ──relay(Bearer agentKey)──▶ MT /a
 ## Run
 ```sh
 npm install
-PROVIDER_SLUG=my-op MT_BASE_URL=https://www.moltentech.us \
+PROVIDER_SLUG=my-op MT_BASE_URL=https://fluxhub.moltentech.us \
 AGENT_KEY=<relay key (operator->MT)> COALITION_KEY=<MT-issued key (MT->operator)> \
 STRIPE_SECRET_KEY=rk_live_<restricted> STRIPE_WEBHOOK_SECRET=whsec_... \
 TIER_PRICES_JSON='{"nimbus":2200,"cumulus":700}' TRIAL_DAYS=1 \

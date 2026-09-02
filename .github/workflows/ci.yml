@@ -183,7 +183,7 @@ jobs:
             "providerName": "CI Generated Operator",
             "providerContact": "ci@example.com",
             "ownerAddress": "t1exampleOwnerWalletAddress",
-            "mtBaseUrl": "https://www.moltentech.us",
+            "mtBaseUrl": "https://fluxhub.moltentech.us",
             "fluxAppName": "coalition-ci-generated",
             "hosts": [{
               "name": "pve-01", "storageImages": "ssd", "storageIso": "iso-store",
@@ -326,7 +326,7 @@ jobs:
             "providerSlug": "ci-selfhost",
             "providerName": "CI Self Host",
             "ownerAddress": "t1exampleOwnerWalletAddress",
-            "mtBaseUrl": "https://www.moltentech.us",
+            "mtBaseUrl": "https://fluxhub.moltentech.us",
             "fluxAppName": "coalition-ci-selfhost",
             "level": "supporter",
             "hosts": [{
@@ -372,7 +372,7 @@ jobs:
         continue-on-error: true   # MT being down must not block an operator's PR
         run: |
           set -uo pipefail
-          live="$(curl -fsS --max-time 20 https://www.moltentech.us/api/tiers)" || {
+          live="$(curl -fsS --max-time 20 https://fluxhub.moltentech.us/api/tiers)" || {
             echo "::warning::could not reach GET /api/tiers — skipping the drift check"
             exit 0
           }
@@ -401,7 +401,7 @@ jobs:
           cat > "$work/config.env" <<'EOF'
           PROVIDER_SLUG=ci-operator
           PROVIDER_NAME=CI Operator
-          MT_BASE_URL=https://www.moltentech.us
+          MT_BASE_URL=https://fluxhub.moltentech.us
           COALITION_URL=https://coalition.example
           HOSTS=pve-01
           TIER_PRICES_JSON={"cumulus":700};

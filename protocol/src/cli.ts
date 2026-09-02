@@ -252,7 +252,7 @@ async function askAnswers(minimums: Record<string, number> = TIER_FLOORS_CENTS):
     // Offered as a choice, never free text by default: free-typing this is what put
     // half a deployment on staging and half on prod.
     const which = await ask("Flux Hub environment — 1) production  2) staging", "1");
-    const mtBaseUrl = which.startsWith("2") ? "https://staging.moltentech.us" : "https://www.moltentech.us";
+    const mtBaseUrl = which.startsWith("2") ? "https://staging.moltentech.us" : "https://fluxhub.moltentech.us";
 
     const fluxAppName = await ask("Flux app name for your Coalition", suggestFluxAppName(providerSlug));
     console.log(`  → COALITION_URL will be ${coalitionUrlFor(fluxAppName)}`);
@@ -794,7 +794,7 @@ async function main() {
       // Same rule as doctor: ask MT for the live minimums, fall back to the bundled
       // table. Done before the prompts so the wizard quotes the real floor.
       const liveMinimums = await fetchTierMinimums(
-        process.env.MT_BASE_URL ?? "https://www.moltentech.us"
+        process.env.MT_BASE_URL ?? "https://fluxhub.moltentech.us"
       );
       if (!liveMinimums) {
         console.error("note: could not reach Flux Hub for live tier minimums — using this tool's bundled copy.");

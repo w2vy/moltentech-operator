@@ -19,7 +19,7 @@ inbound leg). This agent is control-plane only; the Flux nodes run on Proxmox.
 
 ```sh
 npm install
-MT_BASE_URL=https://www.moltentech.us \
+MT_BASE_URL=https://fluxhub.moltentech.us \
 AGENT_KEY=<per-provider agent key from FH admin> \
 PROVIDER_SLUG=<your-slug> \
 PROXMOX_URL=https://127.0.0.1:8006 \

@@ -14,7 +14,7 @@ import type { ProbeResult } from "./proxmox-probe";
  * (agent 200; coalition 400 with the real key, 401 with a deliberately wrong one).
  */
 
-const MT = "https://www.moltentech.us";
+const MT = "https://fluxhub.moltentech.us";
 const COALITION = "https://coalition-test1.app.runonflux.io";
 const PUBKEY = "Zm9vYmFyYmF6cXV1eA==";
 
@@ -136,7 +136,7 @@ test("⭐ only 401 means rejected — a 403 must never send the operator to rota
 
 test("an unreachable hub is a SKIP that says validity is unproven, not a pass", async () => {
   const http: HubHttp = async (req) => {
-    if (req.url.startsWith(MT)) throw new Error("getaddrinfo EAI_AGAIN www.moltentech.us");
+    if (req.url.startsWith(MT)) throw new Error("getaddrinfo EAI_AGAIN fluxhub.moltentech.us");
     return fakeHttp()(req);
   };
   const { checks, findings } = await probeHub(INPUT, http);
