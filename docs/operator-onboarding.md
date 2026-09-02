@@ -32,9 +32,17 @@ price to set, no Stripe account to create.
 
 An **Operator** does all of that and also offers hardware for rent.
 
-`mt-manifest init` is an installstion script you run once you have all the prerequisites configured
-and it also asks if you are a Supporter or Operator during that process. Upgrading to an
-Operator later is a simple process, mostly requiring setting up your Stripe account.
+**Start as a Supporter.** It is the recommended first step, and not a lesser one: it is
+the whole of this runbook minus the money, so you prove the parts that can actually go
+wrong — the Proxmox token, the agent, the Coalition app, a node that boots — without a
+Stripe account in the way. See the Supporter transcript in
+[docs/examples/mt-manifest-init-transcript.md](examples/mt-manifest-init-transcript.md).
+
+`mt-manifest init` is an installation script you run once you have all the prerequisites
+configured, and it asks whether you are a Supporter or an Operator during that process.
+Upgrading to an Operator later is a simple process, mostly requiring setting up your
+Stripe account — the second block of that same transcript is exactly what the upgrade
+adds.
 
 mt-manifest also have commands to test your configuration setting without exposing your keys.
 
@@ -361,9 +369,9 @@ than merely being checked for:
 - Prices are asked in **dollars** and converted, so an extra zero cannot slip in.
   Each tier has a minimum FH will accept; `init` defaults to it and refuses less.
 
-If you are running nodes only for yourself, answer **Supporter**: the scaffold then
-lists no tiers, says so where Stripe would have been asked about, and offers nothing for
-sale. An Operator offers every slot they declared — `init` no longer asks, because the
+If you are running nodes only for yourself — the recommended way to start — answer
+**Supporter**: the scaffold then lists no tiers, says so where Stripe would have been
+asked about, and offers nothing for sale. An Operator offers every slot they declared — `init` no longer asks, because the
 answer was always "all of them"; hold some back later by editing `AGENT_LISTING_JSON` in
 `config.env`.
 
@@ -385,11 +393,13 @@ Re-runnable and scriptable: `mt-manifest init --answers answers.json` takes the 
 answers as a file and runs the same generator, so you can fix one typo without
 re-answering everything.
 
-**What a run actually looks like:** a full redacted transcript, `keygen` through the
-signed manifest, is in
-[docs/examples/mt-manifest-init-transcript.md](examples/mt-manifest-init-transcript.md).
-Every secret in it is a scrambled stand-in — read it for the shape of the run, do not
-copy values out of it.
+**What a run actually looks like:** a full redacted transcript of a **Supporter** run,
+`keygen` through the signed manifest, is in
+[docs/examples/mt-manifest-init-transcript.md](examples/mt-manifest-init-transcript.md);
+a second block at the end of that file shows the only lines an **Operator** run answers
+differently — tiers, prices, Stripe — which is also what a later upgrade adds. Every
+secret in it is a scrambled stand-in — read it for the shape of the run, do not copy
+values out of it.
 
 ### Check your work at any point: `mt-manifest doctor`
 
