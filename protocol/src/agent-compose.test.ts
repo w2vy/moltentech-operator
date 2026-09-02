@@ -20,7 +20,7 @@ const ANSWERS: Answers = {
   providerSlug: "acme-nodes",
   providerName: "Acme Nodes",
   ownerAddress: "t1owner",
-  mtBaseUrl: "https://www.moltentech.us",
+  mtBaseUrl: "https://fluxhub.moltentech.us",
   fluxAppName: "coalition-acme-nodes",
   hosts: [
     {

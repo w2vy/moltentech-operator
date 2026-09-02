@@ -95,7 +95,7 @@ Proxmox host name(s), comma-separated [pve50]:
 
 These must be reachable from outside your LAN, or Flux Hub cannot pull stats:
   203.0.113.186 → 16167, 16187
-  → MT_PUBKEY pinned from https://www.moltentech.us/api/mt-pubkey
+  → MT_PUBKEY pinned from https://fluxhub.moltentech.us/api/mt-pubkey
 Wrote config.env, secrets.env, .env.operator, data/inventory.json, flux-app-spec.json, compose.yaml, README.txt, manifest.json to /work (the directory you ran this from)
 
 ⭐ README.txt explains every file here and what to run when.
@@ -108,7 +108,7 @@ Already done, from the key in this directory:
     (edit config.env later and it goes stale; re-run `mt-manifest sign`)
 
 Next, in order:
-  1. open https://www.moltentech.us/onboard, paste manifest.json, sign with 1HLy2EVVJbDNNXoVxKGgY3HdN422m6hCfe
+  1. open https://fluxhub.moltentech.us/onboard, paste manifest.json, sign with 1HLy2EVVJbDNNXoVxKGgY3HdN422m6hCfe
      → issues AGENT_KEY, COALITION_KEY, COALITION_SIGNING_KEY for secrets.env
   2. Stripe: not needed — you are not listing anything for sale.
   3. `mt-manifest doctor`   ← run it here; it checks every file agrees

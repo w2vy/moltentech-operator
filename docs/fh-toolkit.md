@@ -266,7 +266,7 @@ Shape (see `Answers` in `protocol/src/scaffold.ts` for the full type):
   "providerLocation": "US-East",    // optional
   "providerContact": "ops@acme.io", // optional
   "ownerAddress": "1L1wz2w…",       // required — the wallet that signs forever after
-  "mtBaseUrl": "https://www.moltentech.us",
+  "mtBaseUrl": "https://fluxhub.moltentech.us",
   "fluxAppName": "acmecoalition",   // COALITION_URL is derived from this
   "level": "operator",              // or "supporter"
   "selling": true,                  // derived from `level` when omitted
@@ -583,7 +583,7 @@ The agent's first log line is a summary of every decision it made about its own
 configuration. Read it before anything else:
 
 ```
-[agent] provider=acme mt=https://www.moltentech.us auth=signature ownerAuth=enforced \
+[agent] provider=acme mt=https://fluxhub.moltentech.us auth=signature ownerAuth=enforced \
         courier=on dryRun=false poll=10000ms listing=60000ms
 ```
 

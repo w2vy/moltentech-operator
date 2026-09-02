@@ -20,7 +20,7 @@ const GOOD_CONFIG = `# MoltenTech operator config
 PROVIDER_SLUG=acme-nodes
 PROVIDER_NAME=Acme Nodes
 PROVIDER_CONTACT=ops@acme.example
-MT_BASE_URL=https://www.moltentech.us
+MT_BASE_URL=https://fluxhub.moltentech.us
 COALITION_URL=https://coalition-acme.app.runonflux.io
 OWNER_ADDRESS=1L1wz2wSomeOwnerAddressHere
 HOSTS=pve30,pve50
@@ -28,7 +28,7 @@ TIER_PRICES_JSON={"cumulus":700,"nimbus":2000}
 `;
 
 const GOOD_OPERATOR = `PROVIDER_SLUG=acme-nodes
-MT_BASE_URL=https://www.moltentech.us
+MT_BASE_URL=https://fluxhub.moltentech.us
 COALITION_URL=https://coalition-acme.app.runonflux.io
 OWNER_ADDRESS=1L1wz2wSomeOwnerAddressHere
 MANIFEST_KEY=LS0tLS1CRUdJTiBQUklWQVRFIEtFWS0tLS0t
@@ -201,7 +201,7 @@ test("PRICE_NOT_INTEGER_CENTS: dollars where cents belong", () => {
 
 test("ENV_DUPLICATED_ACROSS_FILES: the half-on-staging snag, caught on MT_BASE_URL", () => {
   const found = lintCrossFile(
-    { MT_BASE_URL: "https://www.moltentech.us" },
+    { MT_BASE_URL: "https://fluxhub.moltentech.us" },
     { MT_BASE_URL: "https://staging.moltentech.us" }
   );
   assert.deepEqual(found.map((f) => f.rule), ["ENV_DUPLICATED_ACROSS_FILES"]);
