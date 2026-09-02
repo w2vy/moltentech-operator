@@ -146,6 +146,43 @@ async function stripeGet(key: string, path: string): Promise<{ ok: boolean; stat
 }
 
 /**
+ * Is this MT_BASE_URL the PRODUCTION hub?
+ *
+ * Decided on the parsed hostname, never a substring match. This gates a real-money check,
+ * so the predecessor is worth naming: it was
+ *
+ *     /(^|\/\/)(www\.)?moltentech\.us/.test(url) && !/staging/.test(url)
+ *
+ * which read `fluxhub.moltentech.us` — the canonical hub since 2026-09-02 — as NOT
+ * production, and that inverted BOTH branches at once: a LIVE key against production
+ * became a false error telling the operator their correct setup would charge real money,
+ * and a TEST key against production stopped warning at all. A substring test cannot
+ * survive the host it hardcodes being renamed.
+ *
+ * An unrecognised host is deliberately NOT production. That direction fails LOUD rather
+ * than silent: a live key against an unknown host raises the error, instead of a live key
+ * being waved through because the hostname happened to contain "moltentech.us".
+ *
+ * ⚠️ Add the new name here when the canonical hub hostname changes.
+ */
+const PROD_HUB_HOSTS = new Set([
+  "fluxhub.moltentech.us", // canonical since 2026-09-02
+  "www.moltentech.us",     // transitional alias; 301s to fluxhub once the fleet has moved
+  "moltentech.us",         // bare apex; redirects to fluxhub at the Cloudflare edge
+]);
+
+export function isProdHub(mtBaseUrl: string): boolean {
+  // Tolerate a bare host with no scheme — the old regex matched those, and config files
+  // in the wild carry them.
+  const withScheme = /:\/\//.test(mtBaseUrl) ? mtBaseUrl : `https://${mtBaseUrl}`;
+  try {
+    return PROD_HUB_HOSTS.has(new URL(withScheme).hostname.toLowerCase());
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Probe the live account. Returns findings only — never throws, because `doctor` must
  * still report its file-level results when Stripe is unreachable.
  */
@@ -170,7 +207,7 @@ export async function probeStripeWiring(args: {
   // recoverable, a real charge is not.
   const isTestKey = /^(sk|rk)_test_/.test(stripeSecretKey);
   if (mtBaseUrl) {
-    const mtIsProd = /(^|\/\/)(www\.)?moltentech\.us/.test(mtBaseUrl) && !/staging/.test(mtBaseUrl);
+    const mtIsProd = isProdHub(mtBaseUrl);
     if (mtIsProd && isTestKey) {
       findings.push({
         rule: "STRIPE_KEY_MODE_MISMATCH",
