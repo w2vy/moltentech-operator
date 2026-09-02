@@ -23,6 +23,7 @@ import {
 import { verifySession } from "./session";
 import { getStaticAsset } from "./assets";
 import { COALITION_VERSION } from "./version";
+import { stripeLiveMode } from "./stripe-mode";
 
 function readBody(req: http.IncomingMessage): Promise<Buffer> {
   return new Promise((resolve, reject) => {
@@ -52,6 +53,12 @@ export function createServer(stripe: StripeLike | null, cfg: CoalitionConfig): h
     // manifest + stats) can detect providers on an outdated coalition. setHeader
     // persists across whichever writeHead runs below.
     res.setHeader("X-Coalition-Version", COALITION_VERSION);
+    // Same idea for the Stripe MODE this Coalition charges in, so MT can mark a
+    // marketplace listing that is wired to a test key. Omitted entirely when the key
+    // is absent or unrecognised — see stripeLiveMode(); an absent header must never
+    // be read as "live".
+    const liveMode = stripeLiveMode(cfg.stripeSecretKey);
+    if (liveMode !== null) res.setHeader("X-Stripe-Livemode", liveMode ? "true" : "false");
     const send = (status: number, obj: unknown) => {
       res.writeHead(status, { "content-type": "application/json" });
       res.end(JSON.stringify(obj));
@@ -109,7 +116,12 @@ export function createServer(stripe: StripeLike | null, cfg: CoalitionConfig): h
         return snap ? send(200, snap) : send(503, { error: "stats not ready" });
       }
       if (method === "GET" && (url === "/health" || url === "/")) {
-        return send(200, { ok: true, provider: cfg.providerSlug, coalitionVersion: COALITION_VERSION });
+        return send(200, {
+          ok: true,
+          provider: cfg.providerSlug,
+          coalitionVersion: COALITION_VERSION,
+          ...(liveMode !== null ? { stripeLiveMode: liveMode } : {}),
+        });
       }
 
       // Stripe webhook — verify on the RAW body (no JSON parse before signature check).
