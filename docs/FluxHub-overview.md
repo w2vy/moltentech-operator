@@ -239,14 +239,14 @@ slot's IP, tier or price anywhere else — including in FH's database — loses 
 inventory assert. Edit here. `status`, `vmId` and health are the exception: the ingest
 excludes them on purpose, so a hub-side `maintenance` toggle survives the heartbeat.
 
-⚠️ **Removing a host from this file deletes nothing upstream, and the slots stay
-sellable.** The ingest is a pure upsert; nothing reconciles `ProxmoxHost` or `Slot` rows.
-So a machine you have repurposed can still be rented out from under you. There is no
-supported removal path yet — retiring a host is a three-step manual procedure
-(`maintenance` at FH → shrink `AGENT_LISTING_JSON` → then edit this file), written out
-under **Retiring a host** in [`operator-onboarding.md`](operator-onboarding.md). The real
-fix belongs in the hub's `/operator` console; see workstream C of
-`partitioned-sprouting-horizon.md`.
+**Removing a host from this file deletes nothing upstream — but it does take the hardware
+out of service.** The ingest still never deletes a row (a slot can be holding a paying
+customer), and it now reconciles: an absent slot with no customer on it moves to
+`disavowed` and drops out of every claim path within a heartbeat, so a machine you have
+repurposed cannot be rented out from under you. A rented, Foundation-occupied or loaned
+slot keeps its status and keeps serving, and you are alerted instead. Re-adding the entry
+restores it. Retiring the rows for good is a button in **My Fleet**; the whole procedure is
+under **Retiring a host** in [`operator-onboarding.md`](operator-onboarding.md).
 
 ## `manifest.json` — your signed identity
 

@@ -837,14 +837,17 @@ The agent asserts this to FH (`PUT /api/agent/inventory`) on startup and each he
 **provider-scoped**: FH upserts your `ProxmoxHost`/`Slot` rows, never touches another
 operator's inventory, and never hard-deletes a rented slot.
 
-⚠️ **The assert is upsert-only, and there is no removal path yet.** Deleting a host or
-slot from this file removes *nothing* at FH: the rows stay, and **any `available` slot on
-that host stays sellable** — a checkout or an idle-fill can rent a slot on a machine you
-have already repurposed. Verified in code (`api/agent/inventory/route.ts`): the ingest is a
-pure upsert loop, and nothing reconciles `ProxmoxHost` or `Slot` rows.
+**The assert never deletes, but FH does now reconcile it.** Dropping a host or slot from
+this file leaves the rows in place — a slot can be holding a paying customer, and no file
+edit may ever take a node away from one. What changes is that FH *notices*: an absent slot
+that held no customer is moved to **`disavowed`**, which takes it out of every claim path
+(checkout, idle-fill, move targets, free-rental assign), so hardware you have repurposed
+cannot be rented out from under you. An absent slot that is rented, holds a Foundation node
+or is on loan keeps its status and keeps serving, and you get an alert naming what to do.
 
-Until the hub grows a real one, retiring a host is a three-step manual procedure — see
-**Retiring a host** under Ongoing operations. Do not treat it as a file edit.
+Re-adding an entry restores it on the next heartbeat — `disavowed` self-heals back to
+`available` — so a typo costs one heartbeat, not a rebuild. See **Retiring a host** under
+Ongoing operations for the full procedure.
 
 Because the agent **re-reads the file every heartbeat**, edits apply without a restart —
 **only if you mount `./data` as a directory** (Step 6). (Alternative: inline
@@ -1173,7 +1176,8 @@ Proxmox credentials, and never the private half of anything you generated.
   (Removing a host from `HOSTS` narrows what the agent may declare; it does **not**
   delete existing rows — see **Retiring a host** below.)
 - **Add or remove slots on an attested host**: edit `inventory.json`. No re-sign, no
-  restart. Removals do not delete (upsert-only) — see **Retiring a host** below.
+  restart. A removal does not delete the row — it disavows an unrented slot within a
+  heartbeat and can be undone by re-adding the entry. See **Retiring a host** below.
 - **Change identity** (name, location, contact, Coalition URL): edit `config.env`,
   re-`sign`, re-paste at `/onboard`, re-run `mt-manifest env`, re-import `env.json`.
 - **Rotate your manifest key**: `keygen` a new one, re-`sign`, re-paste at `/onboard`
@@ -1189,40 +1193,51 @@ Proxmox credentials, and never the private half of anything you generated.
 - **Customer cancel/refund**: cancellation is free during the trial; afterward you are
   merchant of record — refunds/disputes are handled in your Stripe dashboard.
 
-### Retiring a host — no supported path yet
+### Retiring a host
 
-⚠️ **This is a known gap, not a documented procedure.** Nothing in the toolkit or the hub
-removes a host, and removing it from `inventory.json` is the one action that *looks* like
-it should work and does not: the ingest is upsert-only, so the rows survive and any
-`available` slot on the retired machine stays sellable. The failure is a customer renting
-a node on hardware you no longer run.
+Removing a host or slot from `inventory.json` is now the first step of a real procedure,
+not a no-op. FH reconciles each assert against what it already holds for you:
 
-Until the hub grows a real removal, do all three, **in this order**:
+- an absent slot **holding no customer** goes to **`disavowed`** — out of service and not
+  for sale. Every claim path at the hub selects `available`, so this is structural: nothing
+  can deploy onto it;
+- an absent slot that is **rented, carrying a Foundation node, or on loan** keeps its
+  status and its VM. FH will not take a node away from a customer because a file changed.
+  It is marked absent and shown to you with the remedy — Move the customer, or Park it;
+- either way you get one `inventory_absent` alert per row (after a 1h grace, so a
+  half-saved file does not page you), on `/operator/alerts` and in the nav badge.
 
-1. **Set the host's slots to `maintenance` at FH first.** Nothing else takes them out of
-   the sellable pool. A hub-side status change survives the next heartbeat —
-   `api/agent/inventory/route.ts` excludes `status`/`vmId`/health from the upsert on
-   purpose — so this sticks. (Config fields *are* clobbered, so IP/tier/price edits still
-   belong in `inventory.json`.)
-2. **Reduce the count in `AGENT_LISTING_JSON`** and recreate the container. Inventory says
-   what you *have*; the listing says what you *offer*, and they are independent. Skip this
-   and FH keeps advertising capacity that no longer exists.
-3. **Then remove the host from `inventory.json`.** Optionally narrow `HOSTS` in
-   `config.env` too — that needs a re-sign and a re-paste, and it only restricts what the
-   agent may declare in future. It deletes nothing.
+**To retire hardware:**
 
-Verify with `GET /api/agent/nodes`, which is the only thing that will tell you FH's view
-differs from yours.
+1. **Remove the host or its slots from `inventory.json`.** Within a heartbeat (~60s) the
+   unrented slots read `Disavowed` in **My Fleet** and stop being sellable. Nothing else is
+   needed to make the machine safe to repurpose.
+2. **Deal with anything still rented**, if the fleet page shows any: Move the customer to
+   another slot, or Park it. A slot with a live rental is never disavowed and is never
+   retirable.
+3. **Retire the rows**, once the hardware is really gone: **My Fleet → No longer in your
+   inventory → Retire** on each disavowed slot, or **Retire host** when every slot on it is
+   disavowed. This deletes the slot and its history, including benchmarks. It is the only
+   irreversible step, which is why it asks twice.
+4. **Reduce the count in `AGENT_LISTING_JSON`** and recreate the container. Inventory says
+   what you *have*; the listing says what you *offer*, and they remain independent — FH
+   keeps advertising a tier you list even after its slots are gone.
+5. Optionally narrow `HOSTS` in `config.env` (needs a re-sign and a re-paste). It only
+   restricts what the agent may declare in future; it deletes nothing.
+
+**If the asserts stop entirely** — you emptied `inventory.json`, or stopped the agent after
+editing — the agent sends no assert at all (it skips the PUT when the file is empty), so
+there is nothing for FH to reconcile against. A separate staleness sweep catches this: two
+hours after your last inventory assert, every slot and host FH holds for you is marked
+absent and every unrented one is disavowed, with the same alert. It is the slower path;
+editing the file and leaving the agent running is the fast one.
+
+Verify with `GET /api/agent/nodes`, or read **My Fleet**, which is the same view with the
+absent rows called out.
 
 ⚠️ **Inventory is a declaration, not a boundary.** It does not stop the agent reaching a
 host: an agent pointed at a cluster endpoint can still touch a machine you removed from
 the file. The real boundary is the **Proxmox API token path ACL**.
-
-**Where the fix belongs:** the operator console at the hub's `/operator`, alongside the
-other admin-shaped actions being moved there — slot `available` ↔ `maintenance` is already
-planned as a Tier 2 (session-auth, reversible) action, and host retirement is the same
-shape: operator-scoped, reversible, guarded against slots holding a live rental. See
-workstream C of `partitioned-sprouting-horizon.md`.
 
 ## Trust model (why this is safe)
 
