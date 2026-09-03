@@ -1219,6 +1219,11 @@ not a no-op. FH reconciles each assert against what it already holds for you:
    inventory → Retire** on each disavowed slot, or **Retire host** when every slot on it is
    disavowed. This deletes the slot and its history, including benchmarks. It is the only
    irreversible step, which is why it asks twice.
+
+   ⚠️ **Retire removes FH's record, not a VM.** FH holds no hypervisor credentials, so anything
+   still running on the box keeps running and is yours to delete — and "the slot had no rental"
+   is not the same as "the hypervisor is empty" (an evicted Foundation node, for instance, can
+   outlive the rental that placed it). Check the host before you retire, not after.
 4. **Reduce the count in `AGENT_LISTING_JSON`** and recreate the container. Inventory says
    what you *have*; the listing says what you *offer*, and they remain independent — FH
    keeps advertising a tier you list even after its slots are gone.
