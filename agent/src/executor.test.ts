@@ -29,7 +29,7 @@ const host: AgentConfig["host"] = {
 const cfg = { host } as unknown as AgentConfig;
 
 /** A Job with a valid slot; nodeConfig is supplied per-test (possibly hostile). */
-function jobWith(nodeConfig: Record<string, unknown>): Job {
+function jobWith(nodeConfig: Record<string, unknown>, slotExtra: Record<string, unknown> = {}): Job {
   return {
     schemaVersion: 1,
     jobId: "job-1",
@@ -55,10 +55,69 @@ function jobWith(nodeConfig: Record<string, unknown>): Job {
       networkLimit: null,
       startupConfig: null,
       rateLimit: null,
+      vmTags: null,
+      vmDescription: null,
+      ...slotExtra,
     },
     nodeConfig,
   } as unknown as Job;
 }
+
+/** A benign nodeConfig, for tests whose subject is the slot rather than the identity. */
+const PLAIN_NODE_CONFIG = {
+  fluxId: "t1abcdefghijkmnopqrstuvwx",
+  fluxIdentityKey: "Kx1abcdefghijkmnopqrstuvwxyz0123456789ABCDEFGHJKLMN",
+  collateralTxid: "a".repeat(64),
+  collateralVout: 0,
+  discordUserId: null,
+  discordWebhook: null,
+  telegramBotToken: null,
+  telegramChatId: null,
+};
+
+type Hyp = { nodes: Array<{ hypervisor: Record<string, unknown> }> };
+
+/** Parse and reach the single node's hypervisor block, asserting it is actually there. */
+function hypervisorOf(yaml: string): Record<string, unknown> {
+  const node = (safeLoad(yaml) as Hyp).nodes[0];
+  assert.ok(node, "generated YAML has no nodes[0]");
+  return node.hypervisor;
+}
+
+// The stamp is multi-line by design and carries `#`, `:` and a `--- signed ---` line that a
+// later build puts a signed record under. PyYAML must hand arcane-mage back the exact bytes:
+// a signature verified over a reflowed description would fail with nothing pointing at YAML.
+test("a multi-line vmDescription survives PyYAML byte for byte", () => {
+  const description =
+    "# flux-hub\nkind:     paid\nrental:   MT-0075\ntier:     cumulus\n" +
+    "term:     recurring (monthly)\n--- signed ---\n{\"loanId\":\"ln_01\",\"pct\":100%}";
+  const yaml = buildProvisionYaml(
+    jobWith(PLAIN_NODE_CONFIG, { vmTags: "flux-hub;paid;cumulus", vmDescription: description }),
+    cfg
+  );
+  const hyp = hypervisorOf(yaml);
+  assert.equal(hyp.tags, "flux-hub;paid;cumulus");
+  assert.equal(hyp.description, description);
+});
+
+// The same defence as every other string field: a raw interpolation here would let a crafted
+// description close the scalar and define a sibling key under `hypervisor`.
+test("a vmDescription cannot inject a sibling hypervisor key", () => {
+  const hostile = "# flux-hub\nstorage_images: attacker-pool\nnode: pve-elsewhere";
+  const yaml = buildProvisionYaml(jobWith(PLAIN_NODE_CONFIG, { vmDescription: hostile }), cfg);
+  const hyp = hypervisorOf(yaml);
+  assert.equal(hyp.description, hostile);
+  assert.equal(hyp.storage_images, "local-lvm");
+  assert.equal(hyp.node, "pve20");
+});
+
+// An operator whose hub has not shipped the stamp yet sends neither field; the YAML must be
+// identical to today's, or arcane-mage sees keys it may not understand.
+test("null vmTags/vmDescription emit no keys at all", () => {
+  const yaml = buildProvisionYaml(jobWith(PLAIN_NODE_CONFIG), cfg);
+  assert.ok(!yaml.includes("tags:"), "emitted a tags: key for a null vmTags");
+  assert.ok(!yaml.includes("description:"), "emitted a description: key for a null vmDescription");
+});
 
 // The YAML that an operator's node config disk looks like normally — sanity check that
 // escaping did not change the parsed structure/values.

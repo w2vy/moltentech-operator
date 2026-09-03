@@ -66,6 +66,10 @@ export function buildProvisionYaml(job: Job, cfg: AgentConfig, vmIdOverride?: nu
   L.push("      start_on_creation: true");
   if (vmId != null) L.push(`      vm_id: ${vmId}`);
   if (slot.startupConfig) L.push(`      startup_config: ${yamlStr(slot.startupConfig)}`);
+  // Forwarded verbatim, never inspected: see the no-gating rule on JobSlot.vmTags.
+  // yamlStr() is mandatory here — vmDescription is multi-line by design.
+  if (slot.vmTags) L.push(`      tags: ${yamlStr(slot.vmTags)}`);
+  if (slot.vmDescription) L.push(`      description: ${yamlStr(slot.vmDescription)}`);
   if (slot.diskLimit != null) L.push(`      disk_limit: ${slot.diskLimit}`);
   if (slot.cpuLimit != null) L.push(`      cpu_limit: ${slot.cpuLimit}`);
   if (slot.networkLimit != null) L.push(`      network_limit: ${slot.networkLimit}`);
