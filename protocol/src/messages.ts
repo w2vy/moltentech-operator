@@ -131,6 +131,21 @@ export const JobSlot = z.object({
   networkLimit: z.number().int().positive().nullable().default(null),
   startupConfig: z.string().nullable().default(null), // e.g. "order=4,up=360"
   rateLimit: z.number().int().positive().nullable().default(null), // Mbps
+  /** Descriptive Proxmox `tags` for this VM, e.g. "flux-hub;paid;cumulus".
+   *
+   *  NEVER branch on this field — it is MT's assertion arriving on a job, and the gates here
+   *  exist to survive a compromised MT. `foundation` in this string does NOT substitute for the
+   *  `fh-` VM-name prefix (see FOUNDATION_VM_PREFIX below): a marker for an UNSIGNED delete has
+   *  to be bound to the target it authorizes, and a job field is bound to nothing.
+   *
+   *  The same tag read back FROM PROXMOX is the VM's own state and is a different question
+   *  entirely — that one may gate. The rule in one line:
+   *  **the job's `vmTags` never gates; the tag read back from Proxmox may.** */
+  vmTags: z.string().nullable().default(null),
+  /** Descriptive Proxmox `description` (the Notes panel): a `# flux-hub` header block, optionally
+   *  followed by a `--- signed ---` delimiter and a verbatim signed record.
+   *  The same no-gating rule as `vmTags` applies — see above. */
+  vmDescription: z.string().nullable().default(null),
 });
 export type JobSlot = z.infer<typeof JobSlot>;
 
