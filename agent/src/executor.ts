@@ -320,9 +320,24 @@ export function amFailure(r: AmResult): string {
   return (parts.join("\n\n") || r.stdout.trim() || "arcane-mage failed with no output").slice(0, 4000);
 }
 
-async function deprovision(job: Job, cfg: AgentConfig): Promise<ExecResult> {
+/**
+ * Destroy one VM by name and node.
+ *
+ * Split out of `deprovision` below so the trial self-destruct sweep can reuse it without
+ * inventing a fake `Job`. ⚠️ It carries NO owner-auth gate, and must not: the gate belongs to
+ * the job path, where MT is asking for something. The sweep is not an MT-relayed job — it is the
+ * operator's own agent acting on its own hypervisor, on a marker carried by the VM itself — and
+ * routing it through `withOwnerAuthGate` would make it look like one.
+ *
+ * `not found` counts as success, so a repeat is harmless and the caller needs no state.
+ */
+export async function deprovisionVm(
+  vmName: string,
+  nodeName: string,
+  cfg: AgentConfig
+): Promise<ExecResult> {
   const r = await runArcaneMage(
-    ["deprovision", "--json", "--force", "--vm-name", job.slot.vmName, "--node", job.slot.nodeName],
+    ["deprovision", "--json", "--force", "--vm-name", vmName, "--node", nodeName],
     cfg,
     TIMEOUT.delete
   );
@@ -332,6 +347,10 @@ async function deprovision(job: Job, cfg: AgentConfig): Promise<ExecResult> {
     message: ok ? (r.stdout + "\n" + r.stderr).trim().slice(0, 4000) : amFailure(r),
     failureClass: ok ? undefined : classifyAmFailure(r),
   };
+}
+
+async function deprovision(job: Job, cfg: AgentConfig): Promise<ExecResult> {
+  return deprovisionVm(job.slot.vmName, job.slot.nodeName, cfg);
 }
 
 /**

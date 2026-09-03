@@ -4,8 +4,9 @@ import { loadConfig, reloadInventory } from "./config";
 import { MtClient, type MtClientAuth } from "./client";
 import { CoalitionClient } from "./coalition-client";
 import { loadManifestKey } from "./signing";
-import { pickExecutor } from "./executor";
-import { collectHealth } from "./health";
+import { pickExecutor, deprovisionVm } from "./executor";
+import { collectOwnedVms, type OwnedVm } from "./health";
+import { shouldSelfDestruct } from "./trial-expiry";
 import { refreshIsoOnce } from "./iso-refresh";
 import { runDetached } from "./background";
 import { runPreflight, formatPreflight, checkManifestKey } from "./preflight";
@@ -166,13 +167,71 @@ async function main() {
     try {
       const owned = await client.getNodes();
       if (owned.length === 0) return;
-      const health = await collectHealth(cfg, owned);
+      // ONE Proxmox listing, two consumers: the health report the hub gets, and the local trial
+      // sweep below. `tags` rides along in the same response, so the sweep costs no extra call.
+      const vms = await collectOwnedVms(cfg, owned);
+      const health = vms.map(({ vmName, status }) => ({
+        vmName,
+        running: status === "running",
+        status,
+      }));
       if (health.length > 0) {
         await client.reportHealth(health);
         console.log(`[agent] reported health for ${health.length} node(s)`);
       }
+      // After the report, never before: a self-destruct that threw must not cost the hub its
+      // health update, and the hub finding out via the next poll's `missing` is the whole
+      // reconciliation design.
+      await sweepExpiredTrials(vms);
     } catch (err) {
       console.error("[agent] health report error:", (err as Error).message);
+    }
+  }
+
+  /**
+   * liskov — destroy owned VMs whose own Proxmox tag says their trial term has ended.
+   *
+   * 🔒 **Owned VMs only** (fence 3). `vms` comes from `getNodes()`, i.e. this provider's slots as
+   * declared in `inventory.json`, so a VM the agent does not manage is never a candidate whatever
+   * its tags say — an operator's own unrelated VM cannot be reached even if one happens to carry
+   * a `free` chip.
+   *
+   * The decision itself is `shouldSelfDestruct`, which holds every other fence and is pure. This
+   * function is the I/O around it, and it logs UNCONDITIONALLY on a destroy: no job row and no
+   * hub record exists for an autonomous destroy, so this line is the operator's only trace of it.
+   *
+   * Never throws: it runs inside the health cadence, which must not gate the poll loop (#90).
+   */
+  async function sweepExpiredTrials(vms: OwnedVm[]) {
+    const now = new Date();
+    for (const vm of vms) {
+      if (vm.status === "missing") continue; // nothing to destroy
+      const verdict = shouldSelfDestruct(vm.tags, now);
+      if (!verdict.destroy) {
+        // `not-free` and `too-stale` mean a VM carries a deadline the fences refused to act on —
+        // a stamp-builder bug or a bad clock, either way something a human should see. The other
+        // reasons are the overwhelmingly common no-op and stay silent.
+        if (verdict.reason === "not-free" || verdict.reason === "too-stale") {
+          console.warn(
+            `[trial-expiry] ${vm.vmName} on ${vm.nodeName}: REFUSING to destroy (${verdict.reason}) ` +
+              `tags=${vm.tags.join(";")}`
+          );
+        }
+        continue;
+      }
+      console.log(
+        `[trial-expiry] ${vm.vmName} on ${vm.nodeName}: trial term ended — destroying. ` +
+          `tags=${vm.tags.join(";")} deadline=${verdict.deadline.toISOString()} now=${now.toISOString()}`
+      );
+      try {
+        const r = await deprovisionVm(vm.vmName, vm.nodeName, cfg);
+        console.log(
+          `[trial-expiry] ${vm.vmName}: ${r.ok ? "destroyed" : "FAILED"} — ${(r.message ?? "").slice(0, 500)}`
+        );
+      } catch (err) {
+        // Idempotent by construction: the VM is still there, so the next cycle tries again.
+        console.error(`[trial-expiry] ${vm.vmName}: destroy threw — ${(err as Error).message}`);
+      }
     }
   }
 
