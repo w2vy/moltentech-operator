@@ -32,6 +32,14 @@ test("fence 2 — a deadline WITHOUT the free chip is refused, whatever else it 
   }
 });
 
+test("a LEASED VM's loan end date is visible but never destroyable", () => {
+  // The hub legitimately stamps `until-` on a leased VM so the loan's end shows in the tag
+  // column. Two chips must agree, so that visibility can never become an unsigned destroy —
+  // a loan ends by its lender's agent verifying the signed LoanRequest, not by this chip.
+  const v = shouldSelfDestruct(tags("flux-hub;leased;stratus;until-2020-01-01"), NOW);
+  assert.deepEqual(v, { destroy: false, reason: "not-free" });
+});
+
 test("a free VM with NO deadline is never touched", () => {
   // An unbounded free rental (termDays null) carries no chip and must run until ended by hand.
   const v = shouldSelfDestruct(tags("flux-hub;free;cumulus"), NOW);

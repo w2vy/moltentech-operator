@@ -79,9 +79,11 @@ export type DestructVerdict =
  *
  * 1. **`until-` must be present** and parse. No deadline, no destruct.
  * 2. **`free` must also be present.** The deadline alone is never sufficient; two independent
- *    chips must agree. A `paid`, `foundation` or `leased` VM carrying a deadline is a stamp-builder
- *    bug (the hub throws on that combination — see `buildVmTags`), and this is the second, local
- *    line of defence against it.
+ *    chips must agree. This is what lets a `leased` VM advertise its loan end date in the same
+ *    tag column without becoming destroyable — a loan is ENDED by its lender's agent verifying
+ *    the signed `LoanRequest` in the description, never by a chip that merely asserts. A `paid`
+ *    or `foundation` VM has no legitimate deadline at all (the hub throws on that combination),
+ *    so one appearing here is a stamp-builder bug and this is the local second line against it.
  * 3. The deadline must actually have passed.
  * 4. …but not by more than `MAX_OVERDUE_MS` — wildly stale reads as broken (see above).
  *
