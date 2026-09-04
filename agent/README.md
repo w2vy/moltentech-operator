@@ -43,6 +43,7 @@ touching Proxmox — useful to validate connectivity/auth against Flux Hub.
 | `OWNER_ADDRESS` | recommended | your Flux/ZelID address. Set = the agent REFUSES privileged jobs (delete/reprovision/move) without a matching owner signature. Unset = enforcement off. Never sourced from FH. |
 | `COALITION_URL` | for the courier | your Coalition's base URL. **Unset silently means `courier=off`** — check the startup banner. |
 | `AGENT_INVENTORY_PATH` / `AGENT_INVENTORY_JSON` | to declare hardware | the hosts + slots you declare to FH (path is re-read each heartbeat, so edits apply without a restart). FH materializes ProxmoxHost/Slot rows from this — it is the source of truth for what hardware exists, and FH rejects any host not in your owner-signed manifest. |
+| `AGENT_LOAN_OFFERS_PATH` | only if you LEND | your own signed `LoanOffer`s, re-read each heartbeat. The agent checks a borrowed VM's stamp against these to work out whose loan it is and when it ends. A **local** file on purpose — the offer is your declaration, signed with your own key, and FH is deliberately not on that path. Unset = you lend nothing and the loan scan is a no-op. |
 | `PROXMOX_URL` / `PROXMOX_TOKEN_ID` / `PROXMOX_TOKEN_SECRET` | for real provisioning | local only; never sent to FH |
 | `PROXMOX_NETWORK` / `PROXMOX_STORAGE_IMAGES` / `PROXMOX_STORAGE_ISO` / `PROXMOX_STORAGE_IMPORT` | optional | per-host defaults stamped into the provision YAML (`vmbr0` / `local-lvm` / `local` / `local`) |
 | `ARCANE_ISO` | optional | ArcaneOS ISO filename to stage (default `FluxLive.iso`) |

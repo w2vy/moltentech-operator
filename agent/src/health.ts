@@ -14,7 +14,7 @@ const insecureAgent = new https.Agent({ rejectUnauthorized: false });
  * protocol/src/messages.ts for what may not: a tag read back FROM the hypervisor is the VM's own
  * state and may gate; the same string arriving on a job never may.
  */
-type Vm = { name?: string; status?: string; tags?: string };
+type Vm = { name?: string; status?: string; tags?: string; vmid?: number | string };
 
 /** One owned VM as the agent sees it locally: its reported status, and its own tag chips. */
 export type OwnedVm = {
@@ -24,6 +24,14 @@ export type OwnedVm = {
   status: string;
   /** Parsed chips from the VM's own `tags`. Empty for a missing or untagged VM. */
   tags: string[];
+  /**
+   * The VMID, when the listing found one. Null for a `missing` VM.
+   *
+   * Carried so a caller that needs the FULL config (`description`, `meta`) can address it
+   * without a second listing — the loan scan is the one consumer, and it reads the config only
+   * for VMs already narrowed to the `leased` chip.
+   */
+  vmid: number | null;
 };
 
 /**
@@ -39,6 +47,12 @@ export function parseVmTags(tags?: string | null): string[] {
     .split(";")
     .map((t) => t.trim().toLowerCase())
     .filter((t) => t.length > 0);
+}
+
+/** Proxmox reports `vmid` as a number or a string depending on the endpoint. Normalise once. */
+function parseVmid(raw?: number | string): number | null {
+  const n = typeof raw === "string" ? Number(raw) : raw;
+  return typeof n === "number" && Number.isInteger(n) && n > 0 ? n : null;
 }
 
 /** GET a Proxmox API path via the local token, returning its `data` payload. */
@@ -165,13 +179,41 @@ export async function collectOwnedVms(
 export function ownedVmsForNode(
   nodeName: string,
   vmNames: string[],
-  vms: Array<{ name?: string; status?: string; tags?: string }>
+  vms: Array<{ name?: string; status?: string; tags?: string; vmid?: number | string }>
 ): OwnedVm[] {
   const byName = new Map(vms.map((v) => [v.name, v]));
   return vmNames.map((vmName) => {
     const vm = byName.get(vmName);
     return vm
-      ? { vmName, nodeName, status: String(vm.status ?? "unknown"), tags: parseVmTags(vm.tags) }
-      : { vmName, nodeName, status: "missing", tags: [] };
+      ? {
+          vmName,
+          nodeName,
+          status: String(vm.status ?? "unknown"),
+          tags: parseVmTags(vm.tags),
+          vmid: parseVmid(vm.vmid),
+        }
+      : { vmName, nodeName, status: "missing", tags: [], vmid: null };
   });
+}
+
+/**
+ * The two config fields the loan scan needs, read straight off the hypervisor.
+ *
+ * `description` holds the verbatim signed `LoanRequest`; `meta` holds `ctime`, the VM's creation
+ * time as the HYPERVISOR recorded it. Together they are the whole of the agent's loan state
+ * (prudent-lending-lamport §9d.3) — both local facts, so MT is not on this path and cannot
+ * rewind an expiry.
+ *
+ * One call per leased VM, and only for VMs already narrowed by the `leased` chip on the cheap
+ * listing. A fleet with no loans makes zero of these calls.
+ */
+export async function getVmConfig(
+  cfg: AgentConfig,
+  nodeName: string,
+  vmid: number
+): Promise<{ description?: string; meta?: string }> {
+  return getJson<{ description?: string; meta?: string }>(
+    cfg,
+    `/api2/json/nodes/${nodeName}/qemu/${vmid}/config`
+  );
 }
