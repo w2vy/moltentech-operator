@@ -1418,9 +1418,27 @@ async function main() {
     // and "the fix is what just ran" are different claims. This is how to tell them apart
     // without diffing help text against the repo.
     case "borrow": {
-      // The BORROWER's side of §0.4 step 4. Defaults follow `sign`: every path names a file
-      // `init` already wrote into the directory you are standing in, so the common case is
-      // `mt-manifest borrow --offer offer.json --lender-pubkey <b64> --vm X --node Y --hours 24`.
+      /**
+       * ⚠️ DEPRECATED (tom, 2026-09-04) — signing a loan belongs in a CONSOLE, not here.
+       *
+       * The BORROWER's side of §0.4 step 4. It lives in this CLI only because lamport v1 skipped
+       * the hub relay (§0.5): steps 2, 3 and 5 were never built, so there is no path by which an
+       * offer reaches a borrower and no place but a local command for them to answer it. The
+       * 2026-09-04 staging run copied the signed offer between two directories by hand.
+       *
+       * That is a missing transport, not a design conclusion. Nothing about key custody requires
+       * a CLI: the agent already holds the operator key (`MANIFEST_KEY`) and already signs a
+       * `LoanOffer` with it, and the hub already signs in a browser (`wallet-sign-panel.tsx`).
+       *
+       * 🥇 The hub/operator console is the PREFERRED home; the Coalition console is acceptable.
+       * When the v2 transport lands this command retires — it does not move.
+       */
+      console.error(
+        "⚠️  `mt-manifest borrow` is DEPRECATED. Signing a loan belongs in the hub/operator\n" +
+          "   console (preferred) or the Coalition console. This command exists only because\n" +
+          "   lamport v1 skipped the hub relay, leaving no other way to answer an offer.\n" +
+          "   It still works, and it retires when the v2 transport ships.\n"
+      );
       const dir = flag(args, "--dir") ?? ".";
       const offerPath = flag(args, "--offer");
       const lenderPubkey = flag(args, "--lender-pubkey");
@@ -1582,6 +1600,8 @@ async function main() {
       console.log("            defaults to the files `init` wrote in the current directory");
       console.log("  verify    --in <manifest.json>");
       console.log("  authorize --in <manifest.json> [--signature <b64> --out <signed-manifest.json>]");
+      console.log("  borrow    ⚠️ DEPRECATED — loan signing belongs in the hub/operator console");
+      console.log("            (preferred) or the Coalition console. Works; retires with v2.");
       console.log("  version   which build of this CLI is running (paste it into a bug report)");
       console.log("  help      this list\n");
       console.log("Every path defaults to the file `init` wrote in the current directory,");
