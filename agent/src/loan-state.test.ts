@@ -189,7 +189,12 @@ test("a re-stamp that pulls the expiry IN is refused — that is the rewind leve
 
 test("a re-stamp of a DIFFERENT loan is refused however late its expiry", () => {
   const a = signLoanRequest(REQUEST, borrower.privateKey);
-  const b = signLoanRequest({ ...REQUEST, nonce: "n-other" }, borrower.privateKey);
+  // A genuinely different loan: same slot, borrowed again later. The nonce is content-derived,
+  // so two records differing ONLY in a hand-set nonce are the same loan by construction.
+  const b = signLoanRequest(
+    { ...REQUEST, issuedAt: "2026-09-06T12:00:00.000Z" },
+    borrower.privateKey
+  );
   const est = { request: a, expiresAt: new Date("2026-09-05T12:00:00.000Z") };
   const other = { request: b, expiresAt: new Date("2026-09-09T12:00:00.000Z") };
   assert.equal(acceptsRestamp(est, other), false);

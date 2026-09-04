@@ -44,6 +44,14 @@
  *   authorize --in <manifest.json> --signature <b64> --out <signed-manifest.json>
  *                                        wrap the manifest + your wallet signature into the
  *                                        SignedProviderManifest MT ingests (proven identity)
+ *   borrow --offer <offer.json> --lender-pubkey <b64> --vm <vmName> --node <nodeName>
+ *          --hours <n> [--dir <dir>] [--key <pem>] [--slug <yours>] [--out <request.json>]
+ *          [--stdout] [--stamp]
+ *                                       BORROWER side of a node loan. Verify a lender's signed
+ *                                       LoanOffer, check its terms against what you want, and
+ *                                       emit a LoanRequest signed with YOUR operator key.
+ *                                       --stamp prints the one-line record the lender's agent
+ *                                       writes into the borrowed VM's Proxmox description.
  */
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { randomBytes } from "node:crypto";
@@ -97,6 +105,8 @@ import {
   type HostAnswer,
   type SlotAnswer,
 } from "./scaffold";
+import { acceptOffer } from "./loan-request";
+import { loanStampRecord, signLoanRequest } from "./loan-signing";
 import { verifyManifestOwnerSignature } from "./wallet";
 import { buildZelcoreSignLink } from "./sign-launcher";
 import {
@@ -139,6 +149,32 @@ function noteUnproven(report: DoctorReport, scope: string, checks: ProbeResult[]
   if (skipped.length === 0) return;
   report.unproven = [...(report.unproven ?? []), ...skipped];
 }
+
+/**
+ * Every refusal, as something an operator can act on.
+ *
+ * A bare reason code here is close to useless: the borrower is holding a file from someone else
+ * and cannot see the lender's side at all, so the message has to say which of the two parties has
+ * to change something.
+ */
+const BORROW_REFUSALS: Record<string, string> = {
+  "not-an-offer": "that file is not a signed LoanOffer.",
+  "bad-lender-signature":
+    "the signature does not check out against --lender-pubkey. Either the key is wrong or the " +
+    "offer was altered in transit — ask your lender to resend it.",
+  "not-my-offer":
+    "the offer names a different borrower slug. It was not issued to you (pass --slug if yours " +
+    "is not the one in config.env).",
+  "offer-names-another-key":
+    "the offer names a different pubkey for you than the key you are signing with. Your lender " +
+    "pinned the wrong key — send them the pubkey from `mt-manifest keygen` and ask for a new " +
+    "offer. Signing anyway would produce a request their agent silently refuses.",
+  "offer-window-closed": "the offer has expired. Ask your lender for a fresh one.",
+  "slot-not-offered": "that --vm/--node pair is not one this offer puts up.",
+  "duration-over-ceiling":
+    "--hours is longer than the offer allows. Ask for less, or ask your lender to raise the " +
+    "ceiling — it is not clamped, because both sides must mean the same thing by the term.",
+};
 
 function die(msg: string): never {
   console.error(`error: ${msg}`);
@@ -1379,6 +1415,95 @@ async function main() {
     // Which build am I? The image refreshes at most every 48h, so "the fix is merged"
     // and "the fix is what just ran" are different claims. This is how to tell them apart
     // without diffing help text against the repo.
+    case "borrow": {
+      // The BORROWER's side of §0.4 step 4. Defaults follow `sign`: every path names a file
+      // `init` already wrote into the directory you are standing in, so the common case is
+      // `mt-manifest borrow --offer offer.json --lender-pubkey <b64> --vm X --node Y --hours 24`.
+      const dir = flag(args, "--dir") ?? ".";
+      const offerPath = flag(args, "--offer");
+      const lenderPubkey = flag(args, "--lender-pubkey");
+      const vmName = flag(args, "--vm");
+      const nodeName = flag(args, "--node");
+      const hoursRaw = flag(args, "--hours");
+      const keyPath = flag(args, "--key") ?? join(dir, "manifest-key.pem");
+      const outPath =
+        flag(args, "--out") ??
+        (args.includes("--stdout") || args.includes("--stamp") ? undefined : join(dir, "loan-request.json"));
+
+      if (!offerPath) die("--offer <offer.json> is required (the signed LoanOffer your lender sent).");
+      if (!lenderPubkey) {
+        die(
+          "--lender-pubkey <base64> is required. It is your LENDER's manifest pubkey — ask them, " +
+            "or read it from their published manifest. Verifying with the wrong key is the whole " +
+            "point of passing it explicitly."
+        );
+      }
+      if (!vmName || !nodeName) die("--vm <vmName> and --node <nodeName> are required.");
+      if (!hoursRaw) die("--hours <n> is required — the loan length you are asking for.");
+      const durationHours = Number(hoursRaw);
+      if (!Number.isInteger(durationHours) || durationHours <= 0) {
+        die(`--hours must be a positive whole number of hours (got ${hoursRaw}).`);
+      }
+      if (!existsSync(offerPath)) die(`${offerPath} not found.`);
+      if (!existsSync(keyPath)) {
+        die(`${keyPath} not found — run \`mt-manifest keygen\` first, or pass --key <pem>.`);
+      }
+
+      const priv = importPrivateKeyPem(readFileSync(keyPath, "utf8"));
+      const myPubkey = publicKeyBase64FromPrivate(priv);
+
+      // Your own slug: from --slug, else PROVIDER_SLUG in the config.env `init` wrote.
+      let slug = flag(args, "--slug");
+      if (!slug) {
+        const configPath = join(dir, "config.env");
+        if (existsSync(configPath)) {
+          slug = parseConfigEnv(readFileSync(configPath, "utf8")).PROVIDER_SLUG;
+        }
+      }
+      if (!slug) die("could not determine your provider slug — pass --slug <yours>.");
+
+      let rawOffer: unknown;
+      try {
+        rawOffer = JSON.parse(readFileSync(offerPath, "utf8"));
+      } catch (err) {
+        die(`${offerPath} is not valid JSON: ${(err as Error).message}`);
+      }
+
+      const now = new Date();
+      const verdict = acceptOffer(
+        rawOffer,
+        lenderPubkey,
+        { slug, pubkey: myPubkey },
+        { vmName, nodeName, durationHours },
+        now,
+        now
+      );
+      if (!verdict.ok) die(`cannot accept this offer: ${BORROW_REFUSALS[verdict.reason]}`);
+
+      const signed = signLoanRequest(verdict.request, priv);
+
+      if (args.includes("--stamp")) {
+        // Exactly the bytes that go under `--- signed ---` in the VM's description. Printed so a
+        // human can eyeball what the lender's agent will verify, without re-deriving it by hand.
+        process.stdout.write(loanStampRecord(signed) + "\n");
+        break;
+      }
+
+      const out = JSON.stringify(signed, null, 2) + "\n";
+      if (outPath) {
+        writeFileSync(outPath, out, { mode: 0o600 });
+        console.log(
+          `Wrote signed LoanRequest to ${outPath}\n` +
+            `  slot     ${vmName} on ${nodeName}\n` +
+            `  lender   ${verdict.offer.lenderSlug} (offer rev${verdict.offer.revision})\n` +
+            `  duration ${durationHours}h of an allowed ${verdict.offer.maxDurationHours}h\n` +
+            `Send it to your lender. Their agent verifies it against the pubkey in their own offer.`
+        );
+      } else {
+        process.stdout.write(out);
+      }
+      break;
+    }
     case "version":
     case "--version":
     case "-v": {
@@ -1414,7 +1539,7 @@ async function main() {
     case "-h":
     default:
       console.log(
-        "usage: mt-manifest <keygen|coalition-keygen|init|doctor|sign|env|verify|authorize|version> [options]\n"
+        "usage: mt-manifest <keygen|coalition-keygen|init|doctor|sign|env|verify|authorize|borrow|version> [options]\n"
       );
       console.log("  keygen           [--out <dir>]");
       console.log("  coalition-keygen [--out <dir>]   Phase D signing key (operator-held custody)");
