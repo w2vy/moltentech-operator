@@ -69,6 +69,40 @@ export const LoanOffer = Envelope.extend({
 export type LoanOffer = z.infer<typeof LoanOffer>;
 
 /**
+ * What the LENDER OPERATOR actually writes down — §0.4 step 1, "marks an idle slot loanable".
+ *
+ * Deliberately smaller than `LoanOffer`. Everything the agent can know for itself is left out:
+ * the lender's own slug, the slot's tier (it is in `inventory.json`), the nonce, and the
+ * schema version. An operator hand-editing a file should type facts they hold and nothing else,
+ * because every derivable field they retype is a field they can get wrong — and a wrong tier or
+ * a wrong lender slug in a SIGNED record is not a typo, it is a bad contract.
+ *
+ * `issuedAt` is required rather than stamped at build time so the same declaration always
+ * produces byte-identical signed bytes. An agent that re-signed with `new Date()` every cycle
+ * would hand the operator a different blob each minute, and the one they gave the borrower would
+ * stop matching the one they hold.
+ */
+export const LoanOfferDeclaration = z.object({
+  /** Monotonic per (lender, borrower). Bumped when the terms change. */
+  revision: z.number().int().positive(),
+  /** Who may accept. v1 offers are bound to one borrower — no open/bearer offers (§0.2 item 7). */
+  borrowerSlug: ProviderSlug,
+  /** The borrower's operator key, as the LENDER believes it (§9c.2a, self-pinned). */
+  borrowerPubkey: z.string().min(1),
+  /** The slot on offer. One declaration, one slot — v1 `maxConcurrent` is 1 anyway. */
+  vmName: NoCtrl.min(1).max(64),
+  nodeName: NoCtrl.min(1).max(64),
+  /** The ceiling on any loan taken against this offer. */
+  maxDurationHours: DurationHours,
+  /** Optional; defaults to the per-pair constant. Never above the platform ceiling. */
+  maxConcurrent: z.number().int().positive().max(MAX_CONCURRENT_CEILING).optional(),
+  /** How long the OFFER stands. Not the loan length. */
+  offerExpiresAt: Timestamp,
+  issuedAt: Timestamp,
+});
+export type LoanOfferDeclaration = z.infer<typeof LoanOfferDeclaration>;
+
+/**
  * `LoanRequest` — signed by the BORROWER's operator key (§4.2).
  *
  * 🔻 v1 is SINGLE-SHOT (§0.2 item 3): one request = one slot, one duration. `revision` stays in
@@ -130,3 +164,13 @@ export type LoanStatus = z.infer<typeof LoanStatus>;
  */
 export const SignedLoanRequest = LoanRequest.extend({ signature: z.string().min(1) });
 export type SignedLoanRequest = z.infer<typeof SignedLoanRequest>;
+
+/**
+ * A `LoanOffer` with the lender's agent-key signature, as it travels to the borrower.
+ *
+ * The signature matters only once the offer LEAVES the box. A lender's agent reading its own
+ * offer file trusts it because it is local, not because it is signed (§7 step 1) — the signature
+ * is what lets a borrower, and later the hub as a relay, believe an offer they did not author.
+ */
+export const SignedLoanOffer = LoanOffer.extend({ signature: z.string().min(1) });
+export type SignedLoanOffer = z.infer<typeof SignedLoanOffer>;

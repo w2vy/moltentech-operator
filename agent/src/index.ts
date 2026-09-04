@@ -1,6 +1,6 @@
 import { SCHEMA_VERSION } from "@moltentech/protocol";
 import { verifyOwnerAuth } from "@moltentech/protocol/wallet";
-import { loadConfig, reloadInventory, reloadLoanOffers } from "./config";
+import { loadConfig, reloadInventory, reloadLoanOfferDeclarations } from "./config";
 import { MtClient, type MtClientAuth } from "./client";
 import { CoalitionClient } from "./coalition-client";
 import { loadManifestKey } from "./signing";
@@ -8,6 +8,7 @@ import { pickExecutor, deprovisionVm } from "./executor";
 import { collectOwnedVms, type OwnedVm } from "./health";
 import { shouldSelfDestruct } from "./trial-expiry";
 import { logLoanScan, overConcurrencyLimit, scanLoans } from "./loan-scan";
+import { buildLoanOffers } from "./loan-offer";
 import { refreshIsoOnce } from "./iso-refresh";
 import { runDetached } from "./background";
 import { runPreflight, formatPreflight, checkManifestKey } from "./preflight";
@@ -250,8 +251,27 @@ async function main() {
    * the poll loop (#90).
    */
   async function scanLoansOnce(vms: OwnedVm[]) {
-    const offers = reloadLoanOffers(cfg);
-    if (offers.length === 0 && !vms.some((v) => v.tags.includes("leased"))) return;
+    const declarations = reloadLoanOfferDeclarations(cfg);
+    const leased = vms.some((v) => v.tags.includes("leased"));
+    if (declarations.length === 0 && !leased) return;
+
+    // Build the offers from the operator's declarations against their OWN inventory. The
+    // unsigned build is what the lender's own scan uses — a local file is trusted for being
+    // local (§7 step 1); the signature is for the copy that leaves the box.
+    const { offers, refused } = buildLoanOffers(
+      declarations,
+      reloadInventory(cfg),
+      cfg.providerSlug,
+      new Date()
+    );
+    for (const { declaration, reason } of refused) {
+      // Loud and per-declaration: a refused offer is a slot the operator BELIEVES is on loan
+      // and which nothing will ever honour. Silence here is the worst outcome.
+      console.warn(
+        `[loan] offer refused (${reason}): ${declaration.vmName} on ${declaration.nodeName} ` +
+          `to ${declaration.borrowerSlug} rev${declaration.revision}`
+      );
+    }
     try {
       const results = await scanLoans(cfg, vms, offers, new Date());
       logLoanScan(results);
