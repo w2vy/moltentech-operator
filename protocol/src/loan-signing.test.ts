@@ -31,7 +31,8 @@ test("a stamp this borrower signed verifies, and yields the record back", () => 
   assert.equal(v.ok, true);
   if (!v.ok) return;
   assert.equal(v.request.borrows[0]?.vmName, "mt-187-c4");
-  assert.equal(v.request.nonce, "n-abc123");
+  // The signer replaces whatever nonce came in with a content-derived one (§4.4).
+  assert.match(v.request.nonce, /^[0-9a-f]{32}$/);
 });
 
 test("the pubkey comes from the OFFER — another key's signature does not verify", () => {
@@ -107,6 +108,22 @@ test("a duration past the 72h cap is refused by the schema, never clamped", () =
     borrows: [{ vmName: "mt-187-c4", nodeName: "pve45", durationHours: 96 }],
   } as unknown as LoanRequest;
   assert.deepEqual(verifyLoanStamp(stamp(r), BORROWER_PUBKEY), { ok: false, reason: "schema" });
+});
+
+test("the nonce is derived from content, so two signings agree byte for byte", () => {
+  const a = signLoanRequest(REQUEST, borrower.privateKey);
+  const b = signLoanRequest({ ...REQUEST, nonce: "something-else" }, borrower.privateKey);
+  assert.equal(a.nonce, b.nonce);
+  assert.equal(a.signature, b.signature);
+});
+
+test("a changed TERM changes the nonce", () => {
+  const a = signLoanRequest(REQUEST, borrower.privateKey);
+  const b = signLoanRequest(
+    { ...REQUEST, borrows: [{ vmName: "mt-187-c4", nodeName: "pve45", durationHours: 48 }] },
+    borrower.privateKey
+  );
+  assert.notEqual(a.nonce, b.nonce);
 });
 
 test("the signature is over the record WITHOUT its own signature key", () => {

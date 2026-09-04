@@ -32,11 +32,32 @@ export function loanRequestSigningBytes(record: Record<string, unknown>): string
   return canonicalize(body);
 }
 
-/** Sign a `LoanRequest` with the borrower's operator key → the record plus its signature. */
+/**
+ * A DETERMINISTIC nonce for a request, derived from its own content — same rule as the offer's.
+ *
+ * §4.4: the nonce is never burned here (the record is standing, re-read from a VM config every
+ * cycle), so its only job is uniqueness in the signed bytes. Content-derived also makes
+ * `acceptsRestamp`'s "is this the same loan" test content-based rather than dependent on a random
+ * value the agent would have no way to recover after a restart.
+ */
+export function loanRequestNonce(body: Record<string, unknown>): string {
+  const { nonce: _nonce, signature: _signature, ...rest } = body;
+  return createHash("sha256").update(canonicalize(rest), "utf8").digest("hex").slice(0, 32);
+}
+
+/**
+ * Sign a `LoanRequest` with the borrower's operator key → the record plus its signature.
+ *
+ * The nonce on the way in is ignored and replaced with the content-derived one, so a caller
+ * cannot accidentally ship a placeholder and two signings of the same request agree byte for
+ * byte.
+ */
 export function signLoanRequest(
   request: LoanRequest,
   privateKey: KeyObject
 ): SignedLoanRequestType {
+  const withNonce = { ...request, nonce: "" };
+  request = { ...request, nonce: loanRequestNonce(withNonce as unknown as Record<string, unknown>) };
   const signature = sign(
     null,
     Buffer.from(loanRequestSigningBytes(request as unknown as Record<string, unknown>), "utf8"),
