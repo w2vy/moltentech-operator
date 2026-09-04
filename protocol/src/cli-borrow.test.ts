@@ -132,3 +132,42 @@ test("borrow appears in the usage line", () => {
   const out = execFileSync("npx", ["tsx", CLI, "--help"], { encoding: "utf8" });
   assert.match(out, /^usage: mt-manifest .*\|borrow\|/m);
 });
+
+// ── reproducibility (--issued-at) ─────────────────────────────────────────────
+
+test("without --issued-at, two runs produce DIFFERENT records", () => {
+  // Not a bug — it is why the flag exists. `issuedAt` is the one field that comes from the
+  // clock, and the nonce is content-derived, so it is what the loan identity turns on.
+  const a = JSON.parse(run(["--vm", "mt-187-c4", "--node", "pve45", "--hours", "24", "--stdout"]).out);
+  const b = JSON.parse(run(["--vm", "mt-187-c4", "--node", "pve45", "--hours", "24", "--stdout"]).out);
+  assert.notEqual(a.issuedAt, b.issuedAt);
+  assert.notEqual(a.nonce, b.nonce);
+});
+
+test("with --issued-at, the record is byte-for-byte reproducible", () => {
+  const args = [
+    "--vm", "mt-187-c4", "--node", "pve45", "--hours", "24", "--stdout",
+    "--issued-at", "2026-09-04T12:00:00.000Z",
+  ];
+  const a = run(args);
+  const b = run(args);
+  assert.equal(a.code, 0);
+  assert.equal(a.out, b.out);
+  assert.equal(JSON.parse(a.out).issuedAt, "2026-09-04T12:00:00.000Z");
+});
+
+test("the success message tells you how to reproduce the bytes you just sent", () => {
+  const out = join(dir, "repro.json");
+  const r = run(["--vm", "mt-187-c4", "--node", "pve45", "--hours", "24", "--out", out]);
+  assert.equal(r.code, 0);
+  assert.match(r.out, /rerun with --issued-at 20\d\d-/);
+});
+
+test("a nonsense --issued-at is refused, not silently coerced", () => {
+  const r = run([
+    "--vm", "mt-187-c4", "--node", "pve45", "--hours", "24", "--stdout",
+    "--issued-at", "last tuesday",
+  ]);
+  assert.notEqual(r.code, 0);
+  assert.match(r.out, /ISO-8601/);
+});

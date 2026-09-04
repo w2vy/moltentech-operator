@@ -101,3 +101,17 @@ test("the loan reclaim logs unconditionally, like the trial sweep", () => {
     body.indexOf("RECLAIMING") !== -1 && body.indexOf("RECLAIMING") < body.indexOf("deprovisionVm(");
   assert.ok(logBeforeDelete, "reclaimExpiredLoans must log the decision BEFORE it deletes");
 });
+
+test("the loan scan reads its VM list from inventory, never from the hub", () => {
+  // Found on staging 2026-09-04. `GET /api/agent/nodes` only returns slots in
+  // AGENT_REPORTED_STATUSES, which excludes `available` — and an `available` slot is precisely
+  // the one a lender lends. A scan fed from that list can never see a borrowed VM, so its expiry
+  // would never fire. `inventory.json` is also the correct source on principle: §9d.3 exists to
+  // keep MT off this path, and asking the hub which of your own slots you may look at is MT on
+  // the path.
+  const index = readFileSync(join(SRC, "index.ts"), "utf8");
+  const fn = index.slice(index.indexOf("async function scanLoansOnce"));
+  const body = fn.slice(0, fn.indexOf("\n  }\n"));
+  assert.match(body, /reloadInventory\(cfg\)/, "scanLoansOnce must build its list from inventory");
+  assert.doesNotMatch(body, /getNodes\(/, "scanLoansOnce must not take its list from the hub");
+});

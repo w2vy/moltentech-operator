@@ -16,3 +16,4 @@ export * from "./messages";
 export * from "./signed-record";
 export * from "./loan";
 export * from "./loan-request";
+export * from "./vm-annotation";
