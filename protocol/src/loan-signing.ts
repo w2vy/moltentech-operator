@@ -1,6 +1,13 @@
-import { sign, type KeyObject } from "node:crypto";
+import { createHash, sign, type KeyObject } from "node:crypto";
 import { canonicalize, verifyDetached } from "./signing";
-import { LoanRequest, SignedLoanRequest, type SignedLoanRequest as SignedLoanRequestType } from "./loan";
+import {
+  LoanRequest,
+  SignedLoanOffer,
+  SignedLoanRequest,
+  type LoanOffer as LoanOfferType,
+  type SignedLoanOffer as SignedLoanOfferType,
+  type SignedLoanRequest as SignedLoanRequestType,
+} from "./loan";
 import { splitSignedRecord, stripTrailingNewlines } from "./signed-record";
 
 /**
@@ -95,4 +102,64 @@ export function verifyLoanStamp(description: string, borrowerPubkey: string): Lo
 /** The record as it is written into the description: canonical, one line, no trailing newline. */
 export function loanStampRecord(signed: SignedLoanRequestType): string {
   return stripTrailingNewlines(canonicalize(signed));
+}
+
+
+/**
+ * The `LoanOffer` signing bytes: canonical JSON with `signature` removed. Same rule as the
+ * request — a shared helper rather than two call sites that must remember the same convention.
+ */
+export function loanOfferSigningBytes(record: Record<string, unknown>): string {
+  const { signature: _signature, ...body } = record;
+  return canonicalize(body);
+}
+
+/**
+ * A DETERMINISTIC nonce, derived from the offer's own content.
+ *
+ * §4.4: unlike `OwnerAuth`, these are standing records — the nonce is never burned, and its only
+ * job is to add uniqueness to the signed bytes. A random one would do that too, but it would make
+ * the agent emit a different signed blob on every cycle for an unchanged offer: the operator's
+ * copy, the borrower's copy and the hub's copy would all drift apart with nothing having changed.
+ *
+ * Content-derived gives the uniqueness without the churn. Two genuinely different offers differ
+ * in at least one field and so get different nonces; the same offer is byte-stable forever.
+ */
+export function loanOfferNonce(body: Record<string, unknown>): string {
+  const { nonce: _nonce, signature: _signature, ...rest } = body;
+  return createHash("sha256").update(canonicalize(rest), "utf8").digest("hex").slice(0, 32);
+}
+
+/** Sign a `LoanOffer` with the LENDER's agent key. */
+export function signLoanOffer(offer: LoanOfferType, privateKey: KeyObject): SignedLoanOfferType {
+  const signature = sign(
+    null,
+    Buffer.from(loanOfferSigningBytes(offer as unknown as Record<string, unknown>), "utf8"),
+    privateKey
+  ).toString("base64");
+  return { ...offer, signature };
+}
+
+export type LoanOfferVerdict =
+  | { ok: true; offer: SignedLoanOfferType }
+  | { ok: false; reason: "not-json" | "schema" | "bad-signature" };
+
+/**
+ * Verify a signed offer against the LENDER's agent pubkey.
+ *
+ * This is the borrower's side of the handshake, and the hub's if it ever relays one: neither
+ * authored the offer, so neither may take its word for it. A lender's own agent does NOT need
+ * this — it reads its offers from a local file it wrote (§7 step 1).
+ */
+export function verifySignedLoanOffer(raw: unknown, lenderPubkey: string): LoanOfferVerdict {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return { ok: false, reason: "not-json" };
+  }
+  const parsed = SignedLoanOffer.safeParse(raw);
+  if (!parsed.success) return { ok: false, reason: "schema" };
+  const bytes = loanOfferSigningBytes(raw as Record<string, unknown>);
+  if (!verifyDetached(bytes, parsed.data.signature, lenderPubkey)) {
+    return { ok: false, reason: "bad-signature" };
+  }
+  return { ok: true, offer: parsed.data };
 }

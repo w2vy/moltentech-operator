@@ -1,6 +1,11 @@
 import { readFileSync } from "node:fs";
 import { z } from "zod";
-import { TierKey, InventoryHost, FOUNDATION_VM_PREFIX, LoanOffer } from "@moltentech/protocol";
+import {
+  TierKey,
+  InventoryHost,
+  FOUNDATION_VM_PREFIX,
+  LoanOfferDeclaration,
+} from "@moltentech/protocol";
 
 /** One tier's desired listing state, re-asserted to MT on a heartbeat. */
 const ListingTierConfig = z.object({
@@ -59,9 +64,8 @@ export type AgentConfig = {
   /** Inventory source file, if any — re-read each heartbeat so console edits take effect. */
   inventoryPath?: string;
   /**
-   * The lender's own signed `LoanOffer`s, if any — the file this agent's loan scan checks a
-   * borrowed VM's stamp against (`AGENT_LOAN_OFFERS_PATH`). Unset = this operator lends nothing
-   * and the scan is a no-op.
+   * The lender's own loan-offer DECLARATIONS, if any (`AGENT_LOAN_OFFERS_PATH`). Unset = this
+   * operator lends nothing, and both the offer build and the loan scan are no-ops.
    *
    * A LOCAL file, deliberately, and read the same way `inventory.json` is: the offer is the
    * lender operator's OWN declaration (prudent-lending-lamport §0.4 step 1), signed with the
@@ -87,20 +91,22 @@ export function reloadInventory(cfg: AgentConfig): InventoryHost[] {
 }
 
 /**
- * Re-read the loan-offer file each cycle, exactly as the inventory is re-read.
+ * Re-read the loan-offer declarations each cycle, exactly as the inventory is re-read.
  *
- * Returns [] on a missing file or a bad parse, never a partial list: an offer set that half-loads
- * would let a live loan read as "no matching offer" and be refused, and a refusal here means the
- * lender stops tracking a loan that is genuinely running. Last-known-good is not kept either —
- * unlike inventory, an offer the operator DELETED should stop being honoured, and the safe
- * failure for this scan is to find no loan (it never deletes anything on its own).
+ * Returns [] on a missing file or a bad parse, never a partial list: a set that half-loads would
+ * let a live loan read as "no matching offer" and be refused, and a refusal means the lender
+ * stops tracking a loan that is genuinely running. Last-known-good is not kept either — unlike
+ * inventory, an offer the operator DELETED should stop being honoured, and the safe failure for
+ * a scan that never deletes anything is to find no loan.
  */
-export function reloadLoanOffers(cfg: AgentConfig): LoanOffer[] {
+export function reloadLoanOfferDeclarations(cfg: AgentConfig): LoanOfferDeclaration[] {
   if (!cfg.loanOffersPath) return [];
   try {
-    return z.array(LoanOffer).parse(JSON.parse(readFileSync(cfg.loanOffersPath, "utf8")));
+    return z
+      .array(LoanOfferDeclaration)
+      .parse(JSON.parse(readFileSync(cfg.loanOffersPath, "utf8")));
   } catch (err) {
-    console.error("[loan] offer reload failed:", (err as Error).message);
+    console.error("[loan] offer declarations reload failed:", (err as Error).message);
     return [];
   }
 }

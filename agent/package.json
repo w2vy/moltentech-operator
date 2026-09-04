@@ -7,7 +7,7 @@
   "description": "Outbound-only operator agent: pulls provisioning jobs from MoltenTech, executes them on the LOCAL Proxmox, posts results, and re-asserts the listing. Holds the local Proxmox creds; opens no inbound.",
   "scripts": {
     "start": "tsx src/index.ts",
-    "test": "tsx --test src/signing.test.ts src/owner-auth.test.ts src/executor.test.ts src/iso-refresh.test.ts src/background.test.ts src/vmid.test.ts src/preflight.test.ts src/vm-annotation-not-a-gate.test.ts src/trial-expiry.test.ts src/loan-state.test.ts src/loan-scan.test.ts",
+    "test": "tsx --test src/signing.test.ts src/owner-auth.test.ts src/executor.test.ts src/iso-refresh.test.ts src/background.test.ts src/vmid.test.ts src/preflight.test.ts src/vm-annotation-not-a-gate.test.ts src/trial-expiry.test.ts src/loan-state.test.ts src/loan-scan.test.ts src/loan-offer.test.ts",
     "typecheck": "tsc --noEmit",
     "doctor": "tsx src/index.ts doctor"
   },
