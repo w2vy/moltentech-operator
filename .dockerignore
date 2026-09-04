@@ -18,3 +18,13 @@
 # least of all in a public one.
 **/signed-manifest.json
 **/env.json
+
+# Private keys. `mt-manifest keygen` writes manifest-key.pem into the operator's WORKDIR,
+# which on a maintainer box is this repo root, so a real operator key routinely sits in the
+# build context. No image needs one: the agent and coalition Dockerfiles copy only
+# arcane-mage/, protocol/, agent/ and coalition/, and mt-manifest takes the key as a runtime
+# volume mount (see protocol/Dockerfile). Zero .pem files are tracked, so this excludes
+# nothing the build wants — it just stops the promise above from depending on those COPY
+# lists staying narrow.
+**/*.pem
+**/*.key
