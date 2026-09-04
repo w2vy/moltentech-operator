@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { z } from "zod";
-import { TierKey, InventoryHost, FOUNDATION_VM_PREFIX } from "@moltentech/protocol";
+import { TierKey, InventoryHost, FOUNDATION_VM_PREFIX, LoanOffer } from "@moltentech/protocol";
 
 /** One tier's desired listing state, re-asserted to MT on a heartbeat. */
 const ListingTierConfig = z.object({
@@ -58,6 +58,17 @@ export type AgentConfig = {
   inventory: InventoryHost[];
   /** Inventory source file, if any — re-read each heartbeat so console edits take effect. */
   inventoryPath?: string;
+  /**
+   * The lender's own signed `LoanOffer`s, if any — the file this agent's loan scan checks a
+   * borrowed VM's stamp against (`AGENT_LOAN_OFFERS_PATH`). Unset = this operator lends nothing
+   * and the scan is a no-op.
+   *
+   * A LOCAL file, deliberately, and read the same way `inventory.json` is: the offer is the
+   * lender operator's OWN declaration (prudent-lending-lamport §0.4 step 1), signed with the
+   * agent's own key. Fetching it back from the hub would put MT on the path of a record MT has
+   * no business holding — and the whole point of §9d.3 is to keep MT off that path.
+   */
+  loanOffersPath?: string;
   /** The operator's own Coalition console base URL (WS3 courier); unset = no courier. */
   coalitionUrl?: string;
   /** When true (or Proxmox unconfigured), jobs are acknowledged without touching Proxmox. */
@@ -72,6 +83,25 @@ export function reloadInventory(cfg: AgentConfig): InventoryHost[] {
   } catch (err) {
     console.error("[agent] inventory reload failed:", (err as Error).message);
     return cfg.inventory; // keep last-known-good on a transient read/parse error
+  }
+}
+
+/**
+ * Re-read the loan-offer file each cycle, exactly as the inventory is re-read.
+ *
+ * Returns [] on a missing file or a bad parse, never a partial list: an offer set that half-loads
+ * would let a live loan read as "no matching offer" and be refused, and a refusal here means the
+ * lender stops tracking a loan that is genuinely running. Last-known-good is not kept either —
+ * unlike inventory, an offer the operator DELETED should stop being honoured, and the safe
+ * failure for this scan is to find no loan (it never deletes anything on its own).
+ */
+export function reloadLoanOffers(cfg: AgentConfig): LoanOffer[] {
+  if (!cfg.loanOffersPath) return [];
+  try {
+    return z.array(LoanOffer).parse(JSON.parse(readFileSync(cfg.loanOffersPath, "utf8")));
+  } catch (err) {
+    console.error("[loan] offer reload failed:", (err as Error).message);
+    return [];
   }
 }
 
@@ -143,6 +173,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AgentConfig {
     listing,
     inventory,
     inventoryPath: env.AGENT_INVENTORY_PATH || undefined,
+    loanOffersPath: env.AGENT_LOAN_OFFERS_PATH || undefined,
     coalitionUrl: env.COALITION_URL?.replace(/\/$/, "") || undefined,
     dryRun,
   };

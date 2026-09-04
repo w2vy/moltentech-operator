@@ -129,5 +129,22 @@ test("fence 3 — a foreign VM on the box is never a candidate, however it is ta
 
 test("a declared VM that is not on the hypervisor reports missing, with no tags", () => {
   const owned = ownedVmsForNode("pve50", ["ms-186-c8"], []);
-  assert.deepEqual(owned, [{ vmName: "ms-186-c8", nodeName: "pve50", status: "missing", tags: [] }]);
+  // `vmid: null` alongside the empty tags: absent means there is nothing to address either.
+  assert.deepEqual(owned, [
+    { vmName: "ms-186-c8", nodeName: "pve50", status: "missing", tags: [], vmid: null },
+  ]);
+});
+
+test("a VM that IS on the hypervisor carries its vmid through", () => {
+  const owned = ownedVmsForNode("pve50", ["ms-186-c6"], [
+    { name: "ms-186-c6", status: "running", tags: "flux-hub;leased;cumulus", vmid: 101 },
+  ]);
+  assert.equal(owned[0]?.vmid, 101);
+});
+
+test("a vmid Proxmox returns as a STRING is normalised to a number", () => {
+  const owned = ownedVmsForNode("pve50", ["ms-186-c6"], [
+    { name: "ms-186-c6", status: "running", tags: "", vmid: "101" },
+  ]);
+  assert.equal(owned[0]?.vmid, 101);
 });

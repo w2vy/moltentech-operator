@@ -1,12 +1,13 @@
 import { SCHEMA_VERSION } from "@moltentech/protocol";
 import { verifyOwnerAuth } from "@moltentech/protocol/wallet";
-import { loadConfig, reloadInventory } from "./config";
+import { loadConfig, reloadInventory, reloadLoanOffers } from "./config";
 import { MtClient, type MtClientAuth } from "./client";
 import { CoalitionClient } from "./coalition-client";
 import { loadManifestKey } from "./signing";
 import { pickExecutor, deprovisionVm } from "./executor";
 import { collectOwnedVms, type OwnedVm } from "./health";
 import { shouldSelfDestruct } from "./trial-expiry";
+import { logLoanScan, overConcurrencyLimit, scanLoans } from "./loan-scan";
 import { refreshIsoOnce } from "./iso-refresh";
 import { runDetached } from "./background";
 import { runPreflight, formatPreflight, checkManifestKey } from "./preflight";
@@ -183,6 +184,7 @@ async function main() {
       // health update, and the hub finding out via the next poll's `missing` is the whole
       // reconciliation design.
       await sweepExpiredTrials(vms);
+      await scanLoansOnce(vms);
     } catch (err) {
       console.error("[agent] health report error:", (err as Error).message);
     }
@@ -232,6 +234,37 @@ async function main() {
         // Idempotent by construction: the VM is still there, so the next cycle tries again.
         console.error(`[trial-expiry] ${vm.vmName}: destroy threw — ${(err as Error).message}`);
       }
+    }
+  }
+
+  /**
+   * lamport §9d.3 — recover this lender's loan state from its own hypervisor.
+   *
+   * Rides the health cadence and reuses its listing, the same way the trial sweep does: the
+   * `leased` chip arrives free on that listing, so an operator who lends nothing pays nothing.
+   *
+   * ⛔ Reads and reports only. Nothing here deletes a VM — §7 step 5 is a separate change,
+   * because an agent-originated delete has no `checkOwnerAuth` behind it.
+   *
+   * Never throws: like the trial sweep it runs inside the health cadence, which must not gate
+   * the poll loop (#90).
+   */
+  async function scanLoansOnce(vms: OwnedVm[]) {
+    const offers = reloadLoanOffers(cfg);
+    if (offers.length === 0 && !vms.some((v) => v.tags.includes("leased"))) return;
+    try {
+      const results = await scanLoans(cfg, vms, offers, new Date());
+      logLoanScan(results);
+      for (const { borrowerSlug, count } of overConcurrencyLimit(results)) {
+        // The hub enforces this at request ingest too. Both firing is the design; only this one
+        // firing means the hub's copy failed, and the loans are already running.
+        console.warn(
+          `[loan] ${borrowerSlug} holds ${count} of this lender's slots at once — over the ` +
+            `per-pair limit. The hub's ingest check should have refused this.`
+        );
+      }
+    } catch (err) {
+      console.error("[loan] scan error:", (err as Error).message);
     }
   }
 
