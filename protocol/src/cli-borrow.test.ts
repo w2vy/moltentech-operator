@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { mkdtempSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -44,25 +44,30 @@ writeFileSync(OFFER_PATH, JSON.stringify(signLoanOffer(OFFER, lender.privateKey)
  * `flag()` takes the FIRST occurrence, so a duplicate flag never overrides — the pubkey is a
  * parameter here rather than something a caller appends.
  */
-function run(extra: string[], lenderPubkey = lender.publicKeyBase64): { out: string; code: number } {
-  try {
-    const out = execFileSync(
-      "npx",
-      [
-        "tsx", CLI, "borrow",
-        "--offer", OFFER_PATH,
-        "--lender-pubkey", lenderPubkey,
-        "--key", KEY,
-        "--slug", "moltentech-test1",
-        ...extra,
-      ],
-      { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }
-    );
-    return { out, code: 0 };
-  } catch (err) {
-    const e = err as { status?: number; stdout?: string; stderr?: string };
-    return { out: `${e.stdout ?? ""}${e.stderr ?? ""}`, code: e.status ?? 1 };
-  }
+function run(
+  extra: string[],
+  lenderPubkey = lender.publicKeyBase64
+): { out: string; err: string; code: number } {
+  // spawnSync, not execFileSync, so the two streams stay separable: `borrow` now writes a
+  // deprecation notice to stderr while stdout must remain the signed record and nothing else.
+  // `out` keeps its original meaning — merged on failure, so the refusal assertions below read
+  // the same as they always did — and `err` is stderr alone.
+  const r = spawnSync(
+    "npx",
+    [
+      "tsx", CLI, "borrow",
+      "--offer", OFFER_PATH,
+      "--lender-pubkey", lenderPubkey,
+      "--key", KEY,
+      "--slug", "moltentech-test1",
+      ...extra,
+    ],
+    { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }
+  );
+  const stdout = r.stdout ?? "";
+  const stderr = r.stderr ?? "";
+  const code = r.status ?? 1;
+  return { out: code === 0 ? stdout : `${stdout}${stderr}`, err: stderr, code };
 }
 
 test("borrow emits a signed LoanRequest that the lender's verifier accepts", () => {
@@ -131,6 +136,25 @@ test("borrow appears in the usage line", () => {
   // Bare invocation — `run()` always supplies a subcommand, so help is never reached through it.
   const out = execFileSync("npx", ["tsx", CLI, "--help"], { encoding: "utf8" });
   assert.match(out, /^usage: mt-manifest .*\|borrow\|/m);
+});
+
+test("help marks borrow DEPRECATED and names the console that replaces it", () => {
+  // The deprecation has to be visible where an operator meets the command, not only in the plan.
+  const out = execFileSync("npx", ["tsx", CLI, "--help"], { encoding: "utf8" });
+  assert.match(out, /borrow\s+⚠️ DEPRECATED/);
+  assert.match(out, /hub\/operator console/);
+});
+
+test("the deprecation notice goes to STDERR, leaving --stamp pipeable", () => {
+  // 🔴 The whole point of the stream choice. `--stamp` output is written straight into a VM's
+  // Proxmox description, and the 2026-09-04 staging run piped it to a file. A warning on stdout
+  // would corrupt the signed record with prose and fail verification on the lender's agent, with
+  // nothing in the failure pointing at a help string.
+  const r = run(["--vm", "mt-187-c4", "--node", "pve45", "--hours", "24", "--stamp"]);
+  assert.equal(r.code, 0);
+  assert.doesNotMatch(r.out, /DEPRECATED/);
+  assert.match(r.err, /DEPRECATED/);
+  JSON.parse(r.out.trim()); // stdout is the record and nothing else
 });
 
 // ── reproducibility (--issued-at) ─────────────────────────────────────────────
