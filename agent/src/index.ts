@@ -9,6 +9,7 @@ import { collectOwnedVms, type OwnedVm } from "./health";
 import { shouldSelfDestruct } from "./trial-expiry";
 import { logLoanScan, overConcurrencyLimit, scanLoans } from "./loan-scan";
 import { buildLoanOffers } from "./loan-offer";
+import { reclaimPlan } from "./loan-reclaim";
 import { refreshIsoOnce } from "./iso-refresh";
 import { runDetached } from "./background";
 import { runPreflight, formatPreflight, checkManifestKey } from "./preflight";
@@ -275,16 +276,65 @@ async function main() {
     try {
       const results = await scanLoans(cfg, vms, offers, new Date());
       logLoanScan(results);
-      for (const { borrowerSlug, count } of overConcurrencyLimit(results)) {
+
+      const breaches = overConcurrencyLimit(results);
+      for (const { borrowerSlug, count } of breaches) {
         // The hub enforces this at request ingest too. Both firing is the design; only this one
         // firing means the hub's copy failed, and the loans are already running.
         console.warn(
           `[loan] ${borrowerSlug} holds ${count} of this lender's slots at once — over the ` +
-            `per-pair limit. The hub's ingest check should have refused this.`
+            `per-pair limit. The hub's ingest check should have refused this. No loan of theirs ` +
+            `will be reclaimed automatically until this is resolved.`
         );
       }
+      await reclaimExpiredLoans(results, new Set(breaches.map((b) => b.borrowerSlug)));
     } catch (err) {
       console.error("[loan] scan error:", (err as Error).message);
+    }
+  }
+
+  /**
+   * §7 step 5 — destroy a borrowed VM whose term has run out.
+   *
+   * ⚠️ The ONE autonomous delete in the loan design. No hub job, no operator signature, no
+   * `ProvisionLog` row, no second party of any kind — and the node belongs to the BORROWER's
+   * paying customer. Every fence lives in `readLoanState` (loan-state.ts) and `shouldReclaim`
+   * (loan-reclaim.ts), both pure and both tested without a hypervisor; this function does the
+   * I/O and nothing else.
+   *
+   * Logs UNCONDITIONALLY on a delete, for the same reason the trial sweep does: there is no
+   * record of it anywhere else, so this line is the operator's only trace.
+   *
+   * `expiry = delete`. There is no stop and no grace (§5) — a stopped VM still holds the slot,
+   * and the lender's whole reason for a fixed term is to get the hardware back.
+   */
+  async function reclaimExpiredLoans(
+    results: Awaited<ReturnType<typeof scanLoans>>,
+    breachedBorrowers: ReadonlySet<string>
+  ) {
+    for (const { result, verdict } of reclaimPlan(results, breachedBorrowers)) {
+      if (!verdict.reclaim) {
+        // `not-expired` is the common no-op and stays silent. A breach is already warned about
+        // above, once per borrower rather than once per VM.
+        continue;
+      }
+      console.log(
+        `[loan] ${result.vmName} on ${result.nodeName}: loan term ended — RECLAIMING. ` +
+          `borrower=${verdict.borrowerSlug} expired=${verdict.expiresAt.toISOString()}`
+      );
+      try {
+        const r = await deprovisionVm(result.vmName, result.nodeName, cfg);
+        console.log(
+          `[loan] ${result.vmName}: ${r.ok ? "reclaimed" : "FAILED"} — ` +
+            `${(r.message ?? "").slice(0, 500)}`
+        );
+        // TODO(lamport §0.4 END step 2): sign a `LoanStatus: ended` and post it, so the hub can
+        // repoint the borrower's rental home. No hub endpoint exists yet; until it does the
+        // borrower's own agent finds out the same way the hub does — the VM reports `missing`.
+      } catch (err) {
+        // Idempotent by construction: the VM is still there, so the next cycle tries again.
+        console.error(`[loan] ${result.vmName}: reclaim threw — ${(err as Error).message}`);
+      }
     }
   }
 
