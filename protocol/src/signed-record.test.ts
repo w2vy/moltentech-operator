@@ -7,7 +7,7 @@ import {
   stripTrailingNewlines,
 } from "./signed-record";
 
-const HEADER = "# flux-hub\nkind:     leased\nborrower: moltentech-test1";
+const HEADER = "# flux-hub\nkind:     loaned\nborrower: moltentech-test1";
 
 test("a description with no delimiter has no record", () => {
   const { header, record } = splitSignedRecord(HEADER);

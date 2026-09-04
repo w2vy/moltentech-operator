@@ -3,9 +3,9 @@ import { test } from "node:test";
 import { SCHEMA_VERSION, joinSignedRecord, type LoanOffer, type LoanRequest } from "@moltentech/protocol";
 import { generateEd25519 } from "@moltentech/protocol/signing";
 import { loanStampRecord, signLoanRequest } from "@moltentech/protocol/loan-signing";
-import { LEASED_CHIP, acceptsRestamp, parseCtime, readLoanState, type VmStamp } from "./loan-state";
+import { LOANED_CHIP, acceptsRestamp, parseCtime, readLoanState, type VmStamp } from "./loan-state";
 
-const HEADER = "# flux-hub\nkind:     leased\nborrower: moltentech-test1";
+const HEADER = "# flux-hub\nkind:     loaned\nborrower: moltentech-test1";
 
 const borrower = generateEd25519();
 
@@ -44,7 +44,7 @@ function vm(over: Partial<VmStamp> = {}, req = REQUEST, key = borrower.privateKe
   return {
     vmName: "mt-187-c4",
     nodeName: "pve45",
-    tags: ["flux-hub", LEASED_CHIP, "cumulus"],
+    tags: ["flux-hub", LOANED_CHIP, "cumulus"],
     description: joinSignedRecord(HEADER, loanStampRecord(signLoanRequest(req, key))),
     meta: META,
     ...over,
@@ -102,12 +102,12 @@ test("a slot this offer never put up is refused even when the signature is good"
   assert.deepEqual(v, { loan: false, reason: "slot-not-offered" });
 });
 
-test("no `leased` chip means the description is never even consulted", () => {
+test("no `loaned` chip means the description is never even consulted", () => {
   const v = readLoanState(vm({ tags: ["flux-hub", "paid", "cumulus"] }), OFFER, DURING);
-  assert.deepEqual(v, { loan: false, reason: "not-leased" });
+  assert.deepEqual(v, { loan: false, reason: "not-loaned" });
 });
 
-test("a leased chip with no stamp is 'no-record' — a chip alone authorizes nothing", () => {
+test("a loaned chip with no stamp is 'no-record' — a chip alone authorizes nothing", () => {
   const v = readLoanState(vm({ description: HEADER }), OFFER, DURING);
   assert.deepEqual(v, { loan: false, reason: "no-record" });
 });

@@ -2,7 +2,7 @@ import type { LoanOffer } from "@moltentech/protocol";
 import { MAX_CONCURRENT_PER_PAIR } from "@moltentech/protocol";
 import type { AgentConfig } from "./config";
 import { getVmConfig, type OwnedVm } from "./health";
-import { LEASED_CHIP, readLoanState, type LoanRefusal, type LoanVerdict } from "./loan-state";
+import { LOANED_CHIP, readLoanState, type LoanRefusal, type LoanVerdict } from "./loan-state";
 
 /**
  * The I/O around `readLoanState` — the lender's agent recovering its own loan state each cycle.
@@ -28,9 +28,9 @@ export type LoanScanResult = {
 /**
  * Refusals worth a human's attention.
  *
- * The rest are the ordinary no-op: a VM with no `leased` chip is every VM on a fleet that lends
+ * The rest are the ordinary no-op: a VM with no `loaned` chip is every VM on a fleet that lends
  * nothing, and logging it would bury the fleet's real signal. These four mean a VM IS advertising
- * itself as leased while its stamp does not hold up — a stamp-builder bug, a tampered
+ * itself as loaned while its stamp does not hold up — a stamp-builder bug, a tampered
  * description, or an offer the operator deleted out from under a live loan. Each one leaves a
  * borrowed node running with nobody tracking its expiry, which is exactly what a lender wants to
  * hear about.
@@ -43,9 +43,9 @@ const LOUD_REFUSALS: ReadonlySet<LoanRefusal> = new Set<LoanRefusal>([
 ]);
 
 /**
- * Read every leased VM's stamp and decide what it is.
+ * Read every loaned VM's stamp and decide what it is.
  *
- * The `leased` chip on the CHEAP listing is the filter: a fleet with no loans makes zero config
+ * The `loaned` chip on the CHEAP listing is the filter: a fleet with no loans makes zero config
  * calls. That ordering is deliberate — the expensive per-VM read happens only for VMs that have
  * already declared themselves.
  *
@@ -67,7 +67,7 @@ export async function scanLoans(
   const results: LoanScanResult[] = [];
 
   for (const vm of vms) {
-    if (!vm.tags.includes(LEASED_CHIP)) continue;
+    if (!vm.tags.includes(LOANED_CHIP)) continue;
     if (vm.status === "missing") continue; // gone with the VM, and that is correct (§9d.3 rule 2)
     if (vm.vmid === null) continue; // no vmid, no config read — nothing to say about it
 
@@ -143,7 +143,7 @@ export function logLoanScan(results: LoanScanResult[]): void {
     }
     if (LOUD_REFUSALS.has(r.verdict.reason)) {
       console.warn(
-        `[loan] ${r.vmName} on ${r.nodeName}: leased VM with an unusable stamp ` +
+        `[loan] ${r.vmName} on ${r.nodeName}: loaned VM with an unusable stamp ` +
           `(${r.verdict.reason}) — nothing is tracking its expiry`
       );
     }
