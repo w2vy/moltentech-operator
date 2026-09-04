@@ -186,7 +186,7 @@ async function main() {
       // health update, and the hub finding out via the next poll's `missing` is the whole
       // reconciliation design.
       await sweepExpiredTrials(vms);
-      await scanLoansOnce(vms);
+      await scanLoansOnce();
     } catch (err) {
       console.error("[agent] health report error:", (err as Error).message);
     }
@@ -251,10 +251,35 @@ async function main() {
    * Never throws: like the trial sweep it runs inside the health cadence, which must not gate
    * the poll loop (#90).
    */
-  async function scanLoansOnce(vms: OwnedVm[]) {
+  async function scanLoansOnce() {
     const declarations = reloadLoanOfferDeclarations(cfg);
-    const leased = vms.some((v) => v.tags.includes("leased"));
-    if (declarations.length === 0 && !leased) return;
+    // No declarations, no offers — and without an offer every leased VM would refuse with
+    // `unknown-offer-revision` anyway, so scanning could produce nothing but noise. This is also
+    // what keeps an operator who lends nothing at zero cost: no listing, no config reads.
+    if (declarations.length === 0) return;
+
+    /**
+     * 🔴 The VM list comes from `inventory.json`, NOT from the health pass.
+     *
+     * Reusing the health listing looked free and was wrong. `GET /api/agent/nodes` only hands
+     * back slots in `AGENT_REPORTED_STATUSES` (`active`, `bootstrap`, `benchmark`,
+     * `awaiting_start`) — and a slot a lender is willing to lend is, by definition, the idle one.
+     * An `available` slot never reaches the agent at all, so a borrowed VM sitting on it was
+     * invisible to this scan and its expiry would never have fired.
+     *
+     * Measured on staging 2026-09-04: the agent declares 2 slots on pve50 and is handed 1; the
+     * `available` one is the one a loan would use.
+     *
+     * `inventory.json` is the right source regardless of that bug. It is this operator's own
+     * declaration of what hardware they manage, which is exactly the ownership fence the scan
+     * needs — and §9d.3's whole point is that the lender's agent recovers loan state without MT
+     * on the path. Asking the hub which of your own slots you may look at contradicts that.
+     */
+    const owned = reloadInventory(cfg).flatMap((host) =>
+      host.slots.map((slot) => ({ vmName: slot.vmName, nodeName: host.nodeName }))
+    );
+    if (owned.length === 0) return;
+    const vms = await collectOwnedVms(cfg, owned);
 
     // Build the offers from the operator's declarations against their OWN inventory. The
     // unsigned build is what the lender's own scan uses — a local file is trusted for being

@@ -45,13 +45,15 @@
  *                                        wrap the manifest + your wallet signature into the
  *                                        SignedProviderManifest MT ingests (proven identity)
  *   borrow --offer <offer.json> --lender-pubkey <b64> --vm <vmName> --node <nodeName>
- *          --hours <n> [--dir <dir>] [--key <pem>] [--slug <yours>] [--out <request.json>]
- *          [--stdout] [--stamp]
+ *          --hours <n> [--dir <dir>] [--key <pem>] [--slug <yours>] [--issued-at <iso>]
+ *          [--out <request.json>] [--stdout] [--stamp]
  *                                       BORROWER side of a node loan. Verify a lender's signed
  *                                       LoanOffer, check its terms against what you want, and
  *                                       emit a LoanRequest signed with YOUR operator key.
  *                                       --stamp prints the one-line record the lender's agent
  *                                       writes into the borrowed VM's Proxmox description.
+ *                                       --issued-at makes the whole record REPRODUCIBLE: rerun
+ *                                       the same command with it and you get the same bytes.
  */
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { randomBytes } from "node:crypto";
@@ -1470,12 +1472,38 @@ async function main() {
       }
 
       const now = new Date();
+
+      /**
+       * `issuedAt` is the ONE thing in the record that does not come from the offer or the
+       * flags, so left to the clock it is also the one thing that makes two runs of the same
+       * command produce two different loans.
+       *
+       * That matters more than it looks. The nonce is derived from the content, so `issuedAt` is
+       * what the identity ultimately turns on: `acceptsRestamp` uses that identity to decide
+       * whether a re-stamp after a reprovision is the SAME loan or a different one. A borrower
+       * who reran `borrow` — to add `--stamp`, say, as this command's own staging run did on
+       * 2026-09-04 — would hold two records that disagree, and the lender would honour whichever
+       * arrived. Passing `--issued-at` makes the whole record reproducible.
+       *
+       * The default stays "now" because that is right for the first run and asking every
+       * borrower for a timestamp would be worse. The flag is for reproducing a record you
+       * already sent.
+       */
+      const issuedAtRaw = flag(args, "--issued-at");
+      let issuedAt = now;
+      if (issuedAtRaw) {
+        issuedAt = new Date(issuedAtRaw);
+        if (Number.isNaN(issuedAt.getTime())) {
+          die(`--issued-at must be an ISO-8601 instant (got ${issuedAtRaw}).`);
+        }
+      }
+
       const verdict = acceptOffer(
         rawOffer,
         lenderPubkey,
         { slug, pubkey: myPubkey },
         { vmName, nodeName, durationHours },
-        now,
+        issuedAt,
         now
       );
       if (!verdict.ok) die(`cannot accept this offer: ${BORROW_REFUSALS[verdict.reason]}`);
@@ -1497,7 +1525,9 @@ async function main() {
             `  slot     ${vmName} on ${nodeName}\n` +
             `  lender   ${verdict.offer.lenderSlug} (offer rev${verdict.offer.revision})\n` +
             `  duration ${durationHours}h of an allowed ${verdict.offer.maxDurationHours}h\n` +
-            `Send it to your lender. Their agent verifies it against the pubkey in their own offer.`
+            `  issuedAt ${signed.issuedAt}\n` +
+            `Send it to your lender. Their agent verifies it against the pubkey in their own offer.\n` +
+            `To reproduce these exact bytes, rerun with --issued-at ${signed.issuedAt}`
         );
       } else {
         process.stdout.write(out);
