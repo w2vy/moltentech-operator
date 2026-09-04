@@ -5,11 +5,11 @@ import { SIGNED_RECORD_DELIMITER } from "./signed-record";
  *
  * ## Why this is in `protocol` and not in the hub that wrote it first
  *
- * The hub builds this stamp for every VM it has a rental for. But a `leased` VM has no hub
+ * The hub builds this stamp for every VM it has a rental for. But a `loaned` VM has no hub
  * rental on the lender's side at all: `prudent-lending-lamport` §0.4 step 7 has the LENDER'S
  * AGENT provision the borrowed VM and stamp it, and the agent lives in another repo and cannot
  * import the hub. Leaving the builders hub-side would have meant the one kind that only the
- * agent can write was the one kind the agent had no way to build — so the `leased` header would
+ * agent can write was the one kind the agent had no way to build — so the `loaned` header would
  * have been retyped by hand on the far side of the wire, which is how two writers of one format
  * start to disagree.
  *
@@ -27,7 +27,7 @@ import { SIGNED_RECORD_DELIMITER } from "./signed-record";
  */
 
 /** Exactly one of these describes any VM the hub creates. */
-export type VmKind = "paid" | "free" | "foundation" | "leased";
+export type VmKind = "paid" | "free" | "foundation" | "loaned";
 
 /**
  * Proxmox tag charset (`pve-tag-id`): `[a-z0-9_][a-z0-9_\-+.]*`. Note there is NO COLON, which
@@ -48,11 +48,11 @@ export type VmAnnotationInput = {
   /**
    * The hub's rental code.
    *
-   * Present for `paid`, `free` AND `foundation`; omitted only for `leased`. A Foundation
+   * Present for `paid`, `free` AND `foundation`; omitted only for `loaned`. A Foundation
    * placement has a rental code of its own and it names no customer — the Foundation "customer"
    * is the platform itself — so stamping it discloses nothing to the operator that they do not
    * already own, and it is the fastest thread to pull when a `fh-` VM turns up on a hypervisor
-   * with no claimant at the hub (which happened on staging 2026-09-03). `leased` is the real
+   * with no claimant at the hub (which happened on staging 2026-09-03). `loaned` is the real
    * exclusion: that VM sits on ANOTHER operator's box, and the lender is not entitled to the
    * borrower's customer.
    */
@@ -64,7 +64,7 @@ export type VmAnnotationInput = {
    * would be a lie after the first renewal) and for `foundation` (ends on eviction, not a clock).
    */
   deadline?: Date | null;
-  /** `leased` only — the two operators. Never a customer field: it sits on someone else's box. */
+  /** `loaned` only — the two operators. Never a customer field: it sits on someone else's box. */
   borrowerSlug?: string | null;
   lenderSlug?: string | null;
 };
@@ -90,7 +90,7 @@ export function buildVmTags(input: VmAnnotationInput): string {
   if (input.deadline) {
     // 🔴 liskov fence 1 — a deadline chip may only appear where a deadline is REAL.
     //
-    // `free` (a trial's fixed term) and `leased` (a loan's) both genuinely end on a clock, and
+    // `free` (a trial's fixed term) and `loaned` (a loan's) both genuinely end on a clock, and
     // seeing that date in the tag column is the point of the stamp. `paid` is recurring, so any
     // date would be a lie after the first renewal, and `foundation` ends on eviction, not on a
     // clock — a deadline on either is a stamp-builder bug.
@@ -101,7 +101,7 @@ export function buildVmTags(input: VmAnnotationInput): string {
     // long (harmless), a wrong one destroys a node on schedule.
     //
     // ⚠️ The chip alone NEVER authorizes anything. The destruct gate requires `free` AND
-    // `until-` (agent/src/trial-expiry.ts fence 2), which is what lets a `leased` VM advertise
+    // `until-` (agent/src/trial-expiry.ts fence 2), which is what lets a `loaned` VM advertise
     // its loan end date here without becoming destroyable. A loan's expiry is still ENFORCED
     // from the signed `LoanRequest` in the description, which the lender's agent verifies; this
     // chip only makes the same fact visible on the hypervisor.
@@ -127,7 +127,7 @@ export function buildVmTags(input: VmAnnotationInput): string {
 export function buildVmDescription(input: VmAnnotationInput): string {
   const rows: Array<[string, string]> = [["kind", input.kind]];
 
-  if (input.kind === "leased") {
+  if (input.kind === "loaned") {
     // No rental, no subscription, no customer identity: this VM sits on another operator's
     // hypervisor, and the lender is not entitled to the borrower's customer.
     if (input.borrowerSlug) rows.push(["borrower", input.borrowerSlug]);
@@ -163,7 +163,7 @@ function termLine(input: VmAnnotationInput): string {
     case "foundation":
       return "idle-fill — until evicted";
     case "free":
-    case "leased":
+    case "loaned":
       return input.deadline
         ? `fixed — until ${isoMinutes(input.deadline)}`
         : "open-ended (ended by hand)";

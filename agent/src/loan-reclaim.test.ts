@@ -80,7 +80,7 @@ test("a live loan inside its term is NOT reclaimed", () => {
 test("every scan refusal is 'not-a-loan' — a VM whose stamp did not verify is never touched", () => {
   // The exhaustive part: whatever readLoanState refused for, it never reaches a delete.
   const reasons = [
-    "not-leased",
+    "not-loaned",
     "no-record",
     "not-json",
     "schema",

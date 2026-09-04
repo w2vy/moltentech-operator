@@ -26,7 +26,7 @@ import { verifyLoanStamp } from "@moltentech/protocol/loan-signing";
  */
 
 /** The chip the hub stamps on a loaned VM. Cheap filter: only these VMs need a config read. */
-export const LEASED_CHIP = "leased";
+export const LOANED_CHIP = "loaned";
 
 /**
  * Fence — an expiry further in the past than this reads as BROKEN, not as overdue.
@@ -87,8 +87,8 @@ export type LoanVerdict =
   | { loan: false; reason: LoanRefusal };
 
 export type LoanRefusal =
-  /** No `leased` chip — not a loaned VM, and the description was not even read. */
-  | "not-leased"
+  /** No `loaned` chip — not a loaned VM, and the description was not even read. */
+  | "not-loaned"
   /** The stamp is absent, unparseable, malformed, or not signed by the offer's borrower. */
   | "no-record"
   | "not-json"
@@ -111,7 +111,7 @@ export type LoanRefusal =
  *
  * §7's checklist, in order, with every step that could select the wrong VM made explicit:
  *
- * 1. **`leased` chip present.** Two independent markers must agree before anything downstream
+ * 1. **`loaned` chip present.** Two independent markers must agree before anything downstream
  *    considers a delete — exactly the rule `trial-expiry` follows for `free` + `until-`.
  * 2. **Signature checks against `offer.borrowerPubkey`** — the lender's own belief about the
  *    borrower's key, never a key carried by the record itself.
@@ -136,7 +136,7 @@ export function readLoanState(
 ): LoanVerdict {
   const maxOverdueMs = opts.maxOverdueMs ?? MAX_OVERDUE_MS;
 
-  if (!vm.tags.includes(LEASED_CHIP)) return { loan: false, reason: "not-leased" };
+  if (!vm.tags.includes(LOANED_CHIP)) return { loan: false, reason: "not-loaned" };
 
   const stamp = verifyLoanStamp(vm.description, offer.borrowerPubkey);
   if (!stamp.ok) return { loan: false, reason: stamp.reason };

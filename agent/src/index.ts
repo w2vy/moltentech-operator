@@ -243,7 +243,7 @@ async function main() {
    * lamport §9d.3 — recover this lender's loan state from its own hypervisor.
    *
    * Rides the health cadence and reuses its listing, the same way the trial sweep does: the
-   * `leased` chip arrives free on that listing, so an operator who lends nothing pays nothing.
+   * `loaned` chip arrives free on that listing, so an operator who lends nothing pays nothing.
    *
    * ⛔ Reads and reports only. Nothing here deletes a VM — §7 step 5 is a separate change,
    * because an agent-originated delete has no `checkOwnerAuth` behind it.
@@ -253,7 +253,7 @@ async function main() {
    */
   async function scanLoansOnce() {
     const declarations = reloadLoanOfferDeclarations(cfg);
-    // No declarations, no offers — and without an offer every leased VM would refuse with
+    // No declarations, no offers — and without an offer every loaned VM would refuse with
     // `unknown-offer-revision` anyway, so scanning could produce nothing but noise. This is also
     // what keeps an operator who lends nothing at zero cost: no listing, no config reads.
     if (declarations.length === 0) return;

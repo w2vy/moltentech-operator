@@ -7,7 +7,7 @@ import type { AgentConfig } from "./config";
 import type { OwnedVm } from "./health";
 import { overConcurrencyLimit, scanLoans, type LoanScanResult } from "./loan-scan";
 
-const HEADER = "# flux-hub\nkind:     leased";
+const HEADER = "# flux-hub\nkind:     loaned";
 const borrower = generateEd25519();
 
 const OFFER: LoanOffer = {
@@ -52,7 +52,7 @@ function ownedVm(over: Partial<OwnedVm> = {}): OwnedVm {
     vmName: "mt-187-c4",
     nodeName: "pve45",
     status: "running",
-    tags: ["flux-hub", "leased", "cumulus"],
+    tags: ["flux-hub", "loaned", "cumulus"],
     vmid: 219,
     ...over,
   };
@@ -70,7 +70,7 @@ function fakeReader(configs: Record<string, { description?: string; meta?: strin
 
 const CFG = {} as AgentConfig;
 
-test("a VM with no `leased` chip costs ZERO config calls", async () => {
+test("a VM with no `loaned` chip costs ZERO config calls", async () => {
   const calls: string[] = [];
   const vms = [ownedVm({ tags: ["flux-hub", "paid", "cumulus"] })];
   const out = await scanLoans(CFG, vms, [OFFER], NOW, fakeReader({}, calls));
@@ -86,7 +86,7 @@ test("a missing VM is skipped — the loan died with it", async () => {
   assert.deepEqual(calls, []);
 });
 
-test("a leased VM is read once and reported as a live loan", async () => {
+test("a loaned VM is read once and reported as a live loan", async () => {
   const calls: string[] = [];
   const reader = fakeReader(
     { "pve45/219": { description: stampFor("mt-187-c4"), meta: `creation-qemu=8.1.5,ctime=${CTIME}` } },
@@ -123,7 +123,7 @@ test("the most informative refusal survives, not the last offer's", async () => 
   }
 });
 
-test("with no offers at all, a leased VM still reports — silence would hide it", async () => {
+test("with no offers at all, a loaned VM still reports — silence would hide it", async () => {
   const calls: string[] = [];
   const reader = fakeReader(
     { "pve45/219": { description: stampFor("mt-187-c4"), meta: `creation-qemu=8.1.5,ctime=${CTIME}` } },

@@ -26,17 +26,17 @@ test("destroys a free VM whose deadline has passed", () => {
 });
 
 test("fence 2 — a deadline WITHOUT the free chip is refused, whatever else it says", () => {
-  for (const kind of ["paid", "foundation", "leased"]) {
+  for (const kind of ["paid", "foundation", "loaned"]) {
     const v = shouldSelfDestruct(tags(`flux-hub;${kind};cumulus;until-2026-09-01`), NOW);
     assert.deepEqual(v, { destroy: false, reason: "not-free" }, `${kind} must be refused`);
   }
 });
 
-test("a LEASED VM's loan end date is visible but never destroyable", () => {
-  // The hub legitimately stamps `until-` on a leased VM so the loan's end shows in the tag
+test("a LOANED VM's loan end date is visible but never destroyable", () => {
+  // The hub legitimately stamps `until-` on a loaned VM so the loan's end shows in the tag
   // column. Two chips must agree, so that visibility can never become an unsigned destroy —
   // a loan ends by its lender's agent verifying the signed LoanRequest, not by this chip.
-  const v = shouldSelfDestruct(tags("flux-hub;leased;stratus;until-2020-01-01"), NOW);
+  const v = shouldSelfDestruct(tags("flux-hub;loaned;stratus;until-2020-01-01"), NOW);
   assert.deepEqual(v, { destroy: false, reason: "not-free" });
 });
 
@@ -137,7 +137,7 @@ test("a declared VM that is not on the hypervisor reports missing, with no tags"
 
 test("a VM that IS on the hypervisor carries its vmid through", () => {
   const owned = ownedVmsForNode("pve50", ["ms-186-c6"], [
-    { name: "ms-186-c6", status: "running", tags: "flux-hub;leased;cumulus", vmid: 101 },
+    { name: "ms-186-c6", status: "running", tags: "flux-hub;loaned;cumulus", vmid: 101 },
   ]);
   assert.equal(owned[0]?.vmid, 101);
 });

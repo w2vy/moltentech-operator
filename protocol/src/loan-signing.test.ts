@@ -6,7 +6,7 @@ import { generateEd25519, publicKeyBase64FromPrivate } from "./signing";
 import { joinSignedRecord } from "./signed-record";
 import { loanStampRecord, signLoanRequest, verifyLoanStamp } from "./loan-signing";
 
-const HEADER = "# flux-hub\nkind:     leased\nborrower: moltentech-test1";
+const HEADER = "# flux-hub\nkind:     loaned\nborrower: moltentech-test1";
 
 const REQUEST: LoanRequest = {
   schemaVersion: SCHEMA_VERSION,

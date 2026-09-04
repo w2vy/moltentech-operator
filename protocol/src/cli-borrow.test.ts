@@ -79,7 +79,7 @@ test("borrow emits a signed LoanRequest that the lender's verifier accepts", () 
   assert.match(signed.nonce, /^[0-9a-f]{32}$/);
 
   // The real acceptance path: the record as it lands in a VM description, read back.
-  const description = joinSignedRecord("# flux-hub\nkind:     leased", JSON.stringify(signed));
+  const description = joinSignedRecord("# flux-hub\nkind:     loaned", JSON.stringify(signed));
   const v = verifyLoanStamp(description, borrower.publicKeyBase64);
   assert.equal(v.ok, true);
 });

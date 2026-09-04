@@ -132,7 +132,7 @@ test("⭐ end to end: lender signs an offer, borrower answers it, the stamp veri
   if (!v.ok) return;
 
   const signedRequest = signLoanRequest(v.request, borrower.privateKey);
-  const description = joinSignedRecord("# flux-hub\nkind:     leased", loanStampRecord(signedRequest));
+  const description = joinSignedRecord("# flux-hub\nkind:     loaned", loanStampRecord(signedRequest));
 
   const readBack = verifyLoanStamp(description, OFFER.borrowerPubkey);
   assert.equal(readBack.ok, true);

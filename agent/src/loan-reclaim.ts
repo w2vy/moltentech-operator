@@ -18,7 +18,7 @@ import type { LoanScanResult } from "./loan-scan";
  *
  * ## What has already been checked by the time a result gets here
  *
- * `readLoanState` (loan-state.ts) refuses anything that is not: tagged `leased`, signed by the key
+ * `readLoanState` (loan-state.ts) refuses anything that is not: tagged `loaned`, signed by the key
  * in the lender's OWN offer, answering an offer revision the lender issued, naming a slot that
  * offer put up, naming **this very VM**, and carrying a hypervisor `ctime` to measure from. The VM
  * itself came from `collectOwnedVms`, which walks `inventory.json` — so it is one this agent

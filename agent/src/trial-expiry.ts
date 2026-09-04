@@ -79,7 +79,7 @@ export type DestructVerdict =
  *
  * 1. **`until-` must be present** and parse. No deadline, no destruct.
  * 2. **`free` must also be present.** The deadline alone is never sufficient; two independent
- *    chips must agree. This is what lets a `leased` VM advertise its loan end date in the same
+ *    chips must agree. This is what lets a `loaned` VM advertise its loan end date in the same
  *    tag column without becoming destroyable — a loan is ENDED by its lender's agent verifying
  *    the signed `LoanRequest` in the description, never by a chip that merely asserts. A `paid`
  *    or `foundation` VM has no legitimate deadline at all (the hub throws on that combination),
