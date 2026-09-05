@@ -79,11 +79,14 @@ export type DestructVerdict =
  *
  * 1. **`until-` must be present** and parse. No deadline, no destruct.
  * 2. **`free` must also be present.** The deadline alone is never sufficient; two independent
- *    chips must agree. This is what lets a `loaned` VM advertise its loan end date in the same
- *    tag column without becoming destroyable — a loan is ENDED by its lender's agent verifying
- *    the signed `LoanRequest` in the description, never by a chip that merely asserts. A `paid`
- *    or `foundation` VM has no legitimate deadline at all (the hub throws on that combination),
- *    so one appearing here is a stamp-builder bug and this is the local second line against it.
+ *    chips must agree. A `paid` or `foundation` VM has no legitimate deadline at all (the hub
+ *    throws on that combination), so one appearing here is a stamp-builder bug and this is the
+ *    local second line against it.
+ *
+ *    📌 Since `loaned` was removed (2026-09-05) `free` is the only kind the hub will stamp a
+ *    deadline on, so this fence and the builder's now describe the same set. It stays a separate
+ *    check anyway: it is what would let a future non-destroyable kind advertise an end date in
+ *    the same tag column, and it is the only one of the two that runs on THIS side of the wire.
  * 3. The deadline must actually have passed.
  * 4. …but not by more than `MAX_OVERDUE_MS` — wildly stale reads as broken (see above).
  *

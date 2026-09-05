@@ -26,17 +26,20 @@ test("destroys a free VM whose deadline has passed", () => {
 });
 
 test("fence 2 — a deadline WITHOUT the free chip is refused, whatever else it says", () => {
-  for (const kind of ["paid", "foundation", "loaned"]) {
+  for (const kind of ["paid", "foundation"]) {
     const v = shouldSelfDestruct(tags(`flux-hub;${kind};cumulus;until-2026-09-01`), NOW);
     assert.deepEqual(v, { destroy: false, reason: "not-free" }, `${kind} must be refused`);
   }
 });
 
-test("a LOANED VM's loan end date is visible but never destroyable", () => {
-  // The hub legitimately stamps `until-` on a loaned VM so the loan's end shows in the tag
-  // column. Two chips must agree, so that visibility can never become an unsigned destroy —
-  // a loan ends by its lender's agent verifying the signed LoanRequest, not by this chip.
-  const v = shouldSelfDestruct(tags("flux-hub;loaned;stratus;until-2020-01-01"), NOW);
+test("⭐ a kind this build has never heard of is refused, deadline or not", () => {
+  // The case fence 2 actually exists for, and the reason it stays a separate check now that
+  // `free` is the only kind the hub stamps a deadline on. A newer hub could introduce a kind
+  // that legitimately advertises an end date in the tag column; an older agent must read that
+  // as "not mine to destroy" rather than as permission. `loaned` was that kind until the loan
+  // design was dropped 2026-09-05, and the next one arrives the same way — through a tag this
+  // build cannot recognise.
+  const v = shouldSelfDestruct(tags("flux-hub;wholesale;stratus;until-2020-01-01"), NOW);
   assert.deepEqual(v, { destroy: false, reason: "not-free" });
 });
 
@@ -137,7 +140,7 @@ test("a declared VM that is not on the hypervisor reports missing, with no tags"
 
 test("a VM that IS on the hypervisor carries its vmid through", () => {
   const owned = ownedVmsForNode("pve50", ["ms-186-c6"], [
-    { name: "ms-186-c6", status: "running", tags: "flux-hub;loaned;cumulus", vmid: 101 },
+    { name: "ms-186-c6", status: "running", tags: "flux-hub;paid;cumulus", vmid: 101 },
   ]);
   assert.equal(owned[0]?.vmid, 101);
 });

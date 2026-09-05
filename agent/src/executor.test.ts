@@ -90,7 +90,7 @@ function hypervisorOf(yaml: string): Record<string, unknown> {
 test("a multi-line vmDescription survives PyYAML byte for byte", () => {
   const description =
     "# flux-hub\nkind:     paid\nrental:   MT-0075\ntier:     cumulus\n" +
-    "term:     recurring (monthly)\n--- signed ---\n{\"loanId\":\"ln_01\",\"pct\":100%}";
+    "term:     recurring (monthly)\n--- signed ---\n{\"recordId\":\"rec_01\",\"pct\":100%}";
   const yaml = buildProvisionYaml(
     jobWith(PLAIN_NODE_CONFIG, { vmTags: "flux-hub;paid;cumulus", vmDescription: description }),
     cfg

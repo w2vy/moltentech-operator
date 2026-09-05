@@ -2,16 +2,20 @@
  * The `--- signed ---` stamp layout — the ONE definition, shared by signer and verifier.
  *
  * A VM's Proxmox `description` carries a human-readable header (built by the hub) and, below a
- * delimiter line, a **verbatim signed record**. `prudent-lending-lamport` §9d.3 makes that stamp
- * the lender's agent's durable loan state: the agent has no writable volume, so after a restart
- * the borrowed VM's own config is the only place it can learn which loan it provisioned under,
- * for whom, and when. Because the record is self-authenticating on read, the hub is not on that
- * path at all and cannot rewind an expiry.
+ * delimiter line, a **verbatim signed record** — bytes some second party signed, kept exactly as
+ * signed so a reader can check them without asking the hub.
+ *
+ * ⚠️ **Nothing writes a signed record today.** Its one producer was the node-loan design, dropped
+ * 2026-09-05. What survives is the LAYOUT: `vm-annotation` imports `SIGNED_RECORD_DELIMITER` to
+ * refuse building a header that would falsely claim a signed record, and that refusal is the
+ * reason this file is still load-bearing. `joinSignedRecord`/`splitSignedRecord` are exercised
+ * only by tests — kept, not deleted, because they are the pair that defines the format the
+ * delimiter guard is guarding, and half a format is worse than none.
  *
  * ## Why this lives in `protocol` and not beside the header builder
  *
- * The hub writes the stamp (`apps/web/src/lib/vm-annotation.ts`); the lender's **agent** verifies
- * it. Two repos, two processes — and the plan's own rule is that "signer and verifier must
+ * The hub writes the stamp (`apps/web/src/lib/vm-annotation.ts`); an **agent** in another repo
+ * reads it back. Two repos, two processes — and the rule is that a signer and a verifier must
  * normalise identically … in the shared helper rather than in each caller". A second copy of
  * `stripTrailingNewlines` is exactly the bug that rule exists to prevent: a signer emitting
  * `canonicalize(x) + "\n"` verifies fine locally and fails only after a Proxmox round trip, with

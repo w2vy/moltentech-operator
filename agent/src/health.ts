@@ -27,9 +27,10 @@ export type OwnedVm = {
   /**
    * The VMID, when the listing found one. Null for a `missing` VM.
    *
-   * Carried so a caller that needs the FULL config (`description`, `meta`) can address it
-   * without a second listing — the loan scan is the one consumer, and it reads the config only
-   * for VMs already narrowed to the `loaned` chip.
+   * Carried so a caller that needs to address the VM directly can do so without a second
+   * listing. It rides along free on the listing this already makes; no caller reads it today
+   * (the loan scan that did was removed with the loan design), and it is kept because it is a
+   * real fact from a call we make anyway, not because something depends on it.
    */
   vmid: number | null;
 };
@@ -194,26 +195,4 @@ export function ownedVmsForNode(
         }
       : { vmName, nodeName, status: "missing", tags: [], vmid: null };
   });
-}
-
-/**
- * The two config fields the loan scan needs, read straight off the hypervisor.
- *
- * `description` holds the verbatim signed `LoanRequest`; `meta` holds `ctime`, the VM's creation
- * time as the HYPERVISOR recorded it. Together they are the whole of the agent's loan state
- * (prudent-lending-lamport §9d.3) — both local facts, so MT is not on this path and cannot
- * rewind an expiry.
- *
- * One call per loaned VM, and only for VMs already narrowed by the `loaned` chip on the cheap
- * listing. A fleet with no loans makes zero of these calls.
- */
-export async function getVmConfig(
-  cfg: AgentConfig,
-  nodeName: string,
-  vmid: number
-): Promise<{ description?: string; meta?: string }> {
-  return getJson<{ description?: string; meta?: string }>(
-    cfg,
-    `/api2/json/nodes/${nodeName}/qemu/${vmid}/config`
-  );
 }
