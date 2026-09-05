@@ -842,8 +842,8 @@ this file leaves the rows in place — a slot can be holding a paying customer, 
 edit may ever take a node away from one. What changes is that FH *notices*: an absent slot
 that held no customer is moved to **`disavowed`**, which takes it out of every claim path
 (checkout, idle-fill, move targets, free-rental assign), so hardware you have repurposed
-cannot be rented out from under you. An absent slot that is rented, holds a Foundation node
-or is on loan keeps its status and keeps serving, and you get an alert naming what to do.
+cannot be rented out from under you. An absent slot that is rented or holds a
+Foundation node keeps its status and keeps serving, and you get an alert naming what to do.
 
 Re-adding an entry restores it on the next heartbeat — `disavowed` self-heals back to
 `available` — so a typo costs one heartbeat, not a rebuild. See **Retiring a host** under
@@ -1201,7 +1201,7 @@ not a no-op. FH reconciles each assert against what it already holds for you:
 - an absent slot **holding no customer** goes to **`disavowed`** — out of service and not
   for sale. Every claim path at the hub selects `available`, so this is structural: nothing
   can deploy onto it;
-- an absent slot that is **rented, carrying a Foundation node, or on loan** keeps its
+- an absent slot that is **rented or carrying a Foundation node** keeps its
   status and its VM. FH will not take a node away from a customer because a file changed.
   It is marked absent and shown to you with the remedy — Move the customer, or Park it;
 - either way you get one `inventory_absent` alert per row (after a 1h grace, so a

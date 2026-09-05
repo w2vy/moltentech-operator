@@ -44,16 +44,6 @@
  *   authorize --in <manifest.json> --signature <b64> --out <signed-manifest.json>
  *                                        wrap the manifest + your wallet signature into the
  *                                        SignedProviderManifest MT ingests (proven identity)
- *   borrow --offer <offer.json> --lender-pubkey <b64> --vm <vmName> --node <nodeName>
- *          --hours <n> [--dir <dir>] [--key <pem>] [--slug <yours>] [--issued-at <iso>]
- *          [--out <request.json>] [--stdout] [--stamp]
- *                                       BORROWER side of a node loan. Verify a lender's signed
- *                                       LoanOffer, check its terms against what you want, and
- *                                       emit a LoanRequest signed with YOUR operator key.
- *                                       --stamp prints the one-line record the lender's agent
- *                                       writes into the borrowed VM's Proxmox description.
- *                                       --issued-at makes the whole record REPRODUCIBLE: rerun
- *                                       the same command with it and you get the same bytes.
  */
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { randomBytes } from "node:crypto";
@@ -107,8 +97,6 @@ import {
   type HostAnswer,
   type SlotAnswer,
 } from "./scaffold";
-import { acceptOffer } from "./loan-request";
-import { loanStampRecord, signLoanRequest } from "./loan-signing";
 import { verifyManifestOwnerSignature } from "./wallet";
 import { buildZelcoreSignLink } from "./sign-launcher";
 import {
@@ -152,31 +140,6 @@ function noteUnproven(report: DoctorReport, scope: string, checks: ProbeResult[]
   report.unproven = [...(report.unproven ?? []), ...skipped];
 }
 
-/**
- * Every refusal, as something an operator can act on.
- *
- * A bare reason code here is close to useless: the borrower is holding a file from someone else
- * and cannot see the lender's side at all, so the message has to say which of the two parties has
- * to change something.
- */
-const BORROW_REFUSALS: Record<string, string> = {
-  "not-an-offer": "that file is not a signed LoanOffer.",
-  "bad-lender-signature":
-    "the signature does not check out against --lender-pubkey. Either the key is wrong or the " +
-    "offer was altered in transit — ask your lender to resend it.",
-  "not-my-offer":
-    "the offer names a different borrower slug. It was not issued to you (pass --slug if yours " +
-    "is not the one in config.env).",
-  "offer-names-another-key":
-    "the offer names a different pubkey for you than the key you are signing with. Your lender " +
-    "pinned the wrong key — send them the pubkey from `mt-manifest keygen` and ask for a new " +
-    "offer. Signing anyway would produce a request their agent silently refuses.",
-  "offer-window-closed": "the offer has expired. Ask your lender for a fresh one.",
-  "slot-not-offered": "that --vm/--node pair is not one this offer puts up.",
-  "duration-over-ceiling":
-    "--hours is longer than the offer allows. Ask for less, or ask your lender to raise the " +
-    "ceiling — it is not clamped, because both sides must mean the same thing by the term.",
-};
 
 function die(msg: string): never {
   console.error(`error: ${msg}`);
@@ -1417,141 +1380,6 @@ async function main() {
     // Which build am I? The image refreshes at most every 48h, so "the fix is merged"
     // and "the fix is what just ran" are different claims. This is how to tell them apart
     // without diffing help text against the repo.
-    case "borrow": {
-      /**
-       * ⚠️ DEPRECATED (tom, 2026-09-04) — signing a loan belongs in a CONSOLE, not here.
-       *
-       * The BORROWER's side of §0.4 step 4. It lives in this CLI only because lamport v1 skipped
-       * the hub relay (§0.5): steps 2, 3 and 5 were never built, so there is no path by which an
-       * offer reaches a borrower and no place but a local command for them to answer it. The
-       * 2026-09-04 staging run copied the signed offer between two directories by hand.
-       *
-       * That is a missing transport, not a design conclusion. Nothing about key custody requires
-       * a CLI: the agent already holds the operator key (`MANIFEST_KEY`) and already signs a
-       * `LoanOffer` with it, and the hub already signs in a browser (`wallet-sign-panel.tsx`).
-       *
-       * 🥇 The hub/operator console is the PREFERRED home; the Coalition console is acceptable.
-       * When the v2 transport lands this command retires — it does not move.
-       */
-      console.error(
-        "⚠️  `mt-manifest borrow` is DEPRECATED. Signing a loan belongs in the hub/operator\n" +
-          "   console (preferred) or the Coalition console. This command exists only because\n" +
-          "   lamport v1 skipped the hub relay, leaving no other way to answer an offer.\n" +
-          "   It still works, and it retires when the v2 transport ships.\n"
-      );
-      const dir = flag(args, "--dir") ?? ".";
-      const offerPath = flag(args, "--offer");
-      const lenderPubkey = flag(args, "--lender-pubkey");
-      const vmName = flag(args, "--vm");
-      const nodeName = flag(args, "--node");
-      const hoursRaw = flag(args, "--hours");
-      const keyPath = flag(args, "--key") ?? join(dir, "manifest-key.pem");
-      const outPath =
-        flag(args, "--out") ??
-        (args.includes("--stdout") || args.includes("--stamp") ? undefined : join(dir, "loan-request.json"));
-
-      if (!offerPath) die("--offer <offer.json> is required (the signed LoanOffer your lender sent).");
-      if (!lenderPubkey) {
-        die(
-          "--lender-pubkey <base64> is required. It is your LENDER's manifest pubkey — ask them, " +
-            "or read it from their published manifest. Verifying with the wrong key is the whole " +
-            "point of passing it explicitly."
-        );
-      }
-      if (!vmName || !nodeName) die("--vm <vmName> and --node <nodeName> are required.");
-      if (!hoursRaw) die("--hours <n> is required — the loan length you are asking for.");
-      const durationHours = Number(hoursRaw);
-      if (!Number.isInteger(durationHours) || durationHours <= 0) {
-        die(`--hours must be a positive whole number of hours (got ${hoursRaw}).`);
-      }
-      if (!existsSync(offerPath)) die(`${offerPath} not found.`);
-      if (!existsSync(keyPath)) {
-        die(`${keyPath} not found — run \`mt-manifest keygen\` first, or pass --key <pem>.`);
-      }
-
-      const priv = importPrivateKeyPem(readFileSync(keyPath, "utf8"));
-      const myPubkey = publicKeyBase64FromPrivate(priv);
-
-      // Your own slug: from --slug, else PROVIDER_SLUG in the config.env `init` wrote.
-      let slug = flag(args, "--slug");
-      if (!slug) {
-        const configPath = join(dir, "config.env");
-        if (existsSync(configPath)) {
-          slug = parseConfigEnv(readFileSync(configPath, "utf8")).PROVIDER_SLUG;
-        }
-      }
-      if (!slug) die("could not determine your provider slug — pass --slug <yours>.");
-
-      let rawOffer: unknown;
-      try {
-        rawOffer = JSON.parse(readFileSync(offerPath, "utf8"));
-      } catch (err) {
-        die(`${offerPath} is not valid JSON: ${(err as Error).message}`);
-      }
-
-      const now = new Date();
-
-      /**
-       * `issuedAt` is the ONE thing in the record that does not come from the offer or the
-       * flags, so left to the clock it is also the one thing that makes two runs of the same
-       * command produce two different loans.
-       *
-       * That matters more than it looks. The nonce is derived from the content, so `issuedAt` is
-       * what the identity ultimately turns on: `acceptsRestamp` uses that identity to decide
-       * whether a re-stamp after a reprovision is the SAME loan or a different one. A borrower
-       * who reran `borrow` — to add `--stamp`, say, as this command's own staging run did on
-       * 2026-09-04 — would hold two records that disagree, and the lender would honour whichever
-       * arrived. Passing `--issued-at` makes the whole record reproducible.
-       *
-       * The default stays "now" because that is right for the first run and asking every
-       * borrower for a timestamp would be worse. The flag is for reproducing a record you
-       * already sent.
-       */
-      const issuedAtRaw = flag(args, "--issued-at");
-      let issuedAt = now;
-      if (issuedAtRaw) {
-        issuedAt = new Date(issuedAtRaw);
-        if (Number.isNaN(issuedAt.getTime())) {
-          die(`--issued-at must be an ISO-8601 instant (got ${issuedAtRaw}).`);
-        }
-      }
-
-      const verdict = acceptOffer(
-        rawOffer,
-        lenderPubkey,
-        { slug, pubkey: myPubkey },
-        { vmName, nodeName, durationHours },
-        issuedAt,
-        now
-      );
-      if (!verdict.ok) die(`cannot accept this offer: ${BORROW_REFUSALS[verdict.reason]}`);
-
-      const signed = signLoanRequest(verdict.request, priv);
-
-      if (args.includes("--stamp")) {
-        // Exactly the bytes that go under `--- signed ---` in the VM's description. Printed so a
-        // human can eyeball what the lender's agent will verify, without re-deriving it by hand.
-        process.stdout.write(loanStampRecord(signed) + "\n");
-        break;
-      }
-
-      const out = JSON.stringify(signed, null, 2) + "\n";
-      if (outPath) {
-        writeFileSync(outPath, out, { mode: 0o600 });
-        console.log(
-          `Wrote signed LoanRequest to ${outPath}\n` +
-            `  slot     ${vmName} on ${nodeName}\n` +
-            `  lender   ${verdict.offer.lenderSlug} (offer rev${verdict.offer.revision})\n` +
-            `  duration ${durationHours}h of an allowed ${verdict.offer.maxDurationHours}h\n` +
-            `  issuedAt ${signed.issuedAt}\n` +
-            `Send it to your lender. Their agent verifies it against the pubkey in their own offer.\n` +
-            `To reproduce these exact bytes, rerun with --issued-at ${signed.issuedAt}`
-        );
-      } else {
-        process.stdout.write(out);
-      }
-      break;
-    }
     case "version":
     case "--version":
     case "-v": {
@@ -1587,7 +1415,7 @@ async function main() {
     case "-h":
     default:
       console.log(
-        "usage: mt-manifest <keygen|coalition-keygen|init|doctor|sign|env|verify|authorize|borrow|version> [options]\n"
+        "usage: mt-manifest <keygen|coalition-keygen|init|doctor|sign|env|verify|authorize|version> [options]\n"
       );
       console.log("  keygen           [--out <dir>]");
       console.log("  coalition-keygen [--out <dir>]   Phase D signing key (operator-held custody)");
@@ -1600,7 +1428,6 @@ async function main() {
       console.log("            defaults to the files `init` wrote in the current directory");
       console.log("  verify    --in <manifest.json>");
       console.log("  authorize --in <manifest.json> [--signature <b64> --out <signed-manifest.json>]");
-      console.log("  borrow    ⚠️ DEPRECATED — loan signing belongs in the hub/operator console");
       console.log("            (preferred) or the Coalition console. Works; retires with v2.");
       console.log("  version   which build of this CLI is running (paste it into a bug report)");
       console.log("  help      this list\n");

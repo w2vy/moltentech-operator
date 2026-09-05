@@ -243,8 +243,8 @@ excludes them on purpose, so a hub-side `maintenance` toggle survives the heartb
 out of service.** The ingest still never deletes a row (a slot can be holding a paying
 customer), and it now reconciles: an absent slot with no customer on it moves to
 `disavowed` and drops out of every claim path within a heartbeat, so a machine you have
-repurposed cannot be rented out from under you. A rented, Foundation-occupied or loaned
-slot keeps its status and keeps serving, and you are alerted instead. Re-adding the entry
+repurposed cannot be rented out from under you. A rented or Foundation-occupied slot
+keeps its status and keeps serving, and you are alerted instead. Re-adding the entry
 restores it. Retiring the rows for good is a button in **My Fleet**; the whole procedure is
 under **Retiring a host** in [`operator-onboarding.md`](operator-onboarding.md).
 
