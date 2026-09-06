@@ -432,6 +432,11 @@ mt-manifest doctor --check-hub       # your three issued keys are still accepted
 checks the role holds the privileges the agent uses on every provision — naming any that
 are missing, with the `pveum role modify` line that adds them — and resolves
 `PROXMOX_STORAGE_IMAGES` through LVM to the physical device to see whether it spins.
+
+It also makes two reads that no amount of privilege *listing* can replace: it reads a real
+storage, and it lists the node's bridges. Both exist because a Proxmox token can report a
+privilege it does not actually have — see
+[When a healthy-looking token cannot provision](#when-a-healthy-looking-token-cannot-provision).
 `init` runs these same checks the moment you type the token; this is for re-runs and for
 files you filled in by hand.
 
@@ -1259,3 +1264,71 @@ the file. The real boundary is the **Proxmox API token path ACL**.
   key is node-scoped and cannot touch collateral.
 - Collateral is a wallet UTXO, safe on any host; the residual risk (node identity-key
   exposure, uptime) is yours to manage and is reflected in your card's stats + reviews.
+
+
+## When a healthy-looking token cannot provision
+
+Two failures make a token look completely fine and stop it provisioning. Both were measured
+on a real host on 2026-08-29; between them they cost five failed attempts on one node.
+
+### The bridge is filtered, not refused
+
+On PVE 8+, bridges sit behind SDN permissions. Without `SDN.Use` and `SDN.Audit`,
+`GET /nodes/<node>/network` **returns 200 and omits the bridge** instead of returning 403.
+The vlan interfaces and the physical NIC still come back, so the reply looks normal. The
+failure then surfaces much later, inside provisioning, as:
+
+```
+[step] Network not present on hypervisor
+```
+
+— naming a bridge that is present, `UP` and correctly configured, which sends you to debug
+networking instead of the token.
+
+Prove it by comparing what root sees with what the token sees:
+
+```sh
+# on the node, as root — vmbr0 IS listed
+pvesh get /nodes/<node>/network --output-format json | grep -o '"iface":"[^"]*"'
+# as the TOKEN — vmbr0 is missing; only the vlan subinterfaces and the NIC come back
+```
+
+`mt-manifest doctor --check-proxmox` now makes this call itself and fails on a node that
+reports no bridge, so you should not have to run the comparison by hand.
+
+The role privileges are listed in Step 2. `pveum role modify --privs` **replaces** the whole
+list, so pass all of them, not just the two you are adding.
+
+### The ACL is stale after separating a node from a cluster
+
+Separating a node from its cluster (`pmxcfs -l`, remove `corosync.conf`, restart
+`pve-cluster`) rebuilds the `/etc/pve` FUSE mount **underneath long-running daemons**.
+`pvedaemon` and `pveproxy` are not restarted by that procedure and keep serving the ACL they
+read at boot — which can be months old. A token created after the separation then behaves
+like this, with a correct `user.cfg` on disk and a role holding every privilege it needs:
+
+```
+/nodes/<node>/storage           → 200 {"data":[]}      ← sees NO storage, and does not error
+/nodes/<node>/storage/local/... → 403 Permission check failed
+/storage  (cluster-level defs)  → 200, full data       ← config reads work fine
+```
+
+**Fix — run this on the separated node as the last step of any separation:**
+
+```sh
+systemctl restart pvedaemon pveproxy
+```
+
+⚠️ Restarting the daemons fixes the API, but an agent that already failed against the broken
+ACL needs its own restart before it retries the work it gave up on. The first retry after the
+daemon restart failing is expected, and does not mean the fix did not work.
+
+### Why `/access/permissions` is not proof
+
+Through all of the above, `/access/permissions` returns the **complete** privilege set. It is
+the token describing itself, not a capability test — a claim, not a fact. This is why
+`doctor` reads a real storage and lists real bridges, and why its privilege line says
+`self-reported` out loud. To prove a token by hand, read something it must actually use
+(`/nodes/<node>/storage/<id>/content`), and treat an empty `{"data":[]}` list as a
+permission result rather than an empty hypervisor — it throws nothing, so it produces no
+error to notice.
