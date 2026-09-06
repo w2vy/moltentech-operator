@@ -153,7 +153,7 @@ docker run --rm --env-file .env.operator -v "$PWD/data:/data:ro" \
 # `fh-toolkit`
 
 ```
-fh-toolkit <keygen|init|doctor|sign|env|verify> [options]   # one command, then exit
+fh-toolkit <keygen|init|level|doctor|sign|env|verify> [options]   # one command, then exit
 fh-toolkit                                                  # an interactive session
 ```
 
@@ -171,6 +171,7 @@ in your operator directory, `doctor`, `sign` and `env` take no arguments at all.
 |---|---|---|---|
 | `keygen` | make your permanent signing identity | — | `manifest-key.pem`, `manifest-pubkey.txt` |
 | `init` | interview → the whole scaffold, signed | `manifest-key.pem` | 8 files (see below) |
+| `level` | show or change Supporter ⇄ Operator | `config.env`, `secrets.env` | those two, and only those |
 | `doctor` | prove every file agrees; optionally prove the live wiring | all of them | — |
 | `sign` | re-sign after a `config.env` edit | `config.env`, key | `manifest.json` |
 | `env` | assemble the Flux environment blob | config + secrets + manifest | `env.json` |
@@ -376,6 +377,99 @@ not expressible. This is unrelated to a *free rental*, which is a rental an admi
 ⚠️ **The signed manifest is a snapshot of `config.env`.** Edit `config.env` afterwards and
 it is stale — `doctor` compares the two and says so, which is what makes signing
 automatically here safe. The fix is `fh-toolkit sign`.
+
+---
+
+## `level`
+
+```
+fh-toolkit level [--dir <dir>]
+fh-toolkit level --set <supporter|operator> [--price <tier>=<usd>]… [--stripe-key <k>]
+                 [--stripe-webhook <k>] [--dry-run] [--yes]
+```
+
+Flux Hub has two levels of participation, declared in your **signed manifest**:
+
+- **supporter** — your own nodes, plus Foundation nodes on your idle capacity. Sells
+  nothing, needs no Stripe account. This is the recommended way to start.
+- **operator** — the above, plus hardware rented out through the marketplace. You are
+  merchant of record on your own Stripe account.
+
+With no flags it reports where you stand and changes nothing:
+
+```console
+$ fh-toolkit level
+PROVIDER_LEVEL  supporter   (config.env)
+signed manifest supporter   (manifest.json — in sync)
+tiers for sale  none
+Stripe          not configured — a Supporter needs no Stripe account
+
+To sell hardware:  fh-toolkit level --set operator
+```
+
+`signed manifest` is the level Flux Hub will actually see, checked with the same rule
+`doctor` uses — so a config you edited without re-signing says `MANIFEST_STALE` here too.
+
+### The upgrade
+
+`--set operator` asks which tiers you will offer and at what price (in **dollars**,
+against the live floors), then for your Stripe pair. They are `init`'s own selling
+questions — the same code, so they cannot drift apart. Answer non-interactively with
+`--price cumulus=25 --price nimbus=40 --stripe-key rk_… --stripe-webhook whsec_… --yes`,
+and read the diff first with `--dry-run`.
+
+An empty Stripe answer is fine. The **webhook secret does not exist yet** — it is minted
+when you create the endpoint against your Coalition URL, which is a real wait, and
+`doctor` keeps naming it until you fill it in.
+
+⚠️ **It edits `config.env` and `secrets.env`. Nothing else.** Not `manifest.json`, not
+`SESSION_SECRET`, not the three `/onboard`-issued keys, not `data/inventory.json`. That
+is the whole reason it exists: `init --force` is the other way to change these two fields,
+and it rewrites all of the above. Previous versions are kept as `config.env.bak` and
+`secrets.env.bak`, mode 0600.
+
+A below-floor price is refused **before anything is written**, so a typo costs you nothing
+rather than leaving a half-applied upgrade behind.
+
+### What you still have to do
+
+`PROVIDER_LEVEL` is in the signed manifest, so the change does not reach Flux Hub until
+you re-sign and re-submit. The command prints the steps; they are also here:
+
+1. `fh-toolkit sign`
+2. paste `manifest.json` at `<MT_BASE_URL>/onboard` and sign with your owner wallet
+   — **this** is where Flux Hub re-ingests you
+3. register a Stripe webhook endpoint at `<your coalition>/webhook`, then
+   `fh-toolkit doctor --check-stripe` (which catches a key from the wrong account)
+4. `fh-toolkit env`, re-import `env.json` into the Flux app, redeploy
+
+The command performs no network writes and signs nothing. Only your browser can complete
+step 2, so it reports what it *wrote* — never what the hub now believes.
+
+`README.txt` still describes your old level afterwards. It is generated documentation,
+not configuration; nothing reads it, and the command says so rather than leaving you to
+wonder.
+
+### The downgrade
+
+`--set supporter` clears `TIER_PRICES_JSON` and needs the same re-sign and re-paste.
+
+It **leaves your Stripe keys in place**. They are inert while nothing is for sale, and
+Stripe only ever shows a webhook secret once — deleting it to tidy up would cost you a
+new endpoint to come back.
+
+⚠️ **It cannot see your live rentals, and says so rather than implying it checked.** A
+customer renting from you right now keeps their node; what changes is that you cannot
+sell anything new. Check your fleet on Flux Hub before you rely on that.
+
+### Two ways the level and your prices can disagree
+
+`doctor` reports both, and neither was visible anywhere before:
+
+| Rule | State | Why it matters |
+|---|---|---|
+| `LEVEL_OPERATOR_NO_TIERS` | `operator`, empty `TIER_PRICES_JSON` | The half-finished upgrade. Your manifest says you sell hardware; your Coalition lists nothing. From your side everything looks healthy. |
+| `LEVEL_SUPPORTER_WITH_PRICES` | `supporter`, prices set | The reverse, and the one that costs money. The prices are right there; the level in the *signed* manifest is what stops anything being listed. |
 
 ---
 
@@ -739,4 +833,6 @@ store. It is not a middlebox on your network and not a Proxmox certificate probl
 | Checkout is failing and nothing looks wrong | `doctor --check-hub --check-stripe` |
 | I changed `.env.operator` | `docker compose up -d --force-recreate` |
 | Someone handed me a manifest | `verify --in <file>` |
+| I want to start selling hardware | `level --set operator` → `sign` → re-paste at `/onboard` |
+| I want to stop selling | `level --set supporter` → `sign` → re-paste at `/onboard` |
 | Several of the above, back to back | `fh-toolkit` with no arguments — one session |

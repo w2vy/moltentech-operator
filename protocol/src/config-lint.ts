@@ -254,6 +254,68 @@ function lintSecretPlacement(entries: EnvEntry[], file: string, bannedKeys: stri
 }
 
 /** Rule 7: price floors, and the misplaced-zero check that caught a real $200 nimbus. */
+/**
+ * The level and what is for sale must agree — they are two halves of one decision, and
+ * only one of them is in the signed manifest.
+ *
+ * `scaffold.isSelling()` already branches on level, so the two states below are
+ * contradictory rather than merely odd, and neither was reported anywhere until now:
+ *
+ *   operator + no prices — the manifest says "for sale", the Coalition has nothing to
+ *     sell. This is the half-finished upgrade: PROVIDER_LEVEL changed, prices never
+ *     added. It looks completely healthy from the operator's side.
+ *   supporter + prices — the reverse, and the one that costs money: the prices are
+ *     right there in config.env, and the level in the SIGNED manifest is what stops
+ *     anything being listed. Nothing else says so.
+ */
+export function lintLevelAgreement(entries: EnvEntry[], file: string): Finding[] {
+  const level = entries.find((e) => e.key === "PROVIDER_LEVEL");
+  if (!level) return [];
+  const pricesEntry = entries.find((e) => e.key === "TIER_PRICES_JSON");
+  let priced = false;
+  try {
+    const parsed: unknown = JSON.parse(pricesEntry?.value ?? "{}");
+    priced = !!parsed && typeof parsed === "object" && Object.keys(parsed).length > 0;
+  } catch {
+    // A malformed TIER_PRICES_JSON is CFG_TIER_PRICES_MALFORMED's finding, not ours.
+    return [];
+  }
+
+  if (level.value === "operator" && !priced) {
+    return [
+      {
+        rule: "LEVEL_OPERATOR_NO_TIERS",
+        severity: "warning",
+        file,
+        line: level.line,
+        message:
+          "PROVIDER_LEVEL=operator but TIER_PRICES_JSON is empty — your manifest says you " +
+          "sell hardware and your Coalition lists nothing. This is what a half-finished " +
+          "upgrade looks like from the outside: healthy.",
+        summary: "operator with nothing for sale",
+        fix: "fh-toolkit level --set operator",
+      },
+    ];
+  }
+  if (level.value === "supporter" && priced) {
+    return [
+      {
+        rule: "LEVEL_SUPPORTER_WITH_PRICES",
+        severity: "warning",
+        file,
+        line: level.line,
+        message:
+          "PROVIDER_LEVEL=supporter but TIER_PRICES_JSON has prices in it — a supporter " +
+          "lists nothing, so those prices are inert. The level is in the SIGNED manifest, " +
+          "so fixing it is a re-sign and a re-ingest, not a file edit.",
+        summary: "supporter with prices that cannot be listed",
+        fix: "fh-toolkit level --set operator",
+      },
+    ];
+  }
+  return [];
+}
+
 export function lintTierPrices(
   entries: EnvEntry[],
   file: string,
@@ -843,6 +905,7 @@ export function runDoctor(input: DoctorInput): DoctorReport {
     findings.push(...lintValueShape(entries, "config.env"));
     findings.push(...lintSecretPlacement(entries, "config.env", SECRET_KEYS_BANNED_IN_CONFIG));
     findings.push(...lintTierPrices(entries, "config.env", minimums));
+    findings.push(...lintLevelAgreement(entries, "config.env"));
   }
 
   if (input.secretsEnv != null) {

@@ -35,6 +35,10 @@
  *                                       be a bare manifest OR an owner-signed wrapper (shipped
  *                                       whole so MT ingests it owner-verified). Verifies the manifest (and any
  *                                       owner) signature first. Output contains SECRETS — never commit it.
+ *   level  [--dir <dir>]                show PROVIDER_LEVEL, tiers and Stripe state
+ *   level  --set <supporter|operator>   change it surgically — config.env + secrets.env
+ *                                        only, never manifest.json/SESSION_SECRET/inventory.
+ *                                        Prints the re-sign + re-ingest steps; signs nothing.
  *   verify --in <manifest.json>         re-verify a signed manifest — accepts a bare manifest OR an
  *                                        owner-signed wrapper (whose owner signature is checked too)
  *
@@ -47,13 +51,21 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { randomBytes } from "node:crypto";
 import { join, resolve } from "node:path";
-import { createInterface } from "node:readline/promises";
+import { createInterface, type Interface } from "node:readline/promises";
 import { ProviderManifest, ProviderManifestBody, unwrapManifest } from "./manifest";
+import {
+  planLevelChange,
+  readLevel,
+  readTierPrices,
+  readEnvValue,
+  type Level,
+} from "./level-change";
 import { renderManifestBodyFromConfig, parseConfigEnv } from "./manifest-config";
 import {
   runDoctor,
   formatReport,
   fetchTierMinimums,
+  lintManifestFreshness,
   TIER_FLOORS_CENTS,
   type DoctorReport,
 } from "./config-lint";
@@ -164,6 +176,15 @@ export type Ctx = {
   dir: string;
   interactive: boolean;
   /**
+   * The session's readline, when there is one.
+   *
+   * ⚠️ A command that asks questions must REUSE it rather than opening a second
+   * interface on the same stdin. Two interfaces on one TTY both echo, so every keystroke
+   * appears twice, and the inner one's `close()` leaves stdin in a state the outer one
+   * has to recover from. Go through `withPrompts`.
+   */
+  rl?: Interface;
+  /**
    * `fetchTierMinimums` is a network call `init` and `doctor` each make — and they do
    * NOT agree on the base URL (`init` reads the environment, `doctor` reads the
    * operator's own config.env), so the cache is keyed by URL rather than shared blind.
@@ -188,6 +209,43 @@ function buildLine(): string {
     }
   })();
   return formatBuildInfo(readBuildInfo(process.env, pkgVersion));
+}
+
+/**
+ * Run `fn` with a question-asker, using the session's readline when there is one and a
+ * throwaway interface otherwise — and closing only what it opened.
+ */
+async function withPrompts<T>(
+  ctx: Ctx,
+  fn: (ask: Ask, askUntil: AskUntil) => Promise<T>
+): Promise<T> {
+  const own = ctx.rl ? undefined : createInterface({ input: process.stdin, output: process.stdout });
+  const rl = ctx.rl ?? own!;
+  const ask: Ask = async (q, def) => {
+    const a = (await rl.question(def ? `${q} [${def}]: ` : `${q}: `)).trim();
+    return a || def || "";
+  };
+  /**
+   * Ask until the answer is usable, printing WHY each time.
+   *
+   * Every rule here also exists in `validateAnswers`, which runs after the last question
+   * and `die()`s — so a mistyped tier used to cost the whole wizard, thirty answers back.
+   * Checking at the prompt is the same rule applied where the mistake is made, while the
+   * operator is still looking at the question that caused it.
+   */
+  const askUntil: AskUntil = async (q, problem, def) => {
+    for (;;) {
+      const answer = await ask(q, def);
+      const why = problem(answer);
+      if (!why) return answer;
+      console.log(`    ${why}`);
+    }
+  };
+  try {
+    return await fn(ask, askUntil);
+  } finally {
+    own?.close();
+  }
 }
 
 async function cachedTierMinimums(ctx: Ctx, baseUrl: string): Promise<Record<string, number> | null> {
@@ -242,33 +300,84 @@ async function fetchMtPubkey(mtBaseUrl: string): Promise<string> {
   }
 }
 
-async function askAnswers(minimums: Record<string, number> = TIER_FLOORS_CENTS): Promise<Answers> {
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
-  const ask = async (q: string, def?: string): Promise<string> => {
-    const a = (await rl.question(def ? `${q} [${def}]: ` : `${q}: `)).trim();
-    return a || def || "";
-  };
-  /**
-   * Ask until the answer is usable, printing WHY each time.
-   *
-   * Every rule here also exists in `validateAnswers`, which runs after the last question
-   * and `die()`s — so a mistyped tier used to cost the whole wizard, thirty answers back.
-   * Checking at the prompt is the same rule applied where the mistake is made, while the
-   * operator is still looking at the question that caused it.
-   */
-  const askUntil = async (
-    q: string,
-    problem: (answer: string) => string | undefined,
-    def?: string
-  ): Promise<string> => {
-    for (;;) {
-      const answer = await ask(q, def);
-      const why = problem(answer);
-      if (!why) return answer;
-      console.log(`    ${why}`);
-    }
-  };
-  try {
+export type Ask = (q: string, def?: string) => Promise<string>;
+export type AskUntil = (
+  q: string,
+  problem: (answer: string) => string | undefined,
+  def?: string
+) => Promise<string>;
+
+export interface SellingAnswers {
+  tierPricesCents: Record<string, number>;
+  stripeSecretKey: string;
+  stripeWebhookSecret: string;
+}
+
+/**
+ * What you sell and who takes the money — the questions that only exist for an Operator.
+ *
+ * ⭐ Extracted so `init` and `level --set operator` ask them with the SAME words. The
+ * upgrade is documented as being line-for-line this block; sharing the code is what makes
+ * that true rather than a claim someone has to re-check whenever a prompt changes.
+ */
+export async function askSellingAnswers(
+  ask: Ask,
+  askUntil: AskUntil,
+  minimums: Record<string, number>
+): Promise<SellingAnswers> {
+  const tierPricesCents: Record<string, number> = {};
+  const known = Object.keys(minimums);
+  const offered = (
+    await askUntil(
+      `Which tiers will you offer? (${known.join("/")}, comma-separated)`,
+      (v) => {
+        const picked = v.split(",").map((t) => t.trim()).filter(Boolean);
+        if (picked.length === 0) return "name at least one tier.";
+        const bad = picked.filter((t) => !known.includes(t));
+        return bad.length > 0 ? `unknown tier(s): ${bad.join(", ")}. FH knows ${known.join(", ")}.` : undefined;
+      },
+      "cumulus"
+    )
+  )
+    .split(",")
+    .map((t) => t.trim())
+    .filter(Boolean);
+  // Prices in DOLLARS, then multiplied — which deletes the extra-zero class of bug
+  // rather than validating against it.
+  for (const tier of offered) {
+    const floor = minimums[tier] ?? 0;
+    const dollars = await askUntil(
+      `  monthly price for ${tier} in DOLLARS (floor $${(floor / 100).toFixed(2)})`,
+      (v) => {
+        const cents = Math.round(Number(v) * 100);
+        if (!/^\$?\d+(\.\d{1,2})?$/.test(v.trim())) return `"${v}" is not an amount in dollars.`;
+        // FH 422s anything under the floor, so accepting it here only moves the
+        // failure to a place with less context.
+        return cents < floor ? `$${(cents / 100).toFixed(2)} is below the $${(floor / 100).toFixed(2)} floor FH enforces.` : undefined;
+      },
+      (floor / 100).toFixed(2)
+    );
+    tierPricesCents[tier] = Math.round(Number(dollars.replace("$", "")) * 100);
+  }
+
+  // The secret key exists already (dashboard → API keys); the WEBHOOK secret does not —
+  // it is minted when the endpoint is created against the Coalition URL, which is a real
+  // wait. Offer it, accept empty, and let `doctor` keep naming it.
+  let stripeSecretKey = "";
+  let stripeWebhookSecret = "";
+  if (Object.keys(tierPricesCents).length > 0) {
+    console.log("\nStripe — you are merchant of record; Flux Hub never holds these.");
+    stripeSecretKey = await ask("  STRIPE_SECRET_KEY (rk_… / sk_…), blank to fill in later", "");
+    stripeWebhookSecret = await ask("  STRIPE_WEBHOOK_SECRET (whsec_…), blank if the endpoint does not exist yet", "");
+  }
+  return { tierPricesCents, stripeSecretKey, stripeWebhookSecret };
+}
+
+async function askAnswers(
+  ctx: Ctx,
+  minimums: Record<string, number> = TIER_FLOORS_CENTS
+): Promise<Answers> {
+  return withPrompts(ctx, async (ask, askUntil) => {
     console.log("fh-toolkit init — this writes every onboarding file from your answers.\n");
 
     // Asked FIRST because it decides which of the later questions exist at all. A
@@ -384,59 +493,21 @@ async function askAnswers(minimums: Record<string, number> = TIER_FLOORS_CENTS):
     // What you SELL is a business decision; what hardware you have is a stock-take.
     // Asking them in that order means the tier list exists before the slots do, so each
     // slot picks from it instead of inventing tier names the price map then has to chase.
-    const tierPricesCents: Record<string, number> = {};
-    if (level === "operator") {
-      const known = Object.keys(minimums);
-      const offered = (
-        await askUntil(
-          `Which tiers will you offer? (${known.join("/")}, comma-separated)`,
-          (v) => {
-            const picked = v.split(",").map((t) => t.trim()).filter(Boolean);
-            if (picked.length === 0) return "name at least one tier.";
-            const bad = picked.filter((t) => !known.includes(t));
-            return bad.length > 0 ? `unknown tier(s): ${bad.join(", ")}. FH knows ${known.join(", ")}.` : undefined;
-          },
-          "cumulus"
-        )
-      )
-        .split(",")
-        .map((t) => t.trim())
-        .filter(Boolean);
-      // Prices in DOLLARS, then multiplied — which deletes the extra-zero class of bug
-      // rather than validating against it.
-      for (const tier of offered) {
-        const floor = minimums[tier] ?? 0;
-        const dollars = await askUntil(
-          `  monthly price for ${tier} in DOLLARS (floor $${(floor / 100).toFixed(2)})`,
-          (v) => {
-            const cents = Math.round(Number(v) * 100);
-            if (!/^\$?\d+(\.\d{1,2})?$/.test(v.trim())) return `"${v}" is not an amount in dollars.`;
-            // FH 422s anything under the floor, so accepting it here only moves the
-            // failure to a place with less context.
-            return cents < floor ? `$${(cents / 100).toFixed(2)} is below the $${(floor / 100).toFixed(2)} floor FH enforces.` : undefined;
-          },
-          (floor / 100).toFixed(2)
-        );
-        tierPricesCents[tier] = Math.round(Number(dollars.replace("$", "")) * 100);
-      }
-    }
-    const tiers = Object.keys(tierPricesCents);
-
-    // Only an operator with something for sale has a Stripe account to be asked about.
-    // The secret key exists already (dashboard → API keys); the WEBHOOK secret does not
-    // — it is minted when the endpoint is created against the Coalition URL, which is a
-    // real wait. Offer it, accept empty, and let `doctor` keep naming it.
+    let tierPricesCents: Record<string, number> = {};
     let stripeSecretKey = "";
     let stripeWebhookSecret = "";
-    if (tiers.length > 0) {
-      console.log("\nStripe — you are merchant of record; Flux Hub never holds these.");
-      stripeSecretKey = await ask("  STRIPE_SECRET_KEY (rk_… / sk_…), blank to fill in later", "");
-      stripeWebhookSecret = await ask("  STRIPE_WEBHOOK_SECRET (whsec_…), blank if the endpoint does not exist yet", "");
+    if (level === "operator") {
+      ({ tierPricesCents, stripeSecretKey, stripeWebhookSecret } = await askSellingAnswers(
+        ask,
+        askUntil,
+        minimums
+      ));
     } else {
       // Said out loud, not silently skipped: a Supporter who sees nothing here cannot tell
       // whether the tool forgot to ask or decided they do not need one.
       console.log("\nStripe — skipped: a Supporter sells nothing and needs no Stripe account.");
     }
+    const tiers = Object.keys(tierPricesCents);
 
     // ── Inventory, last, one host at a time ──────────────────────────────────────
     console.log("\nNow your hardware. Everything above was about you; this is a stock-take.");
@@ -681,9 +752,7 @@ async function askAnswers(minimums: Record<string, number> = TIER_FLOORS_CENTS):
       stripeSecretKey: stripeSecretKey || undefined,
       stripeWebhookSecret: stripeWebhookSecret || undefined,
     };
-  } finally {
-    rl.close();
-  }
+  });
 }
 
 /**
@@ -863,7 +932,7 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
           die(`${answersPath}: ${(e as Error).message}`);
         }
       } else {
-        answers = await askAnswers(minimums);
+        answers = await askAnswers(ctx, minimums);
       }
 
       const problems = validateAnswers(answers, minimums);
@@ -1151,6 +1220,192 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
       if (!ok) return 1;
       return 0;
     }
+    case "level": {
+      // Two knobs, one command. PROVIDER_LEVEL and the Stripe pair are two halves of a
+      // single decision ("do I sell hardware?"), and the only ways to change them before
+      // this were `init --force` — which also mints a new SESSION_SECRET, blanks the three
+      // /onboard-issued keys and rewrites data/inventory.json — or hand-editing two files
+      // where a trailing `# note` becomes part of the secret.
+      //
+      // This writes files and prints next steps. It performs NO network writes and does
+      // NOT sign: the re-sign and the re-ingest are the operator's, and pretending
+      // otherwise would let the tool report a level Flux Hub has never seen.
+      const dir = flag(args, "--dir") ?? ".";
+      const configPath = join(dir, "config.env");
+      const secretsPath = join(dir, "secrets.env");
+      if (!existsSync(configPath)) {
+        die(`${configPath} not found — run this in your operator directory, or pass --dir.`);
+      }
+      const configText = readFileSync(configPath, "utf8");
+      const secretsText = existsSync(secretsPath) ? readFileSync(secretsPath, "utf8") : "";
+      const current = readLevel(configText);
+      const prices = readTierPrices(configText);
+      const hubBaseUrl = parseConfigEnv(configText).MT_BASE_URL;
+
+      const setTo = flag(args, "--set");
+      if (setTo === undefined) {
+        // Read-only status. Manifest agreement comes from the same freshness rule
+        // `doctor` uses, so a config edited without a re-sign says so here too.
+        const pad = (s: string): string => s.padEnd(16);
+        console.log(`${pad("PROVIDER_LEVEL")}${current ?? "(absent — read as operator)"}   (config.env)`);
+        const manifestPath = join(dir, "manifest.json");
+        if (existsSync(manifestPath)) {
+          const stale = lintManifestFreshness(readFileSync(manifestPath, "utf8"), configText);
+          const signedLevel = ((): string => {
+            try {
+              const m = JSON.parse(readFileSync(manifestPath, "utf8")) as Record<string, unknown>;
+              const body = (m.manifest ?? m) as Record<string, unknown>;
+              return typeof body.level === "string" ? body.level : "(absent)";
+            } catch {
+              return "(unreadable)";
+            }
+          })();
+          const agreement = stale.length > 0 ? "MANIFEST_STALE — run `fh-toolkit sign`" : "in sync";
+          console.log(`${pad("signed manifest")}${signedLevel}   (manifest.json — ${agreement})`);
+        } else {
+          console.log(`${pad("signed manifest")}(no manifest.json here)`);
+        }
+        const tierList = Object.entries(prices)
+          .map(([t, c]) => `${t} $${(c / 100).toFixed(2)}`)
+          .join(", ");
+        console.log(`${pad("tiers for sale")}${tierList || "none"}`);
+        const stripeKey = readEnvValue(secretsText, "STRIPE_SECRET_KEY");
+        console.log(
+          `${pad("Stripe")}${
+            stripeKey
+              ? "configured"
+              : current === "supporter"
+                ? "not configured — a Supporter needs no Stripe account"
+                : "NOT configured"
+          }`
+        );
+        console.log(
+          current === "supporter"
+            ? "\nTo sell hardware:  fh-toolkit level --set operator"
+            : "\nTo stop selling:   fh-toolkit level --set supporter"
+        );
+        return 0;
+      }
+
+      if (setTo !== "supporter" && setTo !== "operator") {
+        die(`--set takes "supporter" or "operator", not "${setTo}".`);
+      }
+      const target: Level = setTo;
+      const dryRun = args.includes("--dry-run");
+      const yes = args.includes("--yes");
+
+      // Non-interactive equivalents of the prompts, so this is testable and scriptable.
+      // --price is repeatable: --price cumulus=25 --price nimbus=40, in DOLLARS.
+      const cliPrices: Record<string, number> = {};
+      for (let i = 0; i < args.length; i++) {
+        if (args[i] !== "--price") continue;
+        const spec = args[i + 1];
+        if (!spec || !spec.includes("=")) die("--price takes <tier>=<dollars>, e.g. --price cumulus=25");
+        const [tier, dollars] = spec.split("=", 2) as [string, string];
+        if (!/^\$?\d+(\.\d{1,2})?$/.test(dollars.trim())) {
+          die(`--price ${tier}: "${dollars}" is not an amount in dollars.`);
+        }
+        cliPrices[tier] = Math.round(Number(dollars.replace("$", "")) * 100);
+      }
+      const cliStripe = {
+        secretKey: flag(args, "--stripe-key"),
+        webhookSecret: flag(args, "--stripe-webhook"),
+      };
+
+      let askedPrices: Record<string, number> | undefined;
+      let askedStripe: { secretKey?: string; webhookSecret?: string } | undefined;
+
+      if (target === "operator") {
+        // Live floors, same rule and same fallback note as `init`.
+        const minimums =
+          (await cachedTierMinimums(ctx, hubBaseUrl ?? "https://fluxhub.moltentech.us")) ??
+          TIER_FLOORS_CENTS;
+
+        // Below-floor prices are rejected before anything is written, so a bad --price
+        // costs nothing rather than leaving a half-applied upgrade behind.
+        for (const [tier, cents] of Object.entries(cliPrices)) {
+          const floor = minimums[tier];
+          if (floor === undefined) die(`--price ${tier}: unknown tier. Flux Hub knows ${Object.keys(minimums).join(", ")}.`);
+          if (cents < floor) {
+            die(
+              `--price ${tier}: $${(cents / 100).toFixed(2)} is below the $${(floor / 100).toFixed(2)} ` +
+                "floor Flux Hub enforces. Nothing was written."
+            );
+          }
+        }
+
+        const wouldHavePrices = Object.keys({ ...prices, ...cliPrices }).length > 0;
+        const wouldHaveStripe =
+          cliStripe.secretKey !== undefined ||
+          readEnvValue(secretsText, "STRIPE_SECRET_KEY") !== undefined;
+        const alreadyDone = current === "operator" && wouldHavePrices && wouldHaveStripe;
+
+        // Only ask when there is something missing AND someone to ask. `--yes` and a
+        // non-TTY both mean "use what I gave you".
+        const canAsk = !yes && process.stdin.isTTY === true;
+        if (!alreadyDone && canAsk && Object.keys(cliPrices).length === 0) {
+          await withPrompts(ctx, async (ask, askUntil) => {
+            console.log("Upgrading to Operator — the same questions `init` asks a seller.\n");
+            const selling = await askSellingAnswers(ask, askUntil, minimums);
+            askedPrices = selling.tierPricesCents;
+            askedStripe = {
+              secretKey: selling.stripeSecretKey || undefined,
+              webhookSecret: selling.stripeWebhookSecret || undefined,
+            };
+          });
+        }
+      }
+
+      const plan = planLevelChange({
+        configText,
+        secretsText,
+        target,
+        prices: { ...askedPrices, ...cliPrices },
+        stripe: {
+          secretKey: cliStripe.secretKey ?? askedStripe?.secretKey,
+          webhookSecret: cliStripe.webhookSecret ?? askedStripe?.webhookSecret,
+        },
+        ...(hubBaseUrl ? { hubBaseUrl } : {}),
+      });
+
+      if (plan.noop) {
+        console.log(`Already ${target}, priced and wired — nothing to change.`);
+        return 0;
+      }
+
+      console.log(`level: ${plan.from ?? "(absent)"} → ${plan.to}\n`);
+      for (const e of plan.configEdits) console.log(`  config.env    ${e}`);
+      for (const e of plan.secretsEdits) console.log(`  secrets.env   ${e}`);
+      for (const w of plan.warnings) console.log(`\n  ⚠️  ${w}`);
+
+      if (dryRun) {
+        console.log("\n--dry-run: nothing written.");
+        return 0;
+      }
+      if (!yes && process.stdin.isTTY === true) {
+        const answer = await withPrompts(ctx, async (ask) => (await ask("\nApply these changes? [y/N]")).toLowerCase());
+        if (!answer.startsWith("y")) {
+          console.log("nothing written.");
+          return 1;
+        }
+      }
+
+      // Backups first. This edits the two files an operator can least afford to lose,
+      // and `.bak` costs nothing next to re-deriving a secrets.env by hand.
+      writeFileSync(`${configPath}.bak`, configText, { mode: 0o600 });
+      writeFileSync(configPath, plan.configText, { mode: 0o600 });
+      const wroteSecrets = plan.secretsText !== secretsText;
+      if (wroteSecrets) {
+        if (existsSync(secretsPath)) writeFileSync(`${secretsPath}.bak`, secretsText, { mode: 0o600 });
+        writeFileSync(secretsPath, plan.secretsText, { mode: 0o600 });
+      }
+      console.log(
+        `\nWrote ${wroteSecrets ? "config.env, secrets.env" : "config.env"} ` +
+          "(previous versions kept as *.bak)\n"
+      );
+      for (const line of plan.nextSteps) console.log(line);
+      return 0;
+    }
     case "sign": {
       // Same defaults as `env`, for the same reason: every one of these names a file
       // `init` wrote into the directory you are standing in. The re-sign instruction that
@@ -1400,11 +1655,14 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
     case "-h":
     default:
       console.log(
-        "usage: fh-toolkit <keygen|coalition-keygen|init|doctor|sign|env|verify|version> [options]\n"
+        "usage: fh-toolkit <keygen|coalition-keygen|init|level|doctor|sign|env|verify|version> [options]\n"
       );
       console.log("  keygen           [--out <dir>]");
       console.log("  coalition-keygen [--out <dir>]   Phase D signing key (operator-held custody)");
       console.log("  init      [--out <dir>] [--answers <answers.json>] [--force]");
+      console.log("  level     [--dir <dir>]                      show your level, tiers and Stripe state");
+      console.log("            --set <supporter|operator> [--price <tier>=<usd>] [--stripe-key <k>]");
+      console.log("            [--stripe-webhook <k>] [--dry-run] [--yes]");
       console.log("  doctor    [--dir <dir>] [--check-proxmox] [--check-stripe] [--check-hub]");
       console.log("  sign      [--dir <dir>] [--key <pem>] [--from-config <config.env>|--in <body.json>]");
       console.log("            [--out <manifest.json>] [--stdout]   defaults to what `init` wrote");
@@ -1506,6 +1764,9 @@ async function session(ctx: Ctx): Promise<number> {
     historySize: HISTORY_MAX,
   });
   rl.on("history", (h: string[]) => writeHistory(ctx.dir, h));
+  // Commands that ask questions reuse this rather than opening a second interface on the
+  // same TTY, which would echo every keystroke twice.
+  ctx.rl = rl;
 
   // Just the identity lines. formatBuildInfo's trailing "older than you expect?" note is
   // written for someone reading `version` output in a bug report, not for a banner
