@@ -32,24 +32,22 @@
  *                                       assemble the Flux "Import Environment Variables" blob (JSON array of
  *                                       "KEY=value"): non-secret config + secrets + the signed manifest as
  *                                       MANIFEST_JSON; passes TIER_PRICES_JSON through from config.env. --manifest may
- *                                       be a bare manifest OR an 'authorize' wrapper (owner-signed, shipped
+ *                                       be a bare manifest OR an owner-signed wrapper (shipped
  *                                       whole so MT ingests it owner-verified). Verifies the manifest (and any
  *                                       owner) signature first. Output contains SECRETS — never commit it.
  *   verify --in <manifest.json>         re-verify a signed manifest — accepts a bare manifest OR an
- *                                        'authorize' wrapper (whose owner signature is checked too)
- *   authorize --in <manifest.json>      LEGACY — the /onboard web flow is the supported path.
- *                                       Still serves the URL-fetch ingest path.
- *                                       print the owner-authorization message + a Zelcore
- *                                        deep link to sign (proves you control ownerAddress)
- *   authorize --in <manifest.json> --signature <b64> --out <signed-manifest.json>
- *                                        wrap the manifest + your wallet signature into the
- *                                        SignedProviderManifest MT ingests (proven identity)
+ *                                        owner-signed wrapper (whose owner signature is checked too)
+ *
+ * There is no `authorize` subcommand. It produced the owner-signed
+ * SignedProviderManifest wrapper; the /onboard web flow signs in the browser and Flux Hub
+ * builds the wrapper itself. Reading a wrapper is still fully supported — see `env` and
+ * `verify` above, which accept either shape.
  */
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { join, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
-import { ProviderManifest, ProviderManifestBody, manifestOwnerMessage, unwrapManifest } from "./manifest";
+import { ProviderManifest, ProviderManifestBody, unwrapManifest } from "./manifest";
 import { renderManifestBodyFromConfig, parseConfigEnv } from "./manifest-config";
 import {
   runDoctor,
@@ -98,7 +96,6 @@ import {
   type SlotAnswer,
 } from "./scaffold";
 import { verifyManifestOwnerSignature } from "./wallet";
-import { buildZelcoreSignLink } from "./sign-launcher";
 import {
   generateEd25519,
   exportPrivateKeyPem,
@@ -1172,7 +1169,7 @@ async function main() {
 
       // Verify the manifest is validly signed BEFORE shipping it as env — refuse a
       // placeholder or a tampered/unsigned manifest. Accepts either a bare
-      // ProviderManifest OR a SignedProviderManifest wrapper (from 'authorize'); the
+      // ProviderManifest OR a SignedProviderManifest wrapper; the
       // whole object is shipped verbatim so the owner signature reaches MT via the
       // /.well-known publish path.
       const manifestObj = JSON.parse(readFileSync(manifestPath, "utf8"));
@@ -1185,7 +1182,7 @@ async function main() {
         if (!parsed.success) die(`${manifestPath}: signed wrapper's manifest is invalid:\n${parsed.error.message}`);
         if (!parsed.data.ownerAddress) die(`${manifestPath}: signed manifest is missing ownerAddress`);
         if (!verifyManifestOwnerSignature(parsed.data, manifestOwnerSig)) {
-          die(`${manifestPath}: owner wallet signature does not verify against ownerAddress — re-run 'authorize'`);
+          die(`${manifestPath}: owner wallet signature does not verify against ownerAddress — re-onboard at /onboard to re-issue the wrapper`);
         }
         if (config.OWNER_ADDRESS && config.OWNER_ADDRESS !== parsed.data.ownerAddress) {
           console.error(
@@ -1290,7 +1287,7 @@ async function main() {
       const inPath = flag(args, "--in") ?? die("--in <manifest.json> required");
       const raw = JSON.parse(readFileSync(inPath, "utf8"));
       // Accept either shape an operator can hold: a bare manifest, or the
-      // 'authorize' wrapper they publish. Verifying the wrapper's top level
+      // owner-signed wrapper they publish. Verifying the wrapper's top level
       // could only ever fail (it carries no `signature` of its own), which
       // told operators their VALID manifest was broken.
       const { manifest, ownerSignature } = unwrapManifest(raw);
@@ -1318,63 +1315,6 @@ async function main() {
         process.exit(1);
       }
       console.log(`OK — manifest + owner signature valid (owner ${parsed.data.ownerAddress})`);
-      break;
-    }
-    case "authorize": {
-      // Prove you control the manifest's ownerAddress by wallet-signing it, turning
-      // MT's blind-TOFU pubkey pin into proven ownership. Two-step (no browser in a
-      // one-shot container): print message + Zelcore deep link, then re-run with the
-      // resulting --signature to emit the SignedProviderManifest MT ingests.
-      const inPath = flag(args, "--in") ?? die("--in <manifest.json> required");
-      const signature = flag(args, "--signature");
-      const outPath = flag(args, "--out");
-
-      const raw = JSON.parse(readFileSync(inPath, "utf8"));
-      if (!verifyManifestObject(raw)) die(`${inPath}: manifest signature invalid — run 'sign' first`);
-      const parsed = ProviderManifest.safeParse(raw);
-      if (!parsed.success) die(`${inPath}: not a valid signed manifest:\n${parsed.error.message}`);
-      const manifest = parsed.data;
-      if (!manifest.ownerAddress) {
-        die(
-          "manifest has no ownerAddress — add your Flux/ZelID wallet address as \"ownerAddress\" " +
-            "in the body, re-run 'sign', then 'authorize'."
-        );
-      }
-      const message = manifestOwnerMessage(manifest);
-
-      if (!signature) {
-        // Step 1: show what to sign.
-        console.log("Sign this EXACT message with the wallet that owns the address below,");
-        console.log(`then re-run with --signature <base64> --out signed-manifest.json:\n`);
-        console.log(`owner address: ${manifest.ownerAddress}\n`);
-        console.log("─── message ───");
-        console.log(message);
-        console.log("───────────────\n");
-        console.log("Zelcore deep link (or paste the message into ZelID/SSP 'Sign Message'):");
-        console.log(buildZelcoreSignLink({ message }));
-        break;
-      }
-
-      // Step 2: validate the signature and emit the SignedProviderManifest.
-      if (!verifyManifestOwnerSignature(manifest, signature)) {
-        die(
-          "signature does not verify against the manifest's ownerAddress — check you signed the " +
-            "exact message with the right wallet (and that ownerAddress matches)."
-        );
-      }
-      // Embed the RAW manifest (not `manifest`, the zod-parsed copy) — zod defaults
-      // would add fields and break the detached ed25519 signature MT re-derives.
-      const signed = { manifest: raw, ownerSignature: signature };
-      const out = JSON.stringify(signed, null, 2) + "\n";
-      if (outPath) {
-        writeFileSync(outPath, out, { mode: 0o600 });
-        console.log(
-          `Wrote signed manifest to ${outPath}. Publish it at your Coalition's ` +
-            `/.well-known/mt-provider.json (or hand it to the MT admin to ingest).`
-        );
-      } else {
-        process.stdout.write(out);
-      }
       break;
     }
     // Which build am I? The image refreshes at most every 48h, so "the fix is merged"
@@ -1415,7 +1355,7 @@ async function main() {
     case "-h":
     default:
       console.log(
-        "usage: mt-manifest <keygen|coalition-keygen|init|doctor|sign|env|verify|authorize|version> [options]\n"
+        "usage: mt-manifest <keygen|coalition-keygen|init|doctor|sign|env|verify|version> [options]\n"
       );
       console.log("  keygen           [--out <dir>]");
       console.log("  coalition-keygen [--out <dir>]   Phase D signing key (operator-held custody)");
@@ -1427,8 +1367,6 @@ async function main() {
       console.log("            [--manifest <manifest|signed-manifest.json>] [--out <env.json>] [--stdout]");
       console.log("            defaults to the files `init` wrote in the current directory");
       console.log("  verify    --in <manifest.json>");
-      console.log("  authorize --in <manifest.json> [--signature <b64> --out <signed-manifest.json>]");
-      console.log("            (preferred) or the Coalition console. Works; retires with v2.");
       console.log("  version   which build of this CLI is running (paste it into a bug report)");
       console.log("  help      this list\n");
       console.log("Every path defaults to the file `init` wrote in the current directory,");

@@ -42,8 +42,7 @@
     "src"
   ],
   "bin": {
-    "mt-manifest": "./src/cli.ts",
-    "mt-authorize": "./src/authorize-cli.ts"
+    "mt-manifest": "./src/cli.ts"
   },
   "scripts": {
     "build": "tsc",

@@ -158,7 +158,7 @@ test("verifyOwnerAuth rejects a tampered signature", () => {
   assert.equal(verifyOwnerAuth({ ...auth, signature: buf.toString("base64") }, address).ok, false);
 });
 
-// ── signFluxMessage (the mt-authorize headless signer) ───────────────────────
+// ── signFluxMessage (the headless owner signer) ─────────────────────────────
 // Round-trips against the file's independent verifier path (verifyFluxSignature).
 test("signFluxMessage (zelid) round-trips with verifyFluxSignature", () => {
   const { address, signature } = signFluxMessage(PRIV, MESSAGE);

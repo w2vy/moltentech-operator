@@ -159,7 +159,7 @@ const SIGN_VERSION = { zelid: Uint8Array.from([0x00]), flux: Uint8Array.from([0x
 /**
  * Produce a Flux/Bitcoin `signmessage` signature over `message` with a raw private
  * key. Returns the signer's address and the 65-byte compact recoverable base64
- * signature — the inverse of `verifyFluxSignature`. For the headless `mt-authorize`
+ * signature — the inverse of `verifyFluxSignature`. For the headless owner-signing
  * path; the preferred owner flow signs in Zelcore/ZelID so the private key never
  * leaves the wallet. `type` picks the address surface: `zelid` (Bitcoin magic, `1…`)
  * or `flux` (Zelcash magic, `t1…`).
