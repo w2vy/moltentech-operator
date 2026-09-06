@@ -333,11 +333,11 @@ browser, over ssh.
 ⚠️ **It carries no secrets, by design** — slug, app name, URLs, host names only. It is the
 one generated file that is safe to paste into a support thread, and it must stay that way.
 
-## `signed-manifest.json` *(only if you used `authorize`)*
+## `signed-manifest.json` *(you will not have one)*
 
-The legacy `SignedProviderManifest` wrapper: `{manifest, ownerSignature}`. The `/onboard`
-web flow is the supported path and produces no such file; this one exists for the
-URL-fetch ingest path. `env` and `verify` accept it wherever a bare manifest is accepted,
+The `SignedProviderManifest` wrapper: `{manifest, ownerSignature}`. Nothing writes it any
+more — the `/onboard` web flow signs in the browser and Flux Hub builds the wrapper on its
+side. It is described here because wrappers issued before that change still exist. `env` and `verify` accept it wherever a bare manifest is accepted,
 and check the owner signature too.
 
 ---

@@ -17,9 +17,12 @@ public IP is in the `203.0.113.0/24` documentation range, the shell prompt is
 `user@host`, and the cluster is a single Proxmox host. **Nothing here is a working
 value** — do not copy one out.
 
-**Captured against** `@moltentech/protocol` 0.1.0 — `protocol/` at `e9d9da6`, 2026-09-02.
-`init`'s prompts change as the wizard gains checks; if what you see on screen differs
-from what is below, your `fh-toolkit` is the authority and this transcript is stale.
+**Captured against** `@moltentech/protocol` 0.1.0 — `protocol/` at `e9d9da6`, 2026-09-02,
+when the tool was still called `mt-manifest`. ⚠️ **The command names below were updated in
+place for the rename; the run itself has not been re-captured.** `init`'s prompts are
+unchanged by that rename, so the questions and their order still match — but if anything
+on screen differs from what is below, your `fh-toolkit` is the authority and this
+transcript is stale.
 
 ## A Supporter run, start to finish
 

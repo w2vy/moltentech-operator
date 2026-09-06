@@ -1507,7 +1507,10 @@ async function session(ctx: Ctx): Promise<number> {
   });
   rl.on("history", (h: string[]) => writeHistory(ctx.dir, h));
 
-  console.log(buildLine());
+  // Just the identity lines. formatBuildInfo's trailing "older than you expect?" note is
+  // written for someone reading `version` output in a bug report, not for a banner
+  // printed every time a session opens.
+  console.log(buildLine().split("\n\n")[0]);
   console.log(`directory: ${ctx.dir}`);
   console.log("`help` lists the commands. `exit` or Ctrl-D leaves.\n");
 

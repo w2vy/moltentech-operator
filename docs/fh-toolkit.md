@@ -8,10 +8,13 @@ command read and write, what happens if I get it wrong". For the ordered from-ze
 walkthrough, see [`operator-onboarding.md`](operator-onboarding.md). For what each file in
 your operator directory *is*, see [`FluxHub-overview.md`](FluxHub-overview.md).
 
-> **On the names.** The platform is **Flux Hub**; these docs use that name throughout.
-> The binaries, images and environment variables are still `mt-*` (`fh-toolkit`,
-> `mt-agent`, `MT_BASE_URL`, `MT_PUBKEY`) and will keep those names until the rename
-> ships. **Every command in this document is literal** — type it exactly as written.
+> **On the names.** The platform is **Flux Hub**, and the toolkit is **`fh-toolkit`**
+> (renamed from `mt-manifest`: only two of its commands were ever about manifests).
+> The agent is still **`mt-agent`**, and the environment variables are still `MT_*`
+> (`MT_BASE_URL`, `MT_PUBKEY`) — that is deliberate, not an oversight. They point at an
+> unchanged endpoint and are read across three repos, so renaming them would buy nothing
+> and cost a coordinated migration. **Every command in this document is literal** — type
+> it exactly as written.
 
 ---
 
@@ -75,11 +78,16 @@ and stops, and followed by a command (`fh-toolkit --refresh doctor --check-hub`)
 and then runs it. It has to live in the wrapper: the CLI runs *inside* the container and
 cannot replace its own image.
 
-Three things in that wrapper are load-bearing:
+Four things in that wrapper are load-bearing:
 
 - **`-i`** — without it the container gets no stdin and `init`, the only subcommand that
   asks questions, prints its first prompt and exits at EOF with no error. Every other
   subcommand still works, so the tool looks half-broken rather than mis-invoked.
+- **the guarded `-t`** — `-i` gives the container stdin; `-t` gives it a *terminal*, which
+  is what makes prompts redraw, input echo sanely and the interactive session usable. It
+  is guarded because `-t` on something that is not a terminal fails outright with "the
+  input device is not a TTY" — so the same function keeps working inside a script or a
+  pipeline, where it silently drops to `-i` alone.
 - **`-v "$PWD:/work"`** — the container's `/work` *is* your operator directory. Every
   path default below (`.`) resolves there, which is why the commands take no arguments
   when you run them in the right place.
@@ -145,12 +153,16 @@ docker run --rm --env-file .env.operator -v "$PWD/data:/data:ro" \
 # `fh-toolkit`
 
 ```
-fh-toolkit <keygen|init|doctor|sign|env|verify|authorize> [options]
+fh-toolkit <keygen|init|doctor|sign|env|verify> [options]   # one command, then exit
+fh-toolkit                                                  # an interactive session
 ```
 
-`fh-toolkit help` (also `--help`, `-h`, or no subcommand at all) prints the whole command
-list, `doctor`'s live-check flags, and a pointer back to this document — exit 0. An unknown
-subcommand prints the same list and exits 1.
+`fh-toolkit help` (also `--help` or `-h`) prints the whole command list, `doctor`'s
+live-check flags, and a pointer back to this document — exit 0. An unknown subcommand
+prints the same list and exits 1.
+
+**With no arguments at all it opens an interactive session** — see
+[Interactive session](#interactive-session) below.
 
 **Every path option defaults to the file `init` wrote in the current directory.** Standing
 in your operator directory, `doctor`, `sign` and `env` take no arguments at all.
@@ -163,8 +175,71 @@ in your operator directory, `doctor`, `sign` and `env` take no arguments at all.
 | `sign` | re-sign after a `config.env` edit | `config.env`, key | `manifest.json` |
 | `env` | assemble the Flux environment blob | config + secrets + manifest | `env.json` |
 | `verify` | re-check a signature you were handed | a manifest | — |
-| `authorize` | LEGACY owner-signature wrapper | a manifest | `signed-manifest.json` |
 | `help` | the whole command list | — | — |
+
+---
+
+## Interactive session
+
+```
+fh-toolkit          # no arguments, and a terminal
+```
+
+Opens a session that runs the same commands, in one container, keeping state between
+them:
+
+```console
+$ fh-toolkit
+fh-toolkit 0.1.0
+  build   4de297f…  built 2026-09-06T14:02:11Z
+directory: /work
+`help` lists the commands. `exit` or Ctrl-D leaves.
+
+fh-toolkit> keygen
+Wrote manifest-key.pem (KEEP SECRET — this signs your manifest).
+...
+
+fh-toolkit> init
+...
+
+fh-toolkit> doctor
+...
+
+fh-toolkit> exit
+bye
+```
+
+**What it is for.** Three things a one-shot invocation cannot do:
+
+- **A real terminal.** `init` is the only command that asks questions, and it needs a TTY
+  to ask them properly. One `docker run -it` per session settles that once.
+- **State carried between commands.** The tier minimums are fetched from Flux Hub once
+  per base URL instead of once per command, so `init` then `doctor` makes one network
+  call, not two.
+- **One mount decision** instead of one per command.
+
+**What it is not.** It is the same commands with state, not a shell. There is no `cd`,
+no shell-out, no `!` escape, no globbing. The directory is **pinned** at start — the
+mount *is* the directory — and every path option still defaults to it, so the commands
+read exactly as they do at your prompt.
+
+A command that fails ends the *command*, not the session: you get `error: …` and the next
+prompt. That is the point of a session — a typo in `sign` should not throw away a fetched
+tier table and make you re-enter the container.
+
+`--refresh` is not a session command. It belongs to the shell function, because the CLI
+runs inside the container and cannot replace its own image; run `fh-toolkit --refresh`
+from your prompt instead.
+
+**History** is kept in `.fh-toolkit-history` in the pinned directory, mode 0600, most
+recent last. It holds no secrets — every option that takes a value takes a *path*
+(`--key`, `--secrets`, `--in`, `--out`), never key material — but it is per-machine
+scratch, so both `.gitignore` and `.dockerignore` exclude it.
+
+⚠️ **No arguments and no terminal is an error, not a session.** It prints usage and exits
+1. Opening a session on a pipe would read EOF and vanish, which is how a wrapper missing
+`-t` used to make `init` look half-broken rather than mis-invoked. If you see it, your
+wrapper predates the guarded `-t` — re-paste it from the top of this document.
 
 ---
 
@@ -439,7 +514,7 @@ strings. In a finished scaffold it needs no arguments. Output is mode **0600** a
 
 It verifies the manifest signature *before* shipping it, so a placeholder or tampered
 manifest is refused rather than deployed. `--manifest` accepts a bare manifest **or** an
-`authorize` wrapper; a wrapper's owner signature is verified too, and the whole object
+owner-signed wrapper; a wrapper's owner signature is verified too, and the whole object
 ships verbatim so the owner authorization reaches FH intact. If `config.env`'s
 `OWNER_ADDRESS` differs from a wrapper's `ownerAddress`, it warns and ships the signed
 manifest's owner.
@@ -468,7 +543,7 @@ fh-toolkit verify --in <manifest.json>
 ```
 
 Re-verifies a signed manifest. Accepts either shape you can hold — a bare manifest, or an
-`authorize` wrapper, whose owner signature is checked as well (verifying a wrapper's top
+owner-signed wrapper, whose owner signature is checked as well (verifying a wrapper's top
 level could only ever fail, which used to tell operators their valid manifest was broken).
 
 ```
@@ -480,22 +555,15 @@ FAILED — owner wallet signature does not verify against ownerAddress
 
 ---
 
-## `authorize` *(legacy)*
+## There is no `authorize`
 
-```
-fh-toolkit authorize --in <manifest.json>
-fh-toolkit authorize --in <manifest.json> --signature <b64> --out <signed-manifest.json>
-```
+It used to wrap a signed manifest and your wallet signature into a
+`SignedProviderManifest`. **The `/onboard` web flow does that now** — you sign in the
+browser and Flux Hub builds the wrapper itself — so the command was removed.
 
-⚠️ **The `/onboard` web flow is the supported path.** `authorize` remains for the
-URL-fetch ingest path.
-
-Two steps, because a one-shot container has no browser. The first prints the exact
-message to sign, the owner address, and a Zelcore deep link. The second validates your
-signature against the manifest's `ownerAddress` and emits the `SignedProviderManifest`.
-
-The wrapper embeds the **raw** manifest, not a schema-parsed copy — zod defaults would add
-fields and break the detached signature FH re-derives.
+Nothing you already hold stops working. `verify` and `env` both still accept either
+shape, a bare manifest or an owner-signed wrapper, and check the owner signature when
+one is present. What you submit at `/onboard` is the **bare** `manifest.json`.
 
 ---
 
@@ -671,3 +739,4 @@ store. It is not a middlebox on your network and not a Proxmox certificate probl
 | Checkout is failing and nothing looks wrong | `doctor --check-hub --check-stripe` |
 | I changed `.env.operator` | `docker compose up -d --force-recreate` |
 | Someone handed me a manifest | `verify --in <file>` |
+| Several of the above, back to back | `fh-toolkit` with no arguments — one session |

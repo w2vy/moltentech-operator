@@ -297,6 +297,15 @@ only subcommand that asks questions — prints its first prompt and exits at EOF
 error. Every other subcommand works fine, so the tool looks half-broken rather than
 mis-invoked.
 
+**The `-t` beside it is what makes the questions behave** — prompts redraw, input echoes,
+and `fh-toolkit` with *no* arguments opens an interactive session you can run the whole
+of this walkthrough inside (`keygen`, `init`, `doctor`, … then `exit`), rather than
+entering and leaving a container per command. It is guarded on `[ -t 0 ] && [ -t 1 ]` so
+the same function still works inside a script, where `-t` would otherwise fail outright
+with "the input device is not a TTY". Every command below is written the one-shot way and
+works either way; see *Interactive session* in
+[`fh-toolkit.md`](fh-toolkit.md#interactive-session).
+
 ⚠️ **`docker run` never re-pulls**, so without the refresh above you keep running whatever
 image you first pulled — for as long as that is, while the docs describe a newer one. That
 is what the stamp file is for: one pull every 48 hours, roughly a second when the image is
@@ -569,10 +578,10 @@ signature valid, which nothing downstream can detect. `fh-toolkit doctor` compar
 two and fails with `MANIFEST_STALE`, naming the fields that moved; `fh-toolkit sign`
 clears it.
 
-⚠️ **"bare manifest, no owner authorization" is the correct and expected result.** Under
-the old flow you then ran `fh-toolkit authorize` to wrap it in a wallet signature. You
-do not any more — the wallet signature happens in your browser in Step 2 and is retained
-by FH. **The bare `manifest.json` is what you submit and what your Coalition publishes.**
+⚠️ **"bare manifest, no owner authorization" is the correct and expected result.** An
+older flow had you wrap it in a wallet signature from the command line; that command is
+gone. The wallet signature happens in your browser in Step 2 and is retained by FH.
+**The bare `manifest.json` is what you submit and what your Coalition publishes.**
 
 `manifest.json` carries `HOSTS` (the hardware you attest, owner-signed) and your
 identity. It does **not** carry price — `TIER_PRICES_JSON` feeds runtime pricing only —
