@@ -18,6 +18,8 @@ import {
  *   1. the token is wrong             — a 401 that used to read as a bring-up mystery
  *   2. the token is path-scoped       — cannot provision, no matter what it lists
  *   3. the image storage SPINS        — silent; costs a provision + benchmark cycle
+ *   4. the bridges are FILTERED       — silent; a 200 with the bridge omitted, and the
+ *                                       failure surfaces inside arcane-mage, not here
  *
  * The transport is injected, so these assert the JUDGEMENT, not the network.
  */
@@ -73,6 +75,15 @@ function fakeGet(overrides: Record<string, unknown> = {}) {
     // Datastore privilege about itself.
     "/api2/json/nodes/pve30/storage/pve55-shared/content": [
       { volid: "pve55-shared:iso/FluxLive-1775071308.iso", format: "iso" },
+    ],
+    // The healthy answer. SDN filtering does not remove the interface list — it removes the
+    // BRIDGE from it, leaving the vlan and the physical NIC behind, which is why the 200 that
+    // comes back looks like a normal reply. That filtered shape is the fixture in the SDN
+    // test below; this is the same host with the privilege granted.
+    "/api2/json/nodes/pve30/network": [
+      { iface: "vmbr0", type: "bridge" },
+      { iface: "vmbr0.102", type: "vlan" },
+      { iface: "eno1", type: "eth" },
     ],
     ...overrides,
   };
@@ -258,4 +269,48 @@ test("a healthy hypervisor reports the storage it read, so a pass is legible", a
   const read = probe.checks.find((c) => c.name.includes("storage readable"))!;
   assert.equal(read.status, "pass");
   assert.match(read.detail, /pve55-shared/);
+});
+
+test("⭐ a filtered bridge list fails HERE, not five steps later in arcane-mage", async () => {
+  // The measured shape from pve50 on 2026-08-29: the call returns 200 and the vlan and the
+  // physical NIC come back — only the bridge is gone. Nothing throws, so before this check
+  // the probe was silent and `validate_network` reported "Network not present on hypervisor"
+  // against a vmbr0 that was present, UP and correct.
+  const probe = await probeProxmox(
+    CREDS,
+    fakeGet({
+      "/api2/json/nodes/pve30/network": [
+        { iface: "vmbr0.102", type: "vlan" },
+        { iface: "eno1", type: "eth" },
+      ],
+    })
+  );
+  assert.equal(probe.ok, false);
+  const priv = probe.checks.find((c) => c.name.includes("privileges"))!;
+  const bridges = probe.checks.find((c) => c.name.includes("bridges visible"))!;
+  assert.equal(priv.status, "pass", "the self-report passes — that is why the read exists");
+  assert.equal(bridges.status, "fail");
+  assert.match(bridges.detail, /SDN\.Use/);
+  assert.match(bridges.detail, /pvedaemon/, "a granted-but-stale ACL is the other cause");
+  assert.match(bridges.detail, /vmbr0\.102/, "say what WAS seen, or it reads as no answer at all");
+});
+
+test("⭐ the bridge check does not mistake a storage failure for a network one", async () => {
+  // Both per-node reads exercise the same claim, and a node with a broken storage ACL still
+  // has to report its bridges truthfully. Keeping them independent is what lets the two
+  // checks disagree, which is the whole diagnostic value of having both.
+  const probe = await probeProxmox(
+    CREDS,
+    fakeGet({ "/api2/json/nodes/pve30/storage": new Error("HTTP 403") })
+  );
+  const bridges = probe.checks.find((c) => c.name.includes("bridges visible"))!;
+  assert.equal(bridges.status, "pass", "storage is broken; the bridges are not");
+  assert.match(bridges.detail, /vmbr0/);
+});
+
+test("a healthy hypervisor names the bridges it saw, so the pass is checkable", async () => {
+  const probe = await probeProxmox(CREDS, fakeGet());
+  const bridges = probe.checks.find((c) => c.name.includes("bridges visible"))!;
+  assert.equal(bridges.status, "pass");
+  assert.equal(bridges.detail, "vmbr0", "only the bridge — a vlan is not somewhere a VM can attach");
 });

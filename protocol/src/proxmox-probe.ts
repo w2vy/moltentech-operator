@@ -185,6 +185,12 @@ export interface ProxmoxSurvey {
 interface NodeRow {
   node?: string;
 }
+/** One row of `GET /nodes/<node>/network`. */
+interface NetworkRow {
+  iface?: string;
+  /** `bridge`, `eth`, `vlan`, `bond`, … — the field SDN filtering acts on. */
+  type?: string;
+}
 interface StorageRow {
   storage?: string;
   type?: string;
@@ -288,6 +294,10 @@ export const REQUIRED_PRIVS = [
  * The privilege check reads `/access/permissions`, which is what the token can see
  * about ITSELF — no guessing, and it names the missing privilege rather than leaving a
  * 403 to surface inside a provision months later.
+ *
+ * ⚠️ That check is a CLAIM, and it has been wrong. Two per-node checks exercise it instead:
+ * a real storage content read, and a real bridge listing. Both exist because the privilege
+ * check passed a token that could not do the thing it claimed.
  */
 export async function probeProxmox(
   creds: ProxmoxCreds,
@@ -436,6 +446,53 @@ export async function probeProxmox(
       }
     } catch (e) {
       checks.push({ name: `${node}: storage list`, status: "fail", detail: (e as Error).message });
+    }
+
+    // ⭐ EXERCISED, for the same reason the storage read above is, and against the same class
+    // of failure. `SDN.Use` / `SDN.Audit` are in REQUIRED_PRIVS, but the privilege check that
+    // enforces them reads `/access/permissions` — the token describing ITSELF, which was
+    // measured wrong on 2026-08-29 (full `Datastore.*` reported for a token that could not
+    // read one storage). So a token can pass that check and still have its bridges filtered.
+    //
+    // 🔴 What makes this worth a second call rather than a comment: SDN filtering does NOT
+    // 403. `GET /nodes/<node>/network` returns 200 and simply OMITS the bridge, so the
+    // failure lands much later inside arcane-mage's `validate_network` as "Network not
+    // present on hypervisor" — naming a bridge that is present, UP, and correct, which sends
+    // the operator to debug networking instead of the token. Silence is the whole problem;
+    // the only way to see it is to make the call the provision will make.
+    //
+    // The assertion is "at least one bridge", not "the bridge you configured": `init` runs
+    // this before any inventory exists, so the intended bridge is not knowable yet. A node
+    // with zero visible bridges cannot host a VM either way, so the weaker claim still
+    // catches every case this is here for.
+    try {
+      const ifaces = await get<NetworkRow[]>(creds, `/api2/json/nodes/${node}/network`);
+      const bridges = ifaces.map((i) => (i.type === "bridge" ? i.iface ?? "" : "")).filter(Boolean).sort();
+      checks.push(
+        bridges.length > 0
+          ? {
+              name: `${node}: bridges visible`,
+              status: "pass",
+              detail: bridges.join(", "),
+            }
+          : {
+              name: `${node}: bridges visible`,
+              status: "fail",
+              detail:
+                `${node} reports NO bridge. Proxmox does not 403 a missing SDN privilege — it ` +
+                `returns 200 and omits the bridge — so this passes every self-reported check ` +
+                `and then fails at provision as "Network not present on hypervisor". Add ` +
+                `SDN.Use and SDN.Audit to the role, or (if they are already granted) restart ` +
+                `pvedaemon and pveproxy on ${node} to clear a stale ACL. ` +
+                `Saw: ${ifaces.map((i) => i.iface).filter(Boolean).join(", ") || "nothing at all"}.`,
+            }
+      );
+    } catch (e) {
+      checks.push({
+        name: `${node}: bridges visible`,
+        status: "fail",
+        detail: `could not read ${node}'s network config: ${(e as Error).message}`,
+      });
     }
   }
 
