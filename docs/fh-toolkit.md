@@ -42,20 +42,60 @@ to another command, so wrapping it (in a script, `time`, `sudo`, `watch`, a capt
 harness) fails with `command not found`.
 
 ```sh
+docker run --rm ghcr.io/w2vy/fh-toolkit:latest wrapper > ~/.fh-toolkit.sh
+echo '[ -f ~/.fh-toolkit.sh ] && . ~/.fh-toolkit.sh' >> ~/.bashrc
+. ~/.fh-toolkit.sh
+```
+
+**The image emits the wrapper**, so the two can never drift: a change like the guarded
+`-t` ships with the same build that needs it, and `fh-toolkit --update-wrapper` reinstalls
+both functions later. This is not a curl-to-shell — it is the tool you already run,
+printing the invocation it wants, and the file is plain text you can read first.
+
+⚠️ It replaces `~/.fh-toolkit.sh` wholesale, so put anything of your own in your rc file
+rather than in it. The header says as much.
+
+It defines **two** functions, `fh-toolkit` and `mt-agent`. `fh-toolkit wrapper` prints
+them without installing anything (`--toolkit` or `--agent` for one), which is how the
+block below stays honest — a test asserts these are the same bytes the image emits:
+
+```sh
 fh-toolkit() {
   local img=ghcr.io/w2vy/fh-toolkit:latest
   local stamp="${XDG_CACHE_HOME:-$HOME/.cache}/fh-toolkit.pulled"
-  # `--refresh` is consumed HERE and never passed on: the CLI runs inside the container
-  # and cannot pull its own image. Alone it pulls and stops; followed by a command it
-  # pulls and then runs it. A failed pull aborts rather than quietly using the old image.
+  # `--refresh` and `--update-wrapper` are consumed HERE and never passed on: the CLI runs
+  # inside the container and can neither replace its own image nor write to your home
+  # directory. Alone each does its job and stops; followed by a command it runs that too.
   if [ "$1" = "--refresh" ]; then
     shift
     docker pull "$img" || return 1
     mkdir -p "$(dirname "$stamp")" && touch "$stamp"
     [ $# -eq 0 ] && return 0
   fi
-  # Refresh the image at most once every 48h, tracked by a stamp file.
-  if [ ! -e "$stamp" ] || [ -n "$(find "$stamp" -mmin +2880 2>/dev/null)" ]; then
+  if [ "$1" = "--update-wrapper" ]; then
+    shift
+    local rc="${FH_TOOLKIT_RC:-$HOME/.fh-toolkit.sh}"
+    docker pull "$img" || return 1
+    mkdir -p "$(dirname "$stamp")" && touch "$stamp"
+    # Write a temp file and mv only on success. A bare `> "$rc"` truncates BEFORE docker
+    # runs, so one failed pull would leave you with an empty wrapper and no way to
+    # regenerate it — the one unrecoverable state this command could have had.
+    local tmp
+    tmp="$(mktemp "${rc}.XXXXXX")" || return 1
+    if docker run --rm "$img" wrapper > "$tmp" && [ -s "$tmp" ]; then
+      mv "$tmp" "$rc" && echo "wrapper updated: $rc"
+    else
+      rm -f "$tmp"
+      echo "error: could not generate the wrapper — $rc left as it was" >&2
+      return 1
+    fi
+    # Redefining a function while it is running is fine: bash already parsed this body.
+    # The new definitions take effect from the next call.
+    . "$rc" || return 1
+    [ $# -eq 0 ] && return 0
+  fi
+  # Refresh the image at most once every 15 minutes, tracked by a stamp file.
+  if [ ! -e "$stamp" ] || [ -n "$(find "$stamp" -mmin +15 2>/dev/null)" ]; then
     if docker pull -q "$img" >/dev/null 2>&1; then
       mkdir -p "$(dirname "$stamp")" && touch "$stamp"
     else
@@ -64,21 +104,26 @@ fh-toolkit() {
   fi
   # -t only when both ends really are a terminal. With it, `init`'s prompts and the
   # interactive session behave; without the guard, the same function inside a script or
-  # a pipeline dies with "the input device is not a TTY".
+  # a pipeline dies with "the input device is not a TTY". Unquoted on purpose — quoted,
+  # it would pass an empty argument to docker.
   local tty=""
   [ -t 0 ] && [ -t 1 ] && tty="-t"
-  # /etc/hosts read-only so hostnames resolve inside the container as they do at your
-  # prompt — see the caveat in operator-onboarding.md Step 0.5 for the loopback edge.
-  docker run --rm -i $tty -v "$PWD:/work" -v /etc/hosts:/etc/hosts:ro -u "$(id -u):$(id -g)" "$img" "$@"
+  # FH_WRAPPER lets the container tell a current wrapper from a stale one; `doctor`
+  # reports the mismatch. /etc/hosts read-only so hostnames resolve inside the container
+  # as they do at your prompt — see operator-onboarding.md Step 0.5 for the loopback edge.
+  docker run --rm -i $tty -e FH_WRAPPER=1 -v "$PWD:/work" \
+    -v /etc/hosts:/etc/hosts:ro -u "$(id -u):$(id -g)" "$img" "$@"
 }
 ```
 
 `fh-toolkit --refresh` forces the pull the stamp would otherwise defer — alone it pulls
 and stops, and followed by a command (`fh-toolkit --refresh doctor --check-hub`) it pulls
-and then runs it. It has to live in the wrapper: the CLI runs *inside* the container and
-cannot replace its own image.
+and then runs it. `fh-toolkit --update-wrapper` does the same for the wrapper itself:
+pulls, regenerates, and re-sources. Both have to live in the wrapper, because the CLI runs
+*inside* the container and can neither replace its own image nor write to your home
+directory. (Reaching the CLI with either flag is itself the diagnosis, and it says so.)
 
-Four things in that wrapper are load-bearing:
+Five things in that wrapper are load-bearing:
 
 - **`-i`** — without it the container gets no stdin and `init`, the only subcommand that
   asks questions, prints its first prompt and exits at EOF with no error. Every other
@@ -91,14 +136,21 @@ Four things in that wrapper are load-bearing:
 - **`-v "$PWD:/work"`** — the container's `/work` *is* your operator directory. Every
   path default below (`.`) resolves there, which is why the commands take no arguments
   when you run them in the right place.
+- **`-e FH_WRAPPER=1`** — how the container tells a current wrapper from a stale one, or
+  from none at all. It exists because on 2026-09-06 the tool was renamed, published, and
+  changed nothing for its only operator: his shell still defined `mt-manifest()` against
+  an image name that no longer publishes, and *neither side could say so*. `fh-toolkit
+  doctor` now reports it (`WRAPPER_STALE` / `WRAPPER_UNKNOWN`) and a session says it once
+  in the banner — not on every command, because a warning printed every time is a warning
+  nobody reads.
 - **the stamp file** — `docker run` never re-pulls, so without it you keep running
   whatever image you first pulled, indefinitely, while the docs describe a newer one.
-  `-mmin +2880` is deliberate: `-mtime +2` rounds to whole days and means *older than
-  72h*, which you would only notice as a refresh that did not happen. To pull every time
-  instead, drop the block and add `--pull always` to the `docker run`.
+  15 minutes, measured: a `docker pull` of an image that is already current costs about a
+  second and moves no layers — it fetches the manifest, matches the digest and stops. A
+  redundant pull *is* the cheap check, so there is nothing cheaper to write instead. To
+  pull every time, drop the block and add `--pull always` to the `docker run`.
 
-  Because of that window, a change that has merged can be up to two days from reaching
-  your box. `fh-toolkit version` says which build is actually answering:
+  `fh-toolkit version` says which build is actually answering:
 
   ```console
   $ fh-toolkit version
@@ -141,12 +193,41 @@ is live** — `fh-toolkit doctor --check-hub` reports the deployed Coalition bui
 is what replaces a version pin. For a run you need to reproduce byte-for-byte, deploy a
 digest (`w2vy/coalition@sha256:…`) instead of a tag.
 
-One-shot invocations (`doctor`, dry runs) go direct:
+One-shot invocations (`doctor`, dry runs) have a wrapper too — the same
+`~/.fh-toolkit.sh` defines an `mt-agent` function:
+
+```sh
+mt-agent doctor      # the credentialed preflight
+mt-agent dry-run     # Flux Hub connectivity and auth, without touching Proxmox
+```
+
+or go direct, which is all the function does:
 
 ```sh
 docker run --rm --env-file .env.operator -v "$PWD/data:/data:ro" \
-  w2vy/mt-agent:latest [doctor]
+  w2vy/mt-agent:latest doctor
 ```
+
+⚠️ **Bare `mt-agent` is the one place a wrapper disagrees with the tool it wraps.** The
+image's own CLI reads `mt-agent [doctor]`, where no argument means *run the main loop in
+the foreground*. Through the function that is a footgun — compose is already running one,
+and a second agent for one provider is a real failure mode — so the function refuses and
+points you back at compose. Run the loop with `docker compose up -d`, never through this.
+
+⚠️ **The function never pulls the agent.** `fh-toolkit` refreshes itself because it is the
+thing you are invoking; pulling the *agent* would mean `mt-agent doctor` validated a build
+your running loop is not on — passing here and failing in production. Instead `mt-agent
+doctor` compares what is **running** against what is **on the host**, and what is on the
+host against what is **published**, and tells you:
+
+```
+note: a newer w2vy/mt-agent:latest is ON THIS HOST than the one your agent is running.
+  take it with:  docker compose up -d --force-recreate
+```
+
+It reports; it never acts, and it says nothing at all when it cannot tell. The first of
+those two comparisons is the one that catches `docker compose pull` without
+`--force-recreate` — a build downloaded and never run.
 
 ---
 

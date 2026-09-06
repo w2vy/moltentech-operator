@@ -2,7 +2,7 @@
  * Which build of the CLI is this?
  *
  * Operators run `ghcr.io/w2vy/fh-toolkit:latest` through a shell function that refreshes
- * the image at most once every 48h, so a fresh publish is invisible for up to two days —
+ * the image at most once every 15 minutes, so a fresh publish can still be invisible —
  * and nothing in any output said which build was answering. Measured 2026-08-24: a box
  * printed a `help` that predated a merged change, and the only way to tell was to diff
  * the text against the repo.
@@ -47,7 +47,7 @@ export function formatBuildInfo(info: BuildInfo): string {
   if (info.sha) {
     lines.push("");
     lines.push("Older than you expect? The documented shell function refreshes the image");
-    lines.push("only every 48h: `docker pull ghcr.io/w2vy/fh-toolkit:latest`.");
+    lines.push("on a stamp file: `fh-toolkit --refresh`, or `docker pull ghcr.io/w2vy/fh-toolkit:latest`.");
   }
   return lines.join("\n");
 }

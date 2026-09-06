@@ -245,40 +245,23 @@ appears as an argument to another command, so wrapping it (in a script, a `time`
 capture harness, `sudo`, `watch`) fails with `command not found`.
 
 ```sh
-fh-toolkit() {
-  local img=ghcr.io/w2vy/fh-toolkit:latest
-  local stamp="${XDG_CACHE_HOME:-$HOME/.cache}/fh-toolkit.pulled"
-  # `--refresh` is consumed HERE and never passed on: the CLI runs inside the container
-  # and cannot pull its own image. Alone it pulls and stops; followed by a command it
-  # pulls and then runs it. A failed pull aborts rather than quietly using the old image.
-  if [ "$1" = "--refresh" ]; then
-    shift
-    docker pull "$img" || return 1
-    mkdir -p "$(dirname "$stamp")" && touch "$stamp"
-    [ $# -eq 0 ] && return 0
-  fi
-  # Refresh the image at most once every 48h, tracked by a stamp file.
-  if [ ! -e "$stamp" ] || [ -n "$(find "$stamp" -mmin +2880 2>/dev/null)" ]; then
-    if docker pull -q "$img" >/dev/null 2>&1; then
-      mkdir -p "$(dirname "$stamp")" && touch "$stamp"
-    else
-      echo "note: could not refresh $img — using the cached image" >&2
-    fi
-  fi
-  # -t only when both ends really are a terminal. With it, the questions below and the
-  # interactive session behave; without the guard, the same function inside a script or
-  # a pipeline dies with "the input device is not a TTY".
-  local tty=""
-  [ -t 0 ] && [ -t 1 ] && tty="-t"
-  # /etc/hosts is mounted read-only so hostnames resolve the same INSIDE the container as
-  # they do at your prompt — on a Proxmox node that file already names every peer, so
-  # `https://pve50:8006` just works instead of needing an IP.
-  docker run --rm -i $tty -v "$PWD:/work" -v /etc/hosts:/etc/hosts:ro -u "$(id -u):$(id -g)" "$img" "$@"
-}
+# Install the shell functions. The image emits them, so they can never drift from the
+# tool they wrap — and the rc line below never has to change again.
+docker run --rm ghcr.io/w2vy/fh-toolkit:latest wrapper > ~/.fh-toolkit.sh
+echo '[ -f ~/.fh-toolkit.sh ] && . ~/.fh-toolkit.sh' >> ~/.bashrc
+. ~/.fh-toolkit.sh
+```
+
+That defines two functions — `fh-toolkit` and `mt-agent` — and
+[`fh-toolkit.md`](fh-toolkit.md#running-them) prints the body if you want to read it
+before you source it. `fh-toolkit --update-wrapper` reinstalls them later; `fh-toolkit
+doctor` tells you when yours has gone stale, which is the failure this replaced.
+
+```sh
 fh-toolkit keygen             # writes manifest-key.pem (KEEP SECRET, 0600) + prints your pubkey
 ```
 
-`fh-toolkit --refresh` forces the pull the 48h stamp would otherwise defer — alone it
+`fh-toolkit --refresh` forces the pull the stamp would otherwise defer — alone it
 pulls and stops, or followed by a command it pulls and then runs it. The flag has to live
 in the wrapper: the CLI runs *inside* the container and cannot replace its own image.
 `fh-toolkit version` prints the commit the running image was built from, which is how you
@@ -308,13 +291,13 @@ works either way; see *Interactive session* in
 
 ⚠️ **`docker run` never re-pulls**, so without the refresh above you keep running whatever
 image you first pulled — for as long as that is, while the docs describe a newer one. That
-is what the stamp file is for: one pull every 48 hours, roughly a second when the image is
+is what the stamp file is for: one pull every 15 minutes, roughly a second when the image is
 already current (it is a digest check; no layers move). If the registry is unreachable it
 says so once and runs the cached image rather than blocking you.
 
-`find -mmin +2880` is deliberate: `-mtime +2` rounds to whole days and would mean *older
-than 72h*, which you would only notice as a refresh that did not happen. To pull on every
-invocation instead, drop the whole block and add `--pull always` to the `docker run`.
+Measured against both registries: a `docker pull` of an image that is already current
+costs about a second and moves no layers — it fetches the manifest, matches the digest and
+stops. A redundant pull *is* the cheap check, which is why there is no separate one.
 
 ---
 
