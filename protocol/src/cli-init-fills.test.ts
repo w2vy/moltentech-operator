@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
  * What `init` must finish by itself.
  *
  * Measured on a real from-zero onboarding (prod, 2026-08-22): after answering every
- * question, `mt-manifest doctor` reported TEN `NOT_YET_FILLED` warnings — and seven of
+ * question, `fh-toolkit doctor` reported TEN `NOT_YET_FILLED` warnings — and seven of
  * them were values init already held (the key on disk), could generate (a random
  * secret), or could have asked for (the Proxmox token that Step 0.1 had just printed).
  *
@@ -76,7 +76,7 @@ test("init REFUSES without manifest-key.pem, and names keygen as the fix", () =>
     () => cli(["init", "--out", dir, "--answers", join(dir, "answers.json")]),
     (err: Error & { stderr?: string }) => {
       assert.match(err.stderr ?? "", /manifest-key\.pem not found/);
-      assert.match(err.stderr ?? "", /mt-manifest keygen/);
+      assert.match(err.stderr ?? "", /fh-toolkit keygen/);
       return true;
     }
   );
@@ -219,7 +219,7 @@ test("no secret leaks into config.env, which is the file that gets committed", (
 
 test("the closing steps no longer tell you to run keygen — you just did", () => {
   const { stdout } = scaffold();
-  assert.doesNotMatch(stdout, /1\. mt-manifest keygen/);
+  assert.doesNotMatch(stdout, /1\. fh-toolkit keygen/);
   assert.match(stdout, /MANIFEST_KEY {3}filled/);
   assert.match(stdout, /1\. open .*\/onboard/);
 });

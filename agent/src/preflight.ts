@@ -2,7 +2,7 @@
  * preflight — the checks that need Proxmox credentials, run where the credentials
  * already are.
  *
- * `mt-manifest doctor` validates that the five onboarding files agree with each
+ * `fh-toolkit doctor` validates that the five onboarding files agree with each
  * other, but it is deliberately secret-free and cannot ask the hypervisor anything.
  * The single worst onboarding failure is exactly the kind only the hypervisor can
  * answer: `DOC_DEFAULT_STORAGE_IS_HDD` — a storage pool that resolves to a spinning
@@ -25,7 +25,7 @@ import {
 } from "@moltentech/protocol/proxmox-probe";
 import type { AgentConfig } from "./config";
 
-// One implementation, two callers: `mt-manifest init` runs these same checks the moment
+// One implementation, two callers: `fh-toolkit init` runs these same checks the moment
 // the operator types the token, five steps before the agent exists. Re-exported because
 // this module's consumers (and its tests) already import them from here.
 export { classifyRotational, type DiskInfo, type LvmNode };

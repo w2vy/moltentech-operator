@@ -6,7 +6,7 @@ import type { ProbeResult } from "./proxmox-probe";
  *
  * ## The gap this closes, found the hard way (2026-08-23)
  *
- * `mt-manifest init --force` rewrote a live `secrets.env`, and a Flux Hub admin re-issued
+ * `fh-toolkit init --force` rewrote a live `secrets.env`, and a Flux Hub admin re-issued
  * all three keys to recover. Every signal an operator can see stayed green throughout:
  * `doctor` reported `0 error(s)`, the Coalition served the right manifest, and FH's
  * `lastSyncedAt` kept ticking.
@@ -238,13 +238,13 @@ export async function probeHub(
           file: "secrets.env",
           summary:
             "the deployed Coalition rejects COALITION_KEY — customer checkout will fail. " +
-            "Re-run `mt-manifest env` and re-import env.json on the Flux app",
+            "Re-run `fh-toolkit env` and re-import env.json on the Flux app",
           message:
             `${url} returned 401 for the COALITION_KEY in secrets.env. The Flux app is running an ` +
             "environment imported at deploy time; your keys have changed since. Flux Hub relays " +
             "every checkout to that app with the key IT holds, so the first symptom otherwise is a " +
             "customer's purchase failing. Rebuild env.json and re-import it on Flux.",
-          fix: "`mt-manifest env`, then re-import env.json on the Flux app and redeploy",
+          fix: "`fh-toolkit env`, then re-import env.json on the Flux app and redeploy",
         });
       } else if (res.status === 404) {
         checks.push({
@@ -345,13 +345,13 @@ function judgeDeployedManifest(
       file: "manifest.json",
       summary:
         "the deployed Coalition serves a manifest signed by a DIFFERENT key — re-run " +
-        "`mt-manifest env` and re-import env.json on the Flux app",
+        "`fh-toolkit env` and re-import env.json on the Flux app",
       message:
         "The manifest at your Coalition's /.well-known/mt-provider.json carries a pubkey that is " +
         `not the one in manifest-pubkey.txt (served ${short(served.pubkey)}, local ` +
         `${short(localPubkey)}). Flux Hub pins your pubkey at first ingest, so the deployed app is ` +
         "presenting an identity Flux Hub will not accept as yours.",
-      fix: "`mt-manifest env`, then re-import env.json on the Flux app and redeploy",
+      fix: "`fh-toolkit env`, then re-import env.json on the Flux app and redeploy",
     });
     return [{ name: "deployed manifest", status: "fail", detail: "signed by a different key" }];
   }
@@ -365,12 +365,12 @@ function judgeDeployedManifest(
       file: "manifest.json",
       summary:
         "the deployed Coalition serves an OLDER manifest than the one signed here — re-run " +
-        "`mt-manifest env` and re-import env.json on the Flux app",
+        "`fh-toolkit env` and re-import env.json on the Flux app",
       message:
         "Your Coalition serves a manifest with a different signature than local manifest.json — " +
         "same key, so this is a re-sign that was never redeployed. Whatever you changed in " +
         "config.env (tiers, prices, listing text) is not what customers see.",
-      fix: "`mt-manifest env`, then re-import env.json on the Flux app and redeploy",
+      fix: "`fh-toolkit env`, then re-import env.json on the Flux app and redeploy",
     });
     return [{ name: "deployed manifest", status: "fail", detail: "older than local manifest.json" }];
   }

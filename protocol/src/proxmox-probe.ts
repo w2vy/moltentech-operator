@@ -10,7 +10,7 @@
  * checked on /vms or /pool, and the tooling passes neither), found out long after the
  * moment that produced it.
  *
- * `mt-manifest init` now asks for the token, so it can prove it there and then — and
+ * `fh-toolkit init` now asks for the token, so it can prove it there and then — and
  * reuse the same connection to offer the operator their real node and storage names
  * instead of asking them to transcribe them.
  *
@@ -205,7 +205,7 @@ interface StorageRow {
 /**
  * Explain a connection failure in the operator's terms.
  *
- * ⚠️ The `mt-manifest` wrapper runs the container on Docker's default bridge, so a
+ * ⚠️ The `fh-toolkit` wrapper runs the container on Docker's default bridge, so a
  * hostname is resolved by the CONTAINER, not by the shell that typed it. `pve30` works
  * on the host and fails inside — and reporting that as "token invalid" sends the
  * operator to regenerate a credential that was never wrong.

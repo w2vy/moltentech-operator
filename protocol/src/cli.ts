@@ -1,6 +1,6 @@
 #!/usr/bin/env -S npx tsx
 /**
- * mt-manifest — operator tooling to generate a signing key and produce a SIGNED
+ * fh-toolkit — operator tooling to generate a signing key and produce a SIGNED
  * Provider Manifest for MoltenTech onboarding. Uses the same canonicalization +
  * ed25519 as MT's verifier (./signing), so a manifest this signs always verifies.
  *
@@ -22,7 +22,7 @@
  *   sign   [--dir <dir>] [--key <pem>] [--from-config <config.env>] [--in <body.json>]
  *          [--out <manifest.json>] [--stdout]
  *                                       every path defaults to the file `init` wrote in <dir>,
- *                                       so re-signing after a config edit is `mt-manifest sign`.
+ *                                       so re-signing after a config edit is `fh-toolkit sign`.
  *                                       render body (from config.env) or read body.json,
  *                                       fill pubkey + publishedAt, sign, emit full manifest
  *   env    [--dir <dir>] [--from-config <config.env>] [--secrets <secrets.env>]
@@ -269,7 +269,7 @@ async function askAnswers(minimums: Record<string, number> = TIER_FLOORS_CENTS):
     }
   };
   try {
-    console.log("mt-manifest init — this writes every onboarding file from your answers.\n");
+    console.log("fh-toolkit init — this writes every onboarding file from your answers.\n");
 
     // Asked FIRST because it decides which of the later questions exist at all. A
     // Supporter is not a degenerate operator — it is the level most participants will
@@ -343,7 +343,7 @@ async function askAnswers(minimums: Record<string, number> = TIER_FLOORS_CENTS):
       );
       if (proxmoxUrl.toLowerCase() === "skip") {
         proxmoxUrl = "";
-        console.log("  → skipped. Fill PROXMOX_* in .env.operator, then `mt-manifest doctor --check-proxmox`.");
+        console.log("  → skipped. Fill PROXMOX_* in .env.operator, then `fh-toolkit doctor --check-proxmox`.");
         break;
       }
       proxmoxTokenId = await ask("  PROXMOX_TOKEN_ID", proxmoxTokenId || "fluxhub@pve!agent");
@@ -375,7 +375,7 @@ async function askAnswers(minimums: Record<string, number> = TIER_FLOORS_CENTS):
       }
       const again = await ask("  → fix the above and retry, or `skip` to go on unverified", "retry");
       if (again.toLowerCase().startsWith("s")) {
-        console.log("  → going on unverified; re-run `mt-manifest doctor --check-proxmox` once it is fixed.");
+        console.log("  → going on unverified; re-run `fh-toolkit doctor --check-proxmox` once it is fixed.");
         break;
       }
     }
@@ -821,7 +821,7 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
       const keyPath = join(dir, "manifest-key.pem");
       if (!existsSync(keyPath)) {
         die(
-          `${keyPath} not found. Run \`mt-manifest keygen\` first — your signing key is your ` +
+          `${keyPath} not found. Run \`fh-toolkit keygen\` first — your signing key is your ` +
             `provider identity, and init fills MANIFEST_KEY and MANIFEST_PUBKEY from it.`
         );
       }
@@ -966,7 +966,7 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
         .join(", ");
       console.log(`Wrote ${written} to ${where}\n`);
       // Only steps that are genuinely still OUTSTANDING belong in this list. It used to
-      // open with "1. mt-manifest keygen" — which init now requires to have happened
+      // open with "1. fh-toolkit keygen" — which init now requires to have happened
       // already — and with a base64-and-paste step init performs itself.
       // Pointed at explicitly: a generated README nobody is told about is a file nobody
       // opens, and this is the one written for the operator rather than for the tooling.
@@ -976,7 +976,7 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
       console.log("  ✓ MANIFEST_PUBKEY pinned in .env.operator (`mt-agent doctor` now compares, not skips)");
       console.log("  ✓ SESSION_SECRET generated");
       console.log("  ✓ manifest.json signed — this is the file you paste at /onboard");
-      console.log("    (edit config.env later and it goes stale; re-run `mt-manifest sign`)\n");
+      console.log("    (edit config.env later and it goes stale; re-run `fh-toolkit sign`)\n");
       console.log("Next, in order:");
       console.log(`  1. open ${answers.mtBaseUrl}/onboard, paste manifest.json, sign with ${answers.ownerAddress}`);
       console.log("     → issues AGENT_KEY, COALITION_KEY, COALITION_SIGNING_KEY for secrets.env");
@@ -991,8 +991,8 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
       // operator can act on: the app needs an environment, and nothing here said where it
       // comes from or that a command builds it. It is also the LAST thing that reads
       // secrets.env, so it belongs after /onboard has filled it in.
-      console.log("  3. `mt-manifest doctor`   ← run it here; it checks every file agrees");
-      console.log("  4. `mt-manifest env`      → env.json, the Flux \"Import Environment Variables\" blob");
+      console.log("  3. `fh-toolkit doctor`   ← run it here; it checks every file agrees");
+      console.log("  4. `fh-toolkit env`      → env.json, the Flux \"Import Environment Variables\" blob");
       console.log("     built from config.env + secrets.env + manifest.json. CONTAINS SECRETS.");
       console.log("     then `docker compose up -d` here to start the agent (compose.yaml is written)");
       console.log(`  5. deploy Flux app "${answers.fluxAppName}" as an ENTERPRISE app, import env.json`);
@@ -1162,7 +1162,7 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
       const fromConfig = inPath ? flag(args, "--from-config") : (flag(args, "--from-config") ?? join(dir, "config.env"));
       const outPath = flag(args, "--out") ?? (args.includes("--stdout") ? undefined : join(dir, "manifest.json"));
       if (!existsSync(keyPath)) {
-        die(`${keyPath} not found — run \`mt-manifest keygen\` first, or pass --key <pem>.`);
+        die(`${keyPath} not found — run \`fh-toolkit keygen\` first, or pass --key <pem>.`);
       }
       if (fromConfig && !existsSync(fromConfig)) die(`${fromConfig} not found — pass --from-config <config.env>.`);
 
@@ -1197,7 +1197,7 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
       // ⭐ Defaults, because `init` writes all four of these files under exactly these
       // names into one directory. Requiring three explicit paths meant the one command
       // standing between a finished scaffold and a deployable Flux app was also the
-      // longest to type — and the runbook's own instruction ("run `mt-manifest env`")
+      // longest to type — and the runbook's own instruction ("run `fh-toolkit env`")
       // did not actually work as written.
       const dir = flag(args, "--dir") ?? ".";
       const fromConfig = flag(args, "--from-config") ?? join(dir, "config.env");
@@ -1385,11 +1385,11 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
     // command": the image cannot pull itself, so the fix is always in the wrapper.
     case "--refresh":
       console.log(
-        "`--refresh` is handled by the mt-manifest SHELL FUNCTION, not by this CLI —\n" +
+        "`--refresh` is handled by the fh-toolkit SHELL FUNCTION, not by this CLI —\n" +
           "the CLI runs inside the container and cannot replace its own image. Reaching\n" +
           "me means your wrapper predates it, or you are not using the wrapper.\n\n" +
           "Pull directly:\n" +
-          "  docker pull ghcr.io/w2vy/mt-manifest:latest\n\n" +
+          "  docker pull ghcr.io/w2vy/fh-toolkit:latest\n\n" +
           "Or re-paste the current shell function from Step 0.5 of\n" +
           "docs/operator-onboarding.md — it also mounts /etc/hosts, so Proxmox\n" +
           "hostnames resolve inside the container."
@@ -1400,7 +1400,7 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
     case "-h":
     default:
       console.log(
-        "usage: mt-manifest <keygen|coalition-keygen|init|doctor|sign|env|verify|version> [options]\n"
+        "usage: fh-toolkit <keygen|coalition-keygen|init|doctor|sign|env|verify|version> [options]\n"
       );
       console.log("  keygen           [--out <dir>]");
       console.log("  coalition-keygen [--out <dir>]   Phase D signing key (operator-held custody)");
@@ -1421,11 +1421,11 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
       console.log("  --check-stripe   the webhook is registered, on YOUR account");
       console.log("  --check-hub      Flux Hub and your Coalition still accept your keys\n");
       // Documented HERE even though the wrapper implements it: the operator has no way
-      // to tell which half of `mt-manifest` a flag belongs to, and the one flag they
+      // to tell which half of `fh-toolkit` a flag belongs to, and the one flag they
       // need when this CLI is out of date is the one it cannot carry out itself.
       console.log("Updating this tool:");
-      console.log("  mt-manifest --refresh          pull the newest image, then stop");
-      console.log("  mt-manifest --refresh <cmd>    pull, then run <cmd>");
+      console.log("  fh-toolkit --refresh          pull the newest image, then stop");
+      console.log("  fh-toolkit --refresh <cmd>    pull, then run <cmd>");
       console.log("Handled by the shell function, not by this CLI — a container cannot replace");
       console.log("its own image. Without it the wrapper re-pulls at most every 48h, so `version`");
       console.log("above is what is RUNNING and may trail what is merged.\n");
@@ -1472,7 +1472,7 @@ export function tokenize(line: string): string[] {
   return out;
 }
 
-const HISTORY_FILE = ".mt-manifest-history";
+const HISTORY_FILE = ".fh-toolkit-history";
 const HISTORY_MAX = 500;
 
 function readHistory(dir: string): string[] {
@@ -1514,7 +1514,7 @@ async function session(ctx: Ctx): Promise<number> {
   for (;;) {
     let line: string;
     try {
-      line = await rl.question("mt-manifest> ");
+      line = await rl.question("fh-toolkit> ");
     } catch {
       break; // Ctrl-C on the prompt
     }
@@ -1556,7 +1556,7 @@ async function main(): Promise<void> {
       console.error(
         "error: no command given, and this is not a terminal.\n" +
           "  Interactive session needs a TTY — run the wrapper with `docker run -it`.\n" +
-          "  Otherwise pass a command: `mt-manifest help` lists them."
+          "  Otherwise pass a command: `fh-toolkit help` lists them."
       );
       process.exit(1);
     }

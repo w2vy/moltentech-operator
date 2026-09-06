@@ -21,7 +21,7 @@ import {
  * the agent falls back to the legacy bearer, so operators roll independently.
  *
  * `MANIFEST_KEY` is the base64 of the PKCS#8 PEM (single-line env value) of the
- * key produced by `mt-manifest keygen`. It is a SECRET — never commit it.
+ * key produced by `fh-toolkit keygen`. It is a SECRET — never commit it.
  */
 
 /** Load the manifest private key from a base64 PKCS#8 PEM env value (undefined if unset). */

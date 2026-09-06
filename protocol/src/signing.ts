@@ -104,7 +104,7 @@ export function importPrivateKeyPem(pem: string): KeyObject {
  *   `coalitionSigningKey` (it exports PKCS#8 DER and keeps the trailing 32 bytes), and
  *   therefore what an operator actually pastes into `COALITION_SIGNING_KEY`.
  * - **base64 of a PKCS#8 PEM** — the `MANIFEST_KEY` convention, and what
- *   `mt-manifest coalition-keygen` emits for an operator who wants their own custody.
+ *   `fh-toolkit coalition-keygen` emits for an operator who wants their own custody.
  *
  * Both exist in the wild, so accepting one and not the other would strand half the
  * operators on a value that looks right and fails at load. The seed is re-wrapped in the

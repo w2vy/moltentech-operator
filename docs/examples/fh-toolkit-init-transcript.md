@@ -1,4 +1,4 @@
-# `mt-manifest init` — a full run
+# `fh-toolkit init` — a full run
 
 A **redacted transcript** of one real onboarding, from `keygen` to a signed
 `manifest.json` and the Flux env blob. It is here so you can see the shape of the run
@@ -19,19 +19,19 @@ value** — do not copy one out.
 
 **Captured against** `@moltentech/protocol` 0.1.0 — `protocol/` at `e9d9da6`, 2026-09-02.
 `init`'s prompts change as the wizard gains checks; if what you see on screen differs
-from what is below, your `mt-manifest` is the authority and this transcript is stale.
+from what is below, your `fh-toolkit` is the authority and this transcript is stale.
 
 ## A Supporter run, start to finish
 
 ```console
 user@host:/tmp$ mkdir fh-agent
 user@host:/tmp$ cd fh-agent/
-user@host:/tmp/fh-agent$ mt-manifest keygen
+user@host:/tmp/fh-agent$ fh-toolkit keygen
 Wrote manifest-key.pem (KEEP SECRET — this signs your manifest).
 Public key (manifest "pubkey", also saved to manifest-pubkey.txt):
 bwHAjXTT7OMZBjnFe182ownZgyPdklFKBQDNk9tfxGE=
-user@host:/tmp/fh-agent$ mt-manifest init
-mt-manifest init — this writes every onboarding file from your answers.
+user@host:/tmp/fh-agent$ fh-toolkit init
+fh-toolkit init — this writes every onboarding file from your answers.
 
 Which are you?
   1) Flux Hub Supporter — your own nodes, plus Foundation nodes on your idle
@@ -105,14 +105,14 @@ Already done, from the key in this directory:
   ✓ MANIFEST_PUBKEY pinned in .env.operator (`mt-agent doctor` now compares, not skips)
   ✓ SESSION_SECRET generated
   ✓ manifest.json signed — this is the file you paste at /onboard
-    (edit config.env later and it goes stale; re-run `mt-manifest sign`)
+    (edit config.env later and it goes stale; re-run `fh-toolkit sign`)
 
 Next, in order:
   1. open https://fluxhub.moltentech.us/onboard, paste manifest.json, sign with 1HLy2EVVJbDNNXoVxKGgY3HdN422m6hCfe
      → issues AGENT_KEY, COALITION_KEY, COALITION_SIGNING_KEY for secrets.env
   2. Stripe: not needed — you are not listing anything for sale.
-  3. `mt-manifest doctor`   ← run it here; it checks every file agrees
-  4. `mt-manifest env`      → env.json, the Flux "Import Environment Variables" blob
+  3. `fh-toolkit doctor`   ← run it here; it checks every file agrees
+  4. `fh-toolkit env`      → env.json, the Flux "Import Environment Variables" blob
      built from config.env + secrets.env + manifest.json. CONTAINS SECRETS.
      then `docker compose up -d` here to start the agent (compose.yaml is written)
   5. deploy Flux app "coalition-romeo-sierra" as an ENTERPRISE app, import env.json
@@ -120,10 +120,10 @@ Next, in order:
      ⚠️  enterprise, not standard: a standard Flux app's environment is
          WORLD-READABLE, and yours holds your Stripe key.
 user@host:/tmp/fh-agent$ # edit secrets.env and replace the AGENT_KEY, COALITION_KEY and COALITION_SIGNING_KEY provided by ingest signing
-user@host:/tmp/fh-agent$ mt-manifest doctor
+user@host:/tmp/fh-agent$ fh-toolkit doctor
 checked config.env, secrets.env, .env.operator, inventory.json, manifest.json — 0 error(s), 0 warning(s)
 everything agrees.
-user@host:/tmp/fh-agent$ mt-manifest env
+user@host:/tmp/fh-agent$ fh-toolkit env
 note: no paid tiers listed — building env.json without Stripe keys.
 Wrote env.json (11 vars). Contains SECRETS — do NOT commit; import it into your Flux app's Environment Variables.
 user@host:/tmp/fh-agent$ # Deploy the Flux app using the template created flux-app-spec.json and then import env.json as the components Environment Vars
@@ -134,7 +134,7 @@ user@host:/tmp/fh-agent$
 ```
 
 Two lines above are worth stopping on. The first Proxmox URL was a **hostname**, and the
-probe failed on it: `mt-manifest` runs in a container, so the name has to resolve
+probe failed on it: `fh-toolkit` runs in a container, so the name has to resolve
 *there*, and an IP always does. A failed probe re-asks rather than warning and carrying
 on, because a verified token is also what lets `init` offer your real node and storage
 names as defaults. And `Stripe — skipped` is not a question you missed: a Supporter sells
@@ -175,7 +175,7 @@ Offered for sale: 2 cumulus (all of them — edit AGENT_LISTING_JSON in config.e
 
 …
 
-user@host:/tmp/fh-agent$ mt-manifest env
+user@host:/tmp/fh-agent$ fh-toolkit env
 Wrote env.json (12 vars). Contains SECRETS — do NOT commit; import it into your Flux app's Environment Variables.
 ```
 

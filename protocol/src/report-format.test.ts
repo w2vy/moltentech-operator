@@ -24,8 +24,8 @@ const ERR: Finding = {
   severity: "error",
   file: "manifest.json",
   message: "manifest.json was signed from an older config.env (differs at: coalitionUrl). Pasting it at /onboard would ingest the OLD values, correctly signed.",
-  summary: "signed from an older config.env (coalitionUrl) — re-run `mt-manifest sign`",
-  fix: "mt-manifest sign",
+  summary: "signed from an older config.env (coalitionUrl) — re-run `fh-toolkit sign`",
+  fix: "fh-toolkit sign",
 };
 const WARN: Finding = {
   rule: "NOT_YET_FILLED",
@@ -48,7 +48,7 @@ test("⭐ a finding with a one-command fix is the LAST line of the report", () =
   // it is the next thing the operator types — which is what it is.
   const { text } = formatReport(report([ERR, WARN]));
   const lines = text.split("\n").filter(Boolean);
-  assert.match(lines.at(-1)!, /\[MANIFEST_STALE\] .*re-run `mt-manifest sign`/);
+  assert.match(lines.at(-1)!, /\[MANIFEST_STALE\] .*re-run `fh-toolkit sign`/);
   // ...and it is not ALSO in the headline block at the top.
   assert.match(lines[0]!, /^warn/);
 });
@@ -65,7 +65,7 @@ test("no fix-bearing finding means no trailing block", () => {
 
 test("⭐ the headline carries the FIX, not the first half of the diagnosis", () => {
   const line = formatReport(report([ERR])).text.split("\n").filter(Boolean).at(-1)!;
-  assert.match(line, /re-run `mt-manifest sign`/);
+  assert.match(line, /re-run `fh-toolkit sign`/);
   assert.ok(line.length < 120, "a headline that wraps is not a headline");
   assert.ok(!line.includes("Pasting it at /onboard"), "detail belongs in the detail block");
 });
@@ -74,7 +74,7 @@ test("the detail block still says everything, above the closing instruction", ()
   const { text } = formatReport(report([ERR]));
   assert.match(text, /Pasting it at \/onboard would ingest the OLD values/);
   assert.ok(
-    text.indexOf("Pasting it at /onboard") < text.indexOf("re-run `mt-manifest sign`"),
+    text.indexOf("Pasting it at /onboard") < text.indexOf("re-run `fh-toolkit sign`"),
     "diagnosis, then the instruction that closes the report"
   );
 });

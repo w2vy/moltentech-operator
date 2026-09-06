@@ -39,11 +39,11 @@ non-TS consumer.
 - **`Job` carries no hypervisor creds** — the agent injects its own.
 - **Idempotency** via `PaymentEvent.stripeEventId` and `CheckoutInitRequest.idempotencyKey`.
 
-## Signing CLI (`mt-manifest`)
+## Signing CLI (`fh-toolkit`)
 
 Operator tooling to produce a signed Provider Manifest (shares this package's
 ed25519 + canonicalization, so it always verifies on FH's side). Ships as the
-published image **`ghcr.io/w2vy/mt-manifest`** so operators need no source checkout
+published image **`ghcr.io/w2vy/fh-toolkit`** so operators need no source checkout
 or Node — it's secret-free (your key is generated into the mounted workdir, never
 baked in):
 
@@ -52,17 +52,17 @@ baked in):
 # command. The -i is required — without stdin, `init` prints one prompt and exits at EOF.
 # `docker run` never re-pulls, so refresh the image every 48h (see the onboarding doc for
 # the stamp-file version); --pull always is the one-liner alternative.
-mt-manifest() { docker run --rm -i --pull always -v "$PWD:/work" -u "$(id -u):$(id -g)" ghcr.io/w2vy/mt-manifest "$@"; }
-mt-manifest keygen                                                       # -> manifest-key.pem (KEEP SECRET) + pubkey
-mt-manifest sign --key manifest-key.pem --from-config config.env --out manifest.json
-mt-manifest verify --in manifest.json
+fh-toolkit() { docker run --rm -i --pull always -v "$PWD:/work" -u "$(id -u):$(id -g)" ghcr.io/w2vy/fh-toolkit "$@"; }
+fh-toolkit keygen                                                       # -> manifest-key.pem (KEEP SECRET) + pubkey
+fh-toolkit sign --key manifest-key.pem --from-config config.env --out manifest.json
+fh-toolkit verify --in manifest.json
 
 # Owner-authorize: prove you control config.env's OWNER_ADDRESS (two steps — the
 # first prints the message + a Zelcore deep link, then you re-run with the signature)
-mt-manifest authorize --in manifest.json
-mt-manifest authorize --in manifest.json --signature <base64> --out signed-manifest.json
+fh-toolkit authorize --in manifest.json
+fh-toolkit authorize --in manifest.json --signature <base64> --out signed-manifest.json
 
-mt-manifest env  --from-config config.env --secrets secrets.env --manifest signed-manifest.json --out env.json
+fh-toolkit env  --from-config config.env --secrets secrets.env --manifest signed-manifest.json --out env.json
 ```
 
 Commands: `keygen` (ed25519 keypair); `sign` (canonical-sign the manifest —

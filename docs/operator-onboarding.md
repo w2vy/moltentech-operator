@@ -10,7 +10,7 @@ opens an inbound connection to you.
 This one is the ordered path from nothing to live. Two companions carry what a runbook
 should not:
 
-- **[`fh-toolkit.md`](fh-toolkit.md)** — every `mt-manifest` and `mt-agent` command with
+- **[`fh-toolkit.md`](fh-toolkit.md)** — every `fh-toolkit` and `mt-agent` command with
   its options, defaults and refusals, plus operating the agent day to day. Look here for
   "what does this flag do".
 - **[`FluxHub-overview.md`](FluxHub-overview.md)** — what each file in your operator
@@ -36,15 +36,15 @@ An **Operator** does all of that and also offers hardware for rent.
 the whole of this runbook minus the money, so you prove the parts that can actually go
 wrong — the Proxmox token, the agent, the Coalition app, a node that boots — without a
 Stripe account in the way. See the Supporter transcript in
-[docs/examples/mt-manifest-init-transcript.md](examples/mt-manifest-init-transcript.md).
+[docs/examples/fh-toolkit-init-transcript.md](examples/fh-toolkit-init-transcript.md).
 
-`mt-manifest init` is an installation script you run once you have all the prerequisites
+`fh-toolkit init` is an installation script you run once you have all the prerequisites
 configured, and it asks whether you are a Supporter or an Operator during that process.
 Upgrading to an Operator later is a simple process, mostly requiring setting up your
 Stripe account — the second block of that same transcript is exactly what the upgrade
 adds.
 
-mt-manifest also have commands to test your configuration setting without exposing your keys.
+fh-toolkit also have commands to test your configuration setting without exposing your keys.
 
 Either way you can still deploy your own nodes: the admin can **Assign Free Rental** to you and it
 no payment at all. In the near future an operator will be able to assign free rentals from their fleet.
@@ -135,7 +135,7 @@ pveum user token add fluxhub@pve agent --privsep 0     # prints the secret ONCE
 `--privsep 0` makes the token inherit the user's privileges; with privilege separation
 on you must grant the ACL to the *token* as well. Copy the secret immediately — Proxmox
 never shows it again. These two values are what the rest of onboarding calls
-`PROXMOX_TOKEN_ID` and `PROXMOX_TOKEN_SECRET`, and `mt-manifest init` asks for them under
+`PROXMOX_TOKEN_ID` and `PROXMOX_TOKEN_SECRET`, and `fh-toolkit init` asks for them under
 exactly those names:
 
 | Variable | Value from the commands above |
@@ -208,7 +208,7 @@ auto-refresh*).
 target is written **once and seen by every node**, and a new ArcaneOS release lands
 everywhere in one refresh. Name per-host storage instead and you get one copy per host,
 each refreshed separately — which is one more place for a single host to sit on a stale
-ISO. `mt-manifest init` labels shared storages in its list and offers one as the default:
+ISO. `fh-toolkit init` labels shared storages in its list and offers one as the default:
 
 ```
 storages on pve30: ssd(SSD) local-lvm(HDD) pve55-shared(NFS, shared) local(dir)
@@ -234,9 +234,9 @@ You need to pick a specific location on the filesystem that is out of the way an
 That directory will contain all the config files, secrets and Flux App configuration (Environment)
 there will also be a /data directory that will contain the node inventory your host(s) provide.
 
-### Step 0.5 mt-manifest utility shell function
+### Step 0.5 fh-toolkit utility shell function
 
-The signing tool is the published image **`ghcr.io/w2vy/mt-manifest`** — no source
+The signing tool is the published image **`ghcr.io/w2vy/fh-toolkit`** — no source
 checkout, no Node install. It's secret-free: your key is generated into the mounted
 working directory, never baked into the image.
 
@@ -245,9 +245,9 @@ appears as an argument to another command, so wrapping it (in a script, a `time`
 capture harness, `sudo`, `watch`) fails with `command not found`.
 
 ```sh
-mt-manifest() {
-  local img=ghcr.io/w2vy/mt-manifest:latest
-  local stamp="${XDG_CACHE_HOME:-$HOME/.cache}/mt-manifest.pulled"
+fh-toolkit() {
+  local img=ghcr.io/w2vy/fh-toolkit:latest
+  local stamp="${XDG_CACHE_HOME:-$HOME/.cache}/fh-toolkit.pulled"
   # `--refresh` is consumed HERE and never passed on: the CLI runs inside the container
   # and cannot pull its own image. Alone it pulls and stops; followed by a command it
   # pulls and then runs it. A failed pull aborts rather than quietly using the old image.
@@ -265,18 +265,23 @@ mt-manifest() {
       echo "note: could not refresh $img — using the cached image" >&2
     fi
   fi
+  # -t only when both ends really are a terminal. With it, the questions below and the
+  # interactive session behave; without the guard, the same function inside a script or
+  # a pipeline dies with "the input device is not a TTY".
+  local tty=""
+  [ -t 0 ] && [ -t 1 ] && tty="-t"
   # /etc/hosts is mounted read-only so hostnames resolve the same INSIDE the container as
   # they do at your prompt — on a Proxmox node that file already names every peer, so
   # `https://pve50:8006` just works instead of needing an IP.
-  docker run --rm -i -v "$PWD:/work" -v /etc/hosts:/etc/hosts:ro -u "$(id -u):$(id -g)" "$img" "$@"
+  docker run --rm -i $tty -v "$PWD:/work" -v /etc/hosts:/etc/hosts:ro -u "$(id -u):$(id -g)" "$img" "$@"
 }
-mt-manifest keygen             # writes manifest-key.pem (KEEP SECRET, 0600) + prints your pubkey
+fh-toolkit keygen             # writes manifest-key.pem (KEEP SECRET, 0600) + prints your pubkey
 ```
 
-`mt-manifest --refresh` forces the pull the 48h stamp would otherwise defer — alone it
+`fh-toolkit --refresh` forces the pull the 48h stamp would otherwise defer — alone it
 pulls and stops, or followed by a command it pulls and then runs it. The flag has to live
 in the wrapper: the CLI runs *inside* the container and cannot replace its own image.
-`mt-manifest version` prints the commit the running image was built from, which is how you
+`fh-toolkit version` prints the commit the running image was built from, which is how you
 tell a stale image from a missing feature.
 
 ⚠️ **The `/etc/hosts` mount has one edge.** It hands the container *your* name→address
@@ -311,10 +316,10 @@ invocation instead, drop the whole block and add `--pull always` to the `docker 
 `MANIFEST_KEY` in both env files from it and pins `MANIFEST_PUBKEY`, and it refuses to
 run without it rather than writing files with three holes in them.
 
-Every `mt-manifest` command below reads and writes the **current directory** — run them
+Every `fh-toolkit` command below reads and writes the **current directory** — run them
 all from the same folder.
 
-### ⭐ The fast path: `mt-manifest init`
+### ⭐ The fast path: `fh-toolkit init`
 
 `init` asks about eight questions and writes **every** file this guide would otherwise
 have you create by hand — `config.env`, a `secrets.env` skeleton, `.env.operator`,
@@ -323,7 +328,7 @@ have you create by hand — `config.env`, a `secrets.env` skeleton, `.env.operat
 language and lists which command to run after which kind of change:
 
 ```sh
-mt-manifest init
+fh-toolkit init
 ```
 
 It exists because the values in those files are **duplicated across them**, and every
@@ -365,7 +370,7 @@ than merely being checked for:
   does not exist and `local-lvm` on a spinning disk. Enter re-uses the secret you already
   typed without echoing it. Answer `skip` (offered at both prompts) if your hypervisor is
   behind a VPN or down and you need the files anyway — then fix `PROXMOX_*` in
-  `.env.operator` and run `mt-manifest doctor --check-proxmox`.
+  `.env.operator` and run `fh-toolkit doctor --check-proxmox`.
 - Prices are asked in **dollars** and converted, so an extra zero cannot slip in.
   Each tier has a minimum FH will accept; `init` defaults to it and refuses less.
 
@@ -389,22 +394,22 @@ payment method at all. Stripe is what lets strangers buy from you.
   Each comment stays on its own line, because a comment after `=` becomes part of the
   value — which is why the file is generated rather than described.
 
-Re-runnable and scriptable: `mt-manifest init --answers answers.json` takes the same
+Re-runnable and scriptable: `fh-toolkit init --answers answers.json` takes the same
 answers as a file and runs the same generator, so you can fix one typo without
 re-answering everything.
 
 **What a run actually looks like:** a full redacted transcript of a **Supporter** run,
 `keygen` through the signed manifest, is in
-[docs/examples/mt-manifest-init-transcript.md](examples/mt-manifest-init-transcript.md);
+[docs/examples/fh-toolkit-init-transcript.md](examples/fh-toolkit-init-transcript.md);
 a second block at the end of that file shows the only lines an **Operator** run answers
 differently — tiers, prices, Stripe — which is also what a later upgrade adds. Every
 secret in it is a scrambled stand-in — read it for the shape of the run, do not copy
 values out of it.
 
-### Check your work at any point: `mt-manifest doctor`
+### Check your work at any point: `fh-toolkit doctor`
 
 ```sh
-mt-manifest doctor
+fh-toolkit doctor
 ```
 
 Reads whichever of the files exist and reports anything that disagrees — values that
@@ -423,9 +428,9 @@ Three opt-in flags cross the file boundary deliberately, because the costliest f
 are invisible to any amount of file comparison. All three are read-only:
 
 ```sh
-mt-manifest doctor --check-proxmox   # the token really works; your image storage really is an SSD
-mt-manifest doctor --check-stripe    # the webhook endpoint is on YOUR Stripe account
-mt-manifest doctor --check-hub       # your three issued keys are still accepted
+fh-toolkit doctor --check-proxmox   # the token really works; your image storage really is an SSD
+fh-toolkit doctor --check-stripe    # the webhook endpoint is on YOUR Stripe account
+fh-toolkit doctor --check-hub       # your three issued keys are still accepted
 ```
 
 `--check-proxmox` connects with the credentials in `.env.operator`, proves the token,
@@ -532,7 +537,7 @@ PROVIDER_LEVEL=operator
 # moved between instances (e.g. staging -> production) needs MT_PUBKEY changed as well
 # as MT_BASE_URL; repointing the URL alone leaves it pinned to the old instance's key.
 # Neither field is in the signed manifest, so changing both needs NO re-sign — edit
-# config.env, re-run `mt-manifest env`, re-import.
+# config.env, re-run `fh-toolkit env`, re-import.
 MT_PUBKEY=<your FH pubkey>
 # HOSTS — the Proxmox hosts you attest, as a comma-separated list of ProxmoxHost.name.
 # This is the owner-signed hardware list: FH rejects any inventory host not named here,
@@ -552,20 +557,20 @@ signed `manifest.json` from the same `config.env`, and you only need this comman
 after you EDIT `config.env`:
 
 ```sh
-mt-manifest sign          # key, config and output all default to what `init` wrote
-mt-manifest verify --in manifest.json
+fh-toolkit sign          # key, config and output all default to what `init` wrote
+fh-toolkit verify --in manifest.json
 # expect: OK — manifest signature valid (bare manifest, no owner authorization)
 ```
 
 ⚠️ **A signed manifest is a snapshot of `config.env`.** Change a price, a host, your
 trial length — anything that reaches the manifest — and `manifest.json` still carries the
 OLD values, correctly signed. Submitting it then ingests the old provider with every
-signature valid, which nothing downstream can detect. `mt-manifest doctor` compares the
-two and fails with `MANIFEST_STALE`, naming the fields that moved; `mt-manifest sign`
+signature valid, which nothing downstream can detect. `fh-toolkit doctor` compares the
+two and fails with `MANIFEST_STALE`, naming the fields that moved; `fh-toolkit sign`
 clears it.
 
 ⚠️ **"bare manifest, no owner authorization" is the correct and expected result.** Under
-the old flow you then ran `mt-manifest authorize` to wrap it in a wallet signature. You
+the old flow you then ran `fh-toolkit authorize` to wrap it in a wallet signature. You
 do not any more — the wallet signature happens in your browser in Step 2 and is retained
 by FH. **The bare `manifest.json` is what you submit and what your Coalition publishes.**
 
@@ -627,7 +632,7 @@ Your provider now exists at FH in status `pending`. Step 7 activates it.
    - Subscriptions: **Write**
    - Customer Portal: **Write** (Stripe renamed this from "Billing Portal" in the
      restricted-key permission list)
-   - Webhook Endpoints: **Read** — the Coalition never uses it; `mt-manifest doctor
+   - Webhook Endpoints: **Read** — the Coalition never uses it; `fh-toolkit doctor
      --check-stripe` does, and without it that check **cannot run at all**
 
    ⚠️ **Webhook Endpoints: Read is what makes `--check-stripe` work.** It is the only
@@ -697,17 +702,17 @@ SESSION_SECRET=<openssl rand -hex 32>
 # AGENT_KEY / COALITION_KEY — the real values from Step 2.
 AGENT_KEY=<agentKey from /onboard>
 COALITION_KEY=<coalitionKey from /onboard>
-# COALITION_SIGNING_KEY — store it here for later. `mt-manifest env` ignores it today;
+# COALITION_SIGNING_KEY — store it here for later. `fh-toolkit env` ignores it today;
 # nothing consumes it until Phase D. Keeping it beside the others is how you avoid
 # losing the only copy.
 COALITION_SIGNING_KEY=<coalitionSigningKey from /onboard>
 ```
 
 Then build the Flux import blob from config + secrets + your signed manifest, reusing
-the same `mt-manifest` function from Step 1 (same shell / same directory):
+the same `fh-toolkit` function from Step 1 (same shell / same directory):
 
 ```sh
-mt-manifest env          # in the scaffold directory: reads config.env, secrets.env,
+fh-toolkit env          # in the scaffold directory: reads config.env, secrets.env,
                          # manifest.json and writes env.json beside them
 ```
 
@@ -715,7 +720,7 @@ Every path defaults to the name `init` wrote, so there is nothing to type. Overr
 of them if your layout differs, or add `--stdout` to print instead of writing a file:
 
 ```sh
-mt-manifest env --from-config config.env --secrets secrets.env \
+fh-toolkit env --from-config config.env --secrets secrets.env \
   --manifest manifest.json --out env.json
 ```
 
@@ -724,12 +729,12 @@ mt-manifest env --from-config config.env --secrets secrets.env \
 secrets — do not commit it.**
 
 You never set a variable on the Flux app by hand: non-secret settings live in
-`config.env`, secrets in `secrets.env`, and `mt-manifest env` merges both into
+`config.env`, secrets in `secrets.env`, and `fh-toolkit env` merges both into
 `env.json`, which is the only thing the app ever sees. So `SESSION_SECRET` goes in
 **`secrets.env`** and reaches Flux via `env.json` — changing it later means editing
 `secrets.env`, re-running the command above, and re-importing.
 
-⚠️ A **blank** value is dropped, not passed through as empty: `mt-manifest env` omits
+⚠️ A **blank** value is dropped, not passed through as empty: `fh-toolkit env` omits
 any variable with no value, so leaving `SESSION_SECRET=` in `secrets.env` is identical
 to never listing it, and the console will withhold the node dashboard.
 
@@ -766,19 +771,19 @@ rather than trusting that the import took.
 protocol change cannot complete onboarding: `coalition:0.2.4` was built one day before the
 protocol gained owner-attested `hardware[]`, and the hub 409s an unattested host, so that
 tag can never finish onboarding no matter how carefully you follow this guide. Every image
-here — `coalition`, `mt-agent`, `mt-manifest` — tracks `latest`, which is what the fleet
+here — `coalition`, `mt-agent`, `fh-toolkit` — tracks `latest`, which is what the fleet
 runs and what `init` writes into `flux-app-spec.json` and `compose.yaml`.
 
 The cost of tracking `latest` is that **"which build is live" is no longer answerable from
 your own files.** A redeploy can pick up a new image without the spec changing. That is
-what `mt-manifest doctor --check-hub` is for: it reports the deployed Coalition build, so
+what `fh-toolkit doctor --check-hub` is for: it reports the deployed Coalition build, so
 you can still say which code answered a request. If a run half-succeeds, record the build
 it names.
 
 ⚠️ **Getting a newer `latest` takes an explicit pull.** Neither `docker run` nor `docker
 compose up -d` re-pulls on its own — both use the image already on the host. Run `docker
 compose pull` (or `docker pull`) first, then `docker compose up -d --force-recreate`. The
-`mt-manifest` shell function in Step 0.5 handles this itself with a 48-hour stamp file.
+`fh-toolkit` shell function in Step 0.5 handles this itself with a 48-hour stamp file.
 
 If you need byte-level reproducibility for a specific run, pin a **digest**
 (`w2vy/coalition@sha256:…`) rather than a version tag — a digest cannot go stale
@@ -834,7 +839,7 @@ readable inside the agent container.
   host-level value you did write. Provisioning follows the same precedence
   (`slot.storagePool ?? host.storageImages`, `slot.network ?? host.network`), so per-slot
   values are also what let one machine carry slots on two bridges or two pools.
-  `mt-manifest init` writes both levels for you.
+  `fh-toolkit init` writes both levels for you.
 - Omit optional fields like `vlan`/`rateLimit` rather than setting them `null`.
   `dns1`/`dns2` default to `8.8.8.8`/`1.1.1.1`.
 
@@ -913,7 +918,7 @@ AGENT_LISTING_JSON='[{"tier":"nimbus","priceCents":2200,"availableSlots":8}]'
 it survives an env var. Encoding it twice gives the identical string; if it ever changes,
 your key changed, and that is a problem.
 
-**`mt-manifest init` already wrote it into both files**, so there is normally nothing to
+**`fh-toolkit init` already wrote it into both files**, so there is normally nothing to
 do here. To produce it by hand (an env file you maintain yourself, or a value you
 emptied):
 
@@ -1171,11 +1176,11 @@ Proxmox credentials, and never the private half of anything you generated.
 
 - **Change price / slots offered**: update `AGENT_LISTING_JSON` and **recreate** the
   agent container (`docker rm -f` + `docker run` — `restart` does not reload
-  `--env-file`), and update `TIER_PRICES_JSON` in `config.env` → re-run `mt-manifest
+  `--env-file`), and update `TIER_PRICES_JSON` in `config.env` → re-run `fh-toolkit
   env` → re-import `env.json` (free) so the Coalition's prices match. No re-signing.
 - **Add or remove a host**: add its `ProxmoxHost.name` to `HOSTS` in `config.env`,
   re-`sign`, re-paste at `/onboard` and sign with your pinned owner wallet, then re-run
-  `mt-manifest env` and re-import `env.json`. Until FH re-ingests, it **rejects the
+  `fh-toolkit env` and re-import `env.json`. Until FH re-ingests, it **rejects the
   whole inventory assert** with a 409 naming the unattested host — that is the point of
   the attestation, so plan a host addition around a signing session, not a config edit.
   (Removing a host from `HOSTS` narrows what the agent may declare; it does **not**
@@ -1184,7 +1189,7 @@ Proxmox credentials, and never the private half of anything you generated.
   restart. A removal does not delete the row — it disavows an unrented slot within a
   heartbeat and can be undone by re-adding the entry. See **Retiring a host** below.
 - **Change identity** (name, location, contact, Coalition URL): edit `config.env`,
-  re-`sign`, re-paste at `/onboard`, re-run `mt-manifest env`, re-import `env.json`.
+  re-`sign`, re-paste at `/onboard`, re-run `fh-toolkit env`, re-import `env.json`.
 - **Rotate your manifest key**: `keygen` a new one, re-`sign`, re-paste at `/onboard`
   and sign with the pinned owner wallet — that is the only accepted rotation path. Then
   update `MANIFEST_KEY` on the agent and recreate the container. Your issued keys are
@@ -1293,7 +1298,7 @@ pvesh get /nodes/<node>/network --output-format json | grep -o '"iface":"[^"]*"'
 # as the TOKEN — vmbr0 is missing; only the vlan subinterfaces and the NIC come back
 ```
 
-`mt-manifest doctor --check-proxmox` now makes this call itself and fails on a node that
+`fh-toolkit doctor --check-proxmox` now makes this call itself and fails on a node that
 reports no bridge, so you should not have to run the comparison by hand.
 
 The role privileges are listed in Step 2. `pveum role modify --privs` **replaces** the whole

@@ -13,6 +13,11 @@ manifest-key.pem
 manifest-pubkey.txt
 manifest.body.json
 
+# Interactive session history. Written into the operator's WORKDIR, which on a
+# maintainer box is this repo root. It holds no secrets — every value-taking flag names
+# a PATH, not material — but it is per-machine scratch, not source.
+.fh-toolkit-history
+
 # Build output
 dist/
 *.tsbuildinfo

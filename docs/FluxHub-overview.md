@@ -9,15 +9,15 @@ reference. This one is what you want three weeks later, when a node is down and 
 staring at a directory trying to remember which file the agent actually reads.
 
 > The platform is **Flux Hub**. The binaries, images and variables are still `mt-*`
-> (`mt-manifest`, `mt-agent`, `MT_BASE_URL`, `MT_PUBKEY`) until the rename ships —
+> (`fh-toolkit`, `mt-agent`, `MT_BASE_URL`, `MT_PUBKEY`) until the rename ships —
 > everything named in this document is literal.
 
 ---
 
 ## The directory
 
-`mt-manifest keygen` writes the first two; `mt-manifest init` writes the rest, except
-`env.json`, which `mt-manifest env` produces once `/onboard` has filled in `secrets.env`.
+`fh-toolkit keygen` writes the first two; `fh-toolkit init` writes the rest, except
+`env.json`, which `fh-toolkit env` produces once `/onboard` has filled in `secrets.env`.
 
 ```
 operator/                       0700  ← you create this; the mode is on you
@@ -75,7 +75,7 @@ anywhere.
 
 ## `manifest-key.pem` 🔑
 
-**Written by** `mt-manifest keygen`, once, ever. **Read by** `mt-manifest sign` and `init`.
+**Written by** `fh-toolkit keygen`, once, ever. **Read by** `fh-toolkit sign` and `init`.
 
 An ed25519 private key in PEM form. It signs your manifest, and its base64 form
 (`MANIFEST_KEY`) is how the agent and the Coalition authenticate to Flux Hub.
@@ -263,7 +263,7 @@ The body carries `schemaVersion`, `provider{slug,name,…}`, `coalitionUrl`, `pu
 
 ⚠️ **It is a SNAPSHOT of `config.env`.** Edit config afterwards and this file is stale.
 `doctor` compares the two and says so (`MANIFEST_STALE`) — that check is what makes it
-safe for `init` to sign automatically. The fix is `mt-manifest sign`.
+safe for `init` to sign automatically. The fix is `fh-toolkit sign`.
 
 ⚠️ **`trustedSelfClaim` is always `false` and is ignored by FH.** It exists so that a
 naive operator cannot grant themselves trust by editing a field. `level` is the same shape
@@ -353,7 +353,7 @@ and check the owner signature too.
 | prices | `TIER_PRICES_JSON` in `config.env`, `AGENT_LISTING_JSON` in `.env.operator`, slot `priceCents` | each other, and ≥ FH's per-tier floor |
 | host names | `HOSTS` in `config.env`, `hardware[]` in `manifest.json`, `name` in `inventory.json` | all three |
 
-`mt-manifest doctor` is this table, executed. Run it after any edit.
+`fh-toolkit doctor` is this table, executed. Run it after any edit.
 
 ---
 
@@ -375,7 +375,7 @@ and check the owner signature too.
 ## If you back up one thing
 
 **`manifest-key.pem`.** It is the only file here that cannot be regenerated — everything
-else falls back out of `mt-manifest init` given your answers. Store it the way you would
+else falls back out of `fh-toolkit init` given your answers. Store it the way you would
 store a wallet key.
 
 The three values from `/onboard` (`AGENT_KEY`, `COALITION_KEY`, `COALITION_SIGNING_KEY`)
