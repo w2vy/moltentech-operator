@@ -72,6 +72,7 @@ import {
 import { probeStripeWiring } from "./stripe-wiring";
 import { probeHub } from "./hub-probe";
 import { readBuildInfo, formatBuildInfo } from "./build-info";
+import { wrapperScript, wrapperStatus, WRAPPER_VERSION } from "./wrapper";
 import {
   probeProxmox,
   formatProbe,
@@ -199,16 +200,17 @@ export type Ctx = {
  * long enough that "which image is this?" stops being obvious, and it is the first thing
  * a bug report needs.
  */
+function pkgVersion(): string {
+  try {
+    const pkg = JSON.parse(readFileSync(join(import.meta.dirname, "..", "package.json"), "utf8"));
+    return typeof pkg.version === "string" ? pkg.version : "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+
 function buildLine(): string {
-  const pkgVersion = ((): string => {
-    try {
-      const pkg = JSON.parse(readFileSync(join(import.meta.dirname, "..", "package.json"), "utf8"));
-      return typeof pkg.version === "string" ? pkg.version : "unknown";
-    } catch {
-      return "unknown";
-    }
-  })();
-  return formatBuildInfo(readBuildInfo(process.env, pkgVersion));
+  return formatBuildInfo(readBuildInfo(process.env, pkgVersion()));
 }
 
 /**
@@ -1215,6 +1217,22 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
           report.filesChecked.push("hub (live)");
         }
       }
+      // The wrapper is the one piece of an operator's setup that lives OUTSIDE every file
+      // this command reads, so nothing else can catch it. It is checked here rather than
+      // on every command because a line that says "fine" every time is a line nobody reads.
+      const wrapper = wrapperStatus(process.env);
+      if (wrapper.state !== "current") {
+        report.findings.push({
+          severity: "warning",
+          rule: wrapper.state === "stale" ? "WRAPPER_STALE" : "WRAPPER_UNKNOWN",
+          file: "~/.fh-toolkit.sh",
+          message: `${wrapper.message}. ${wrapper.fix} reinstalls it.`,
+          // The convention for a fix-bearing finding: the summary IS the instruction,
+          // because that headline is what closes the report and is the next thing typed.
+          summary: `run \`${wrapper.fix}\``,
+          fix: wrapper.fix,
+        });
+      }
       const { text, ok } = formatReport(report);
       console.log(text);
       if (!ok) return 1;
@@ -1625,9 +1643,23 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
       console.log(`OK — manifest + owner signature valid (owner ${parsed.data.ownerAddress})`);
       return 0;
     }
-    // Which build am I? The image refreshes at most every 48h, so "the fix is merged"
+    // Which build am I? The image refreshes on a stamp file, so "the fix is merged"
     // and "the fix is what just ran" are different claims. This is how to tell them apart
     // without diffing help text against the repo.
+    // The wrapper prints itself. It used to live only in the docs, which is how tom went a
+    // whole rename without noticing: his shell still defined `mt-manifest()` against an
+    // image name that no longer publishes, and nothing on either side could say so.
+    case "wrapper": {
+      const only = args.includes("--agent")
+        ? ("agent" as const)
+        : args.includes("--toolkit")
+          ? ("toolkit" as const)
+          : undefined;
+      // Straight to stdout, nothing else on it — the documented use is a redirect, and a
+      // stray banner would end up inside the operator's shell rc.
+      process.stdout.write(wrapperScript({ build: readBuildInfo(process.env, pkgVersion()), only }));
+      return 0;
+    }
     case "version":
     case "--version":
     case "-v": {
@@ -1638,6 +1670,20 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
     // operator is on an alias, a hand-written `docker run`, or a wrapper predating
     // `--refresh`. That is the actual finding, and it is worth more than "unknown
     // command": the image cannot pull itself, so the fix is always in the wrapper.
+    // Same shape as `--refresh`: handled by the shell function, so reaching the CLI is
+    // itself the diagnosis.
+    case "--update-wrapper":
+      console.log(
+        "`--update-wrapper` is handled by the fh-toolkit SHELL FUNCTION, not by this CLI —\n" +
+          "the CLI runs inside the container and cannot write to your home directory.\n" +
+          "Reaching me means your wrapper predates it, or you are not using the wrapper.\n\n" +
+          "Install or replace it by hand:\n" +
+          "  docker run --rm ghcr.io/w2vy/fh-toolkit:latest wrapper > ~/.fh-toolkit.sh\n" +
+          "  . ~/.fh-toolkit.sh\n\n" +
+          "and source it from your shell rc, with a line that never changes again:\n" +
+          "  [ -f ~/.fh-toolkit.sh ] && . ~/.fh-toolkit.sh"
+      );
+      return 1;
     case "--refresh":
       console.log(
         "`--refresh` is handled by the fh-toolkit SHELL FUNCTION, not by this CLI —\n" +
@@ -1655,7 +1701,7 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
     case "-h":
     default:
       console.log(
-        "usage: fh-toolkit <keygen|coalition-keygen|init|level|doctor|sign|env|verify|version> [options]\n"
+        "usage: fh-toolkit <keygen|coalition-keygen|init|level|doctor|sign|env|verify|wrapper|version> [options]\n"
       );
       console.log("  keygen           [--out <dir>]");
       console.log("  coalition-keygen [--out <dir>]   Phase D signing key (operator-held custody)");
@@ -1670,6 +1716,7 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
       console.log("            [--manifest <manifest|signed-manifest.json>] [--out <env.json>] [--stdout]");
       console.log("            defaults to the files `init` wrote in the current directory");
       console.log("  verify    --in <manifest.json>");
+      console.log("  wrapper   [--toolkit|--agent]   print the shell functions for these tools");
       console.log("  version   which build of this CLI is running (paste it into a bug report)");
       console.log("  help      this list\n");
       console.log("Every path defaults to the file `init` wrote in the current directory,");
@@ -1684,9 +1731,10 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
       console.log("Updating this tool:");
       console.log("  fh-toolkit --refresh          pull the newest image, then stop");
       console.log("  fh-toolkit --refresh <cmd>    pull, then run <cmd>");
-      console.log("Handled by the shell function, not by this CLI — a container cannot replace");
-      console.log("its own image. Without it the wrapper re-pulls at most every 48h, so `version`");
-      console.log("above is what is RUNNING and may trail what is merged.\n");
+      console.log("  fh-toolkit --update-wrapper   reinstall the shell functions themselves");
+      console.log("Handled by the shell function, not by this CLI — a container can neither");
+      console.log("replace its own image nor write to your home directory. Left alone the");
+      console.log("wrapper re-pulls every 15 minutes, so `version` above is what is RUNNING.\n");
       console.log("The agent is a separate command; `mt-agent doctor` is its preflight.");
       console.log("Full reference: docs/fh-toolkit.md in the moltentech-operator repo.");
       // `help` asked for this; an unknown subcommand got it as an error message.
@@ -1773,6 +1821,12 @@ async function session(ctx: Ctx): Promise<number> {
   // printed every time a session opens.
   console.log(buildLine().split("\n\n")[0]);
   console.log(`directory: ${ctx.dir}`);
+  const wrapper = wrapperStatus(process.env);
+  if (wrapper.state !== "current") {
+    // One line, once per session. The alternative — saying it per command — is how a
+    // warning stops being read.
+    console.log(`⚠️  ${wrapper.message} — fix: ${wrapper.fix}`);
+  }
   console.log("`help` lists the commands. `exit` or Ctrl-D leaves.\n");
 
   for (;;) {

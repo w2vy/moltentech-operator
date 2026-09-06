@@ -43,3 +43,38 @@ test("⭐ --refresh reaching the CLI is diagnosed, not answered with `unknown co
   // It must NOT silently degrade into the usage list, which reads as "flag accepted".
   assert.doesNotMatch(out, /^usage: fh-toolkit/m);
 });
+
+// `--update-wrapper` has the same shape as `--refresh`, for the same reason twice over:
+// the container can neither replace its own image nor write to the operator's home
+// directory. Reaching the CLI is the diagnosis.
+
+test("⭐ --update-wrapper reaching the CLI is diagnosed, with a hand escape hatch", () => {
+  const { out, code } = run(["--update-wrapper"]);
+  assert.equal(code, 1);
+  assert.match(out, /shell function/i);
+  assert.match(out, /cannot write to your home directory/i);
+  // An operator whose wrapper is broken cannot use the wrapper to fix it, so the manual
+  // form has to be printed here.
+  assert.match(out, /docker run --rm ghcr\.io\/w2vy\/fh-toolkit:latest wrapper/);
+});
+
+test("help names --update-wrapper alongside --refresh", () => {
+  const { out } = run(["help"]);
+  assert.match(out, /--update-wrapper/);
+  assert.match(out, /wrapper\s+\[--toolkit\|--agent\]/);
+});
+
+test("⭐ `wrapper` prints shell and nothing else — it is redirected into an rc file", () => {
+  // A stray banner would land inside the operator's shell rc and be sourced.
+  const { out, code } = run(["wrapper"]);
+  assert.equal(code, 0);
+  assert.match(out, /^# Shell functions/);
+  assert.match(out, /^fh-toolkit\(\) \{$/m);
+  assert.match(out, /^mt-agent\(\) \{$/m);
+  assert.doesNotMatch(out, /^usage:/m);
+});
+
+test("`wrapper --toolkit` and `--agent` each print one function", () => {
+  assert.doesNotMatch(run(["wrapper", "--toolkit"]).out, /^mt-agent\(\) \{$/m);
+  assert.doesNotMatch(run(["wrapper", "--agent"]).out, /^fh-toolkit\(\) \{$/m);
+});
