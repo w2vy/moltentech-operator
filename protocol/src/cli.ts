@@ -44,6 +44,7 @@
  * `verify` above, which accept either shape.
  */
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { randomBytes } from "node:crypto";
 import { join, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
@@ -138,9 +139,63 @@ function noteUnproven(report: DoctorReport, scope: string, checks: ProbeResult[]
 }
 
 
+/**
+ * A command that could not do its job. Thrown rather than exited, because the
+ * interactive session has to survive one bad command and keep its state: an
+ * exit(1) inside a case would take the whole session down with it. The one-shot
+ * entry point turns it back into exit(1), so nothing changes for scripts and CI.
+ */
+export class CliError extends Error {}
+
 function die(msg: string): never {
-  console.error(`error: ${msg}`);
-  process.exit(1);
+  throw new CliError(msg);
+}
+
+/**
+ * What a session carries between commands. In one-shot mode it is built fresh for
+ * the single command and thrown away, so both modes run the same code path.
+ *
+ * `dir` is the pinned operator directory. A session resolves it once at start and
+ * every command's `--dir`/`--out` default resolves to it; a session cannot `cd`,
+ * because the mount is the directory and pretending otherwise invites paths that
+ * work at the prompt and not in the container.
+ */
+export type Ctx = {
+  dir: string;
+  interactive: boolean;
+  /**
+   * `fetchTierMinimums` is a network call `init` and `doctor` each make — and they do
+   * NOT agree on the base URL (`init` reads the environment, `doctor` reads the
+   * operator's own config.env), so the cache is keyed by URL rather than shared blind.
+   * Only successes are cached: a hub that was down for the first command should not be
+   * assumed down for the rest of the session.
+   */
+  tierMinimums?: Map<string, Record<string, number>>;
+};
+
+/**
+ * Which build is answering. Shared by `version` and the session banner: a session lasts
+ * long enough that "which image is this?" stops being obvious, and it is the first thing
+ * a bug report needs.
+ */
+function buildLine(): string {
+  const pkgVersion = ((): string => {
+    try {
+      const pkg = JSON.parse(readFileSync(join(import.meta.dirname, "..", "package.json"), "utf8"));
+      return typeof pkg.version === "string" ? pkg.version : "unknown";
+    } catch {
+      return "unknown";
+    }
+  })();
+  return formatBuildInfo(readBuildInfo(process.env, pkgVersion));
+}
+
+async function cachedTierMinimums(ctx: Ctx, baseUrl: string): Promise<Record<string, number> | null> {
+  const hit = ctx.tierMinimums?.get(baseUrl);
+  if (hit) return hit;
+  const fetched = await fetchTierMinimums(baseUrl);
+  if (fetched) (ctx.tierMinimums ??= new Map()).set(baseUrl, fetched);
+  return fetched;
 }
 
 /**
@@ -682,9 +737,7 @@ const BODY_TEMPLATE = {
   trustedSelfClaim: false,
 };
 
-async function main() {
-  const [cmd, ...args] = process.argv.slice(2);
-
+export async function runCommand(cmd: string | undefined, args: string[], ctx: Ctx): Promise<number> {
   switch (cmd) {
     case "coalition-keygen": {
       // Operator-held custody for the Phase D Coalition signing key. The DEFAULT path
@@ -712,7 +765,7 @@ async function main() {
         "\nOrder matters: MT must pin the public key BEFORE you set COALITION_SIGNING_KEY " +
           "and redeploy, or your Coalition signs with a key MT cannot verify and its reports 401."
       );
-      break;
+      return 0;
     }
     case "keygen": {
       const dir = flag(args, "--out") ?? ".";
@@ -747,7 +800,7 @@ async function main() {
             "update it by hand and re-onboard: MT still holds the old public half."
         );
       }
-      break;
+      return 0;
     }
     case "init": {
       // Replaces the vestigial body-template init: `sign --from-config` superseded
@@ -791,7 +844,8 @@ async function main() {
 
       // Same rule as doctor: ask MT for the live minimums, fall back to the bundled
       // table. Done before the prompts so the wizard quotes the real floor.
-      const liveMinimums = await fetchTierMinimums(
+      const liveMinimums = await cachedTierMinimums(
+        ctx,
         process.env.MT_BASE_URL ?? "https://fluxhub.moltentech.us"
       );
       if (!liveMinimums) {
@@ -946,7 +1000,7 @@ async function main() {
       console.log(`     → ${coalitionUrlFor(answers.fluxAppName)}`);
       console.log("     ⚠️  enterprise, not standard: a standard Flux app's environment is");
       console.log("         WORLD-READABLE, and yours holds your Stripe key.");
-      break;
+      return 0;
     }
     case "doctor": {
       // The runbook's "which value must match where" table, executed. File-level by
@@ -967,7 +1021,7 @@ async function main() {
       // set, and a copy in this repo is only a fallback. MT_BASE_URL is read from the
       // operator's own config so no flag is needed.
       const mtBaseUrl = configText ? parseConfigEnv(configText).MT_BASE_URL : undefined;
-      const tierMinimums = mtBaseUrl ? ((await fetchTierMinimums(mtBaseUrl)) ?? undefined) : undefined;
+      const tierMinimums = mtBaseUrl ? ((await cachedTierMinimums(ctx, mtBaseUrl)) ?? undefined) : undefined;
       const report = runDoctor({
         configEnv: configText,
         secretsEnv: read("secrets.env"),
@@ -1095,8 +1149,8 @@ async function main() {
       }
       const { text, ok } = formatReport(report);
       console.log(text);
-      if (!ok) process.exit(1);
-      break;
+      if (!ok) return 1;
+      return 0;
     }
     case "sign": {
       // Same defaults as `env`, for the same reason: every one of these names a file
@@ -1138,7 +1192,7 @@ async function main() {
       } else {
         process.stdout.write(out);
       }
-      break;
+      return 0;
     }
     case "env": {
       // ⭐ Defaults, because `init` writes all four of these files under exactly these
@@ -1281,7 +1335,7 @@ async function main() {
       } else {
         process.stdout.write(out);
       }
-      break;
+      return 0;
     }
     case "verify": {
       const inPath = flag(args, "--in") ?? die("--in <manifest.json> required");
@@ -1293,29 +1347,29 @@ async function main() {
       const { manifest, ownerSignature } = unwrapManifest(raw);
       if (!verifyManifestObject(manifest)) {
         console.log("FAILED — manifest signature invalid");
-        process.exit(1);
+        return 1;
       }
       if (ownerSignature == null) {
         console.log("OK — manifest signature valid (bare manifest, no owner authorization)");
-        break;
+        return 0;
       }
       // A wrapper is only as good as its owner signature; verify it too rather
       // than reporting OK on the ed25519 alone. Mirrors the checks in `env`.
       const parsed = ProviderManifest.safeParse(manifest);
       if (!parsed.success) {
         console.log("FAILED — signed wrapper's manifest is invalid");
-        process.exit(1);
+        return 1;
       }
       if (!parsed.data.ownerAddress) {
         console.log("FAILED — signed manifest is missing ownerAddress");
-        process.exit(1);
+        return 1;
       }
       if (!verifyManifestOwnerSignature(parsed.data, ownerSignature)) {
         console.log("FAILED — owner wallet signature does not verify against ownerAddress");
-        process.exit(1);
+        return 1;
       }
       console.log(`OK — manifest + owner signature valid (owner ${parsed.data.ownerAddress})`);
-      break;
+      return 0;
     }
     // Which build am I? The image refreshes at most every 48h, so "the fix is merged"
     // and "the fix is what just ran" are different claims. This is how to tell them apart
@@ -1323,16 +1377,8 @@ async function main() {
     case "version":
     case "--version":
     case "-v": {
-      const pkgVersion = ((): string => {
-        try {
-          const pkg = JSON.parse(readFileSync(join(import.meta.dirname, "..", "package.json"), "utf8"));
-          return typeof pkg.version === "string" ? pkg.version : "unknown";
-        } catch {
-          return "unknown";
-        }
-      })();
-      console.log(formatBuildInfo(readBuildInfo(process.env, pkgVersion)));
-      break;
+      console.log(buildLine());
+      return 0;
     }
     // Reaching the CLI at all means the shell function did NOT consume it — so the
     // operator is on an alias, a hand-written `docker run`, or a wrapper predating
@@ -1349,7 +1395,7 @@ async function main() {
           "docs/operator-onboarding.md — it also mounts /etc/hosts, so Proxmox\n" +
           "hostnames resolve inside the container."
       );
-      process.exit(1);
+      return 1;
     case "help":
     case "--help":
     case "-h":
@@ -1388,8 +1434,150 @@ async function main() {
       console.log("Full reference: docs/fh-toolkit.md in the moltentech-operator repo.");
       // `help` asked for this; an unknown subcommand got it as an error message.
       const asked = cmd === undefined || cmd === "help" || cmd === "--help" || cmd === "-h";
-      process.exit(asked ? 0 : 1);
+      return asked ? 0 : 1;
   }
 }
 
-main();
+/**
+ * Split a session line the way a shell would, so `sign --out "my dir/manifest.json"`
+ * survives. Deliberately small: quotes and nothing else. There is no globbing, no
+ * variable expansion and no `!` escape, because a session is the same seven commands
+ * with state, not a shell — a half-implemented shell is worse than none.
+ */
+export function tokenize(line: string): string[] {
+  const out: string[] = [];
+  let cur = "";
+  let quote: '"' | "'" | null = null;
+  let started = false;
+  for (const ch of line) {
+    if (quote) {
+      if (ch === quote) quote = null;
+      else cur += ch;
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      started = true;
+      continue;
+    }
+    if (/\s/.test(ch)) {
+      if (started) out.push(cur);
+      cur = "";
+      started = false;
+      continue;
+    }
+    cur += ch;
+    started = true;
+  }
+  if (started) out.push(cur);
+  return out;
+}
+
+const HISTORY_FILE = ".mt-manifest-history";
+const HISTORY_MAX = 500;
+
+function readHistory(dir: string): string[] {
+  try {
+    return readFileSync(join(dir, HISTORY_FILE), "utf8").split("\n").filter(Boolean).reverse();
+  } catch {
+    return [];
+  }
+}
+
+function writeHistory(dir: string, history: readonly string[]): void {
+  try {
+    // node hands history newest-first; store oldest-first so the file reads like a log.
+    const text = [...history].slice(0, HISTORY_MAX).reverse().join("\n");
+    writeFileSync(join(dir, HISTORY_FILE), text + "\n", { mode: 0o600 });
+  } catch {
+    // A read-only mount is not a reason to lose the session.
+  }
+}
+
+/**
+ * The interactive session. One `docker run -it` for many commands, which buys three
+ * things a one-shot cannot: a real TTY for `init`'s prompts, state carried between
+ * commands (see `Ctx`), and one mount decision instead of one per command.
+ */
+async function session(ctx: Ctx): Promise<number> {
+  const rl = createInterface({
+    input: process.stdin,
+    output: process.stdout,
+    history: readHistory(ctx.dir),
+    historySize: HISTORY_MAX,
+  });
+  rl.on("history", (h: string[]) => writeHistory(ctx.dir, h));
+
+  console.log(buildLine());
+  console.log(`directory: ${ctx.dir}`);
+  console.log("`help` lists the commands. `exit` or Ctrl-D leaves.\n");
+
+  for (;;) {
+    let line: string;
+    try {
+      line = await rl.question("mt-manifest> ");
+    } catch {
+      break; // Ctrl-C on the prompt
+    }
+    if (line === null || line === undefined) break;
+    const argv = tokenize(line);
+    if (argv.length === 0) continue;
+    const [cmd, ...args] = argv;
+    if (cmd === "exit" || cmd === "quit") break;
+    try {
+      await runCommand(cmd, args, ctx);
+    } catch (e) {
+      // A bad command ends the COMMAND, not the session. That is the whole reason
+      // `die` throws rather than exits.
+      if (e instanceof CliError) console.error(`error: ${e.message}`);
+      else console.error(`error: ${(e as Error).message ?? String(e)}`);
+    }
+    console.log("");
+  }
+  rl.close();
+  // stdin is still open on the readline's behalf; a session that has said goodbye
+  // should not hang waiting for it.
+  process.stdin.pause();
+  console.log("bye");
+  return 0;
+}
+
+async function main(): Promise<void> {
+  const [cmd, ...args] = process.argv.slice(2);
+  // The mounted directory IS the working directory (`-v "$PWD:/work"`, WORKDIR /work),
+  // and a session cannot cd — so the pinned dir and every command's `.` default are the
+  // same directory for the life of the process, and nothing needs rewiring.
+  const ctx: Ctx = { dir: process.cwd(), interactive: cmd === undefined };
+
+  if (cmd === undefined) {
+    // No arguments and no terminal is the wrapper being invoked without `-t` (or from a
+    // script). Printing usage beats opening a session that reads EOF and vanishes —
+    // which is exactly how the missing `-t` used to make `init` look half-broken.
+    if (!process.stdin.isTTY || !process.stdout.isTTY) {
+      console.error(
+        "error: no command given, and this is not a terminal.\n" +
+          "  Interactive session needs a TTY — run the wrapper with `docker run -it`.\n" +
+          "  Otherwise pass a command: `mt-manifest help` lists them."
+      );
+      process.exit(1);
+    }
+    process.exit(await session(ctx));
+  }
+
+  try {
+    process.exit(await runCommand(cmd, args, ctx));
+  } catch (e) {
+    if (e instanceof CliError) {
+      console.error(`error: ${e.message}`);
+      process.exit(1);
+    }
+    throw e;
+  }
+}
+
+// Only when this file IS the program. Importing it (the session tests do) must not
+// launch a second CLI — the ENTRYPOINT runs `tsx /pkg/src/cli.ts`, so argv[1] is this
+// file there and the guard is transparent in the image.
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main();
+}
