@@ -150,8 +150,8 @@ name the tiers you will sell and their prices, and hand over a restricted Stripe
 Nothing about the hardware stock-take, the manifest key, or the Flux app changes.
 
 These are the only places the transcript above differs — the same run, answered as an
-Operator. It is also, line for line, what upgrading from Supporter to Operator later
-adds.
+Operator. It is also, line for line, what `fh-toolkit level --set operator` asks when you
+upgrade later: the two share one implementation, so they cannot drift apart.
 
 ```console
   choose 1 or 2 [2]: 2

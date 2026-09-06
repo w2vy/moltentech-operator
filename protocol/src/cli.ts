@@ -51,7 +51,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { randomBytes } from "node:crypto";
 import { join, resolve } from "node:path";
-import { createInterface } from "node:readline/promises";
+import { createInterface, type Interface } from "node:readline/promises";
 import { ProviderManifest, ProviderManifestBody, unwrapManifest } from "./manifest";
 import {
   planLevelChange,
@@ -176,6 +176,15 @@ export type Ctx = {
   dir: string;
   interactive: boolean;
   /**
+   * The session's readline, when there is one.
+   *
+   * ⚠️ A command that asks questions must REUSE it rather than opening a second
+   * interface on the same stdin. Two interfaces on one TTY both echo, so every keystroke
+   * appears twice, and the inner one's `close()` leaves stdin in a state the outer one
+   * has to recover from. Go through `withPrompts`.
+   */
+  rl?: Interface;
+  /**
    * `fetchTierMinimums` is a network call `init` and `doctor` each make — and they do
    * NOT agree on the base URL (`init` reads the environment, `doctor` reads the
    * operator's own config.env), so the cache is keyed by URL rather than shared blind.
@@ -200,6 +209,43 @@ function buildLine(): string {
     }
   })();
   return formatBuildInfo(readBuildInfo(process.env, pkgVersion));
+}
+
+/**
+ * Run `fn` with a question-asker, using the session's readline when there is one and a
+ * throwaway interface otherwise — and closing only what it opened.
+ */
+async function withPrompts<T>(
+  ctx: Ctx,
+  fn: (ask: Ask, askUntil: AskUntil) => Promise<T>
+): Promise<T> {
+  const own = ctx.rl ? undefined : createInterface({ input: process.stdin, output: process.stdout });
+  const rl = ctx.rl ?? own!;
+  const ask: Ask = async (q, def) => {
+    const a = (await rl.question(def ? `${q} [${def}]: ` : `${q}: `)).trim();
+    return a || def || "";
+  };
+  /**
+   * Ask until the answer is usable, printing WHY each time.
+   *
+   * Every rule here also exists in `validateAnswers`, which runs after the last question
+   * and `die()`s — so a mistyped tier used to cost the whole wizard, thirty answers back.
+   * Checking at the prompt is the same rule applied where the mistake is made, while the
+   * operator is still looking at the question that caused it.
+   */
+  const askUntil: AskUntil = async (q, problem, def) => {
+    for (;;) {
+      const answer = await ask(q, def);
+      const why = problem(answer);
+      if (!why) return answer;
+      console.log(`    ${why}`);
+    }
+  };
+  try {
+    return await fn(ask, askUntil);
+  } finally {
+    own?.close();
+  }
 }
 
 async function cachedTierMinimums(ctx: Ctx, baseUrl: string): Promise<Record<string, number> | null> {
@@ -327,33 +373,11 @@ export async function askSellingAnswers(
   return { tierPricesCents, stripeSecretKey, stripeWebhookSecret };
 }
 
-async function askAnswers(minimums: Record<string, number> = TIER_FLOORS_CENTS): Promise<Answers> {
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
-  const ask = async (q: string, def?: string): Promise<string> => {
-    const a = (await rl.question(def ? `${q} [${def}]: ` : `${q}: `)).trim();
-    return a || def || "";
-  };
-  /**
-   * Ask until the answer is usable, printing WHY each time.
-   *
-   * Every rule here also exists in `validateAnswers`, which runs after the last question
-   * and `die()`s — so a mistyped tier used to cost the whole wizard, thirty answers back.
-   * Checking at the prompt is the same rule applied where the mistake is made, while the
-   * operator is still looking at the question that caused it.
-   */
-  const askUntil = async (
-    q: string,
-    problem: (answer: string) => string | undefined,
-    def?: string
-  ): Promise<string> => {
-    for (;;) {
-      const answer = await ask(q, def);
-      const why = problem(answer);
-      if (!why) return answer;
-      console.log(`    ${why}`);
-    }
-  };
-  try {
+async function askAnswers(
+  ctx: Ctx,
+  minimums: Record<string, number> = TIER_FLOORS_CENTS
+): Promise<Answers> {
+  return withPrompts(ctx, async (ask, askUntil) => {
     console.log("fh-toolkit init — this writes every onboarding file from your answers.\n");
 
     // Asked FIRST because it decides which of the later questions exist at all. A
@@ -728,9 +752,7 @@ async function askAnswers(minimums: Record<string, number> = TIER_FLOORS_CENTS):
       stripeSecretKey: stripeSecretKey || undefined,
       stripeWebhookSecret: stripeWebhookSecret || undefined,
     };
-  } finally {
-    rl.close();
-  }
+  });
 }
 
 /**
@@ -910,7 +932,7 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
           die(`${answersPath}: ${(e as Error).message}`);
         }
       } else {
-        answers = await askAnswers(minimums);
+        answers = await askAnswers(ctx, minimums);
       }
 
       const problems = validateAnswers(answers, minimums);
@@ -1322,20 +1344,7 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
         // non-TTY both mean "use what I gave you".
         const canAsk = !yes && process.stdin.isTTY === true;
         if (!alreadyDone && canAsk && Object.keys(cliPrices).length === 0) {
-          const rl = createInterface({ input: process.stdin, output: process.stdout });
-          try {
-            const ask: Ask = async (q, def) => {
-              const a = (await rl.question(def ? `${q} [${def}]: ` : `${q}: `)).trim();
-              return a || def || "";
-            };
-            const askUntil: AskUntil = async (q, problem, def) => {
-              for (;;) {
-                const answer = await ask(q, def);
-                const why = problem(answer);
-                if (!why) return answer;
-                console.log(`    ${why}`);
-              }
-            };
+          await withPrompts(ctx, async (ask, askUntil) => {
             console.log("Upgrading to Operator — the same questions `init` asks a seller.\n");
             const selling = await askSellingAnswers(ask, askUntil, minimums);
             askedPrices = selling.tierPricesCents;
@@ -1343,9 +1352,7 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
               secretKey: selling.stripeSecretKey || undefined,
               webhookSecret: selling.stripeWebhookSecret || undefined,
             };
-          } finally {
-            rl.close();
-          }
+          });
         }
       }
 
@@ -1376,9 +1383,7 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
         return 0;
       }
       if (!yes && process.stdin.isTTY === true) {
-        const rl = createInterface({ input: process.stdin, output: process.stdout });
-        const answer = (await rl.question("\nApply these changes? [y/N]: ")).trim().toLowerCase();
-        rl.close();
+        const answer = await withPrompts(ctx, async (ask) => (await ask("\nApply these changes? [y/N]")).toLowerCase());
         if (!answer.startsWith("y")) {
           console.log("nothing written.");
           return 1;
@@ -1759,6 +1764,9 @@ async function session(ctx: Ctx): Promise<number> {
     historySize: HISTORY_MAX,
   });
   rl.on("history", (h: string[]) => writeHistory(ctx.dir, h));
+  // Commands that ask questions reuse this rather than opening a second interface on the
+  // same TTY, which would echo every keystroke twice.
+  ctx.rl = rl;
 
   // Just the identity lines. formatBuildInfo's trailing "older than you expect?" note is
   // written for someone reading `version` output in a bug report, not for a banner

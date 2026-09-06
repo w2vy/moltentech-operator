@@ -1197,6 +1197,25 @@ Proxmox credentials, and never the private half of anything you generated.
 - **Add or remove slots on an attested host**: edit `inventory.json`. No re-sign, no
   restart. A removal does not delete the row — it disavows an unrented slot within a
   heartbeat and can be undone by re-adding the entry. See **Retiring a host** below.
+- **Upgrade Supporter → Operator** (or back): `fh-toolkit level --set operator`. It asks
+  which tiers you will offer, at what price, and for your Stripe pair — the same
+  questions `init` asks a seller — then edits **`config.env` and `secrets.env` only**.
+  Nothing else in your directory is touched: not `manifest.json`, not `SESSION_SECRET`,
+  not your issued keys, not `data/inventory.json`. (`init --force` would rewrite all of
+  those; that is why this exists.) Previous versions are kept as `*.bak`.
+
+  `PROVIDER_LEVEL` is in your **signed manifest**, so this is a re-sign, not a config
+  edit: `fh-toolkit sign` → re-paste `manifest.json` at `/onboard` and sign with your
+  owner wallet. Until you do, Flux Hub still has you as a Supporter, and
+  `fh-toolkit doctor` reports `MANIFEST_STALE`. Then register your Stripe webhook
+  endpoint, check it with `doctor --check-stripe`, and re-run `env` → re-import.
+
+  Run `fh-toolkit level` with no flags first to see where you stand, and
+  `--dry-run` to read the diff before it writes. `--set supporter` is the way back: it
+  clears `TIER_PRICES_JSON` and **leaves your Stripe keys in place** (they are inert
+  while nothing is for sale, and Stripe only ever shows a webhook secret once). It
+  cannot see your live rentals and says so — an existing customer keeps their node, you
+  simply cannot sell anything new.
 - **Change identity** (name, location, contact, Coalition URL): edit `config.env`,
   re-`sign`, re-paste at `/onboard`, re-run `fh-toolkit env`, re-import `env.json`.
 - **Rotate your manifest key**: `keygen` a new one, re-`sign`, re-paste at `/onboard`
