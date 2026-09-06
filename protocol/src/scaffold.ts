@@ -13,6 +13,7 @@
  * writes what comes back — so the interactive and non-interactive paths run the exact
  * same generator, and the tests drive the same one the operator does.
  */
+import { ProviderSlug } from "./common";
 import { FOUNDATION_VM_PREFIX } from "./messages";
 
 import { TIER_FLOORS_CENTS } from "./config-lint";
@@ -144,7 +145,20 @@ export function suggestFluxAppName(providerSlug: string): string {
   return `coalition-${providerSlug}`;
 }
 
-export const SLUG_RE = /^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$/;
+/**
+ * The slug rule is `ProviderSlug` (`common.ts`) and nothing else. There used to be a
+ * second regex here — `/^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$/` — which accepted a doubled
+ * hyphen (`a--b`) that `ProviderSlug` refuses. So `init` could mint a slug the hub's
+ * ingest rejects, and the slug is PERMANENT: pinned at first ingest, with no way to
+ * change it afterwards. Two regexes for one wire rule is one regex too many.
+ */
+export function slugProblem(slug: string): string | undefined {
+  if (ProviderSlug.safeParse(slug).success) return undefined;
+  return (
+    `"${slug}" is not a usable provider slug — lowercase letters, digits and single ` +
+    "hyphens between them, 3-40 characters. It is PERMANENT, pinned at first ingest."
+  );
+}
 
 /**
  * A plain IPv4 address — the shape a WAN IP and a full LAN address have to be.
@@ -185,11 +199,8 @@ export function validateAnswers(
   minimums: Record<string, number> = TIER_FLOORS_CENTS
 ): string[] {
   const errs: string[] = [];
-  if (!SLUG_RE.test(a.providerSlug)) {
-    errs.push(
-      `providerSlug "${a.providerSlug}" must match ${SLUG_RE} — it is PERMANENT, pinned at first ingest.`
-    );
-  }
+  const slugErr = slugProblem(a.providerSlug);
+  if (slugErr) errs.push(`providerSlug ${slugErr}`);
   if (!a.providerName) errs.push("providerName is required.");
   if (!a.ownerAddress) errs.push("ownerAddress is required — it is baked into the bytes signed at /onboard.");
   if (!/^https:\/\//.test(a.mtBaseUrl)) errs.push(`mtBaseUrl "${a.mtBaseUrl}" must be an https URL.`);

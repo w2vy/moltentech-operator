@@ -80,7 +80,7 @@ import {
   slotLanIp,
   isIPv4,
   vmNameProblem,
-  SLUG_RE,
+  slugProblem,
   type LanNetwork,
   generateAll,
   GENERATED_PATHS,
@@ -284,10 +284,9 @@ async function askAnswers(minimums: Record<string, number> = TIER_FLOORS_CENTS):
     const level: "supporter" | "operator" = levelAnswer.startsWith("1") ? "supporter" : "operator";
     console.log(`  → Flux Hub ${level === "supporter" ? "Supporter" : "Operator"}\n`);
 
-    const providerSlug = await askUntil("Provider slug (lowercase, PERMANENT once ingested)", (v) =>
-      SLUG_RE.test(v)
-        ? undefined
-        : "lowercase letters, digits and hyphens, 3-40 characters, not starting or ending with a hyphen."
+    const providerSlug = await askUntil(
+      "Provider slug (lowercase, PERMANENT once ingested)",
+      slugProblem
     );
     const providerName = await ask("Display name", providerSlug);
     const providerLocation = await ask("Location (shown on your marketplace card)", "");
