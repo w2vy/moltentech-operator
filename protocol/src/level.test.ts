@@ -127,3 +127,165 @@ test("doctor stops nagging a supporter about Stripe keys they will never have", 
     assert.ok(r.findings.some((f) => f.message.startsWith("AGENT_KEY is empty")));
   }
 });
+
+// ── `level`: the Supporter → Operator upgrade, end to end ────────────────────
+// The promise in operator-onboarding.md was "upgrading later is a simple process". These
+// assert the two halves of making that true: the change lands, and everything ELSE in the
+// directory is byte-identical afterwards — the anti-`init --force` guarantee.
+
+function scaffoldSupporter(): string {
+  const dir = mkdtempSync(join(tmpdir(), "fh-level-"));
+  const answers: Answers = { ...BASE, level: "supporter", tierPricesCents: {} };
+  writeFileSync(join(dir, "answers.json"), JSON.stringify(answers));
+  const run = (...args: string[]): void => {
+    execFileSync("npx", ["tsx", CLI, ...args], { cwd: dir, stdio: "ignore" });
+  };
+  run("keygen");
+  run("init", "--answers", "answers.json");
+  return dir;
+}
+
+function level(dir: string, ...args: string[]): { out: string; code: number } {
+  try {
+    const out = execFileSync("npx", ["tsx", CLI, "level", ...args], {
+      cwd: dir,
+      encoding: "utf8",
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    return { out, code: 0 };
+  } catch (e) {
+    const err = e as { stdout?: string; stderr?: string; status?: number };
+    return { out: (err.stdout ?? "") + (err.stderr ?? ""), code: err.status ?? -1 };
+  }
+}
+
+test("`level` with no flags reports the level, the manifest's agreement, tiers and Stripe", () => {
+  const dir = scaffoldSupporter();
+  const { out, code } = level(dir);
+  assert.equal(code, 0);
+  assert.match(out, /PROVIDER_LEVEL\s+supporter/);
+  assert.match(out, /signed manifest\s+supporter.*in sync/);
+  assert.match(out, /tiers for sale\s+none/);
+  assert.match(out, /Stripe\s+not configured — a Supporter needs no Stripe account/);
+});
+
+test("⭐ the upgrade changes two files and leaves every other byte alone", () => {
+  const dir = scaffoldSupporter();
+  const untouched = [".env.operator", join("data", "inventory.json"), "manifest-key.pem"];
+  const before = untouched.map((f) => readFileSync(join(dir, f), "utf8"));
+  const secretsBefore = readFileSync(join(dir, "secrets.env"), "utf8");
+  const sessionSecret = /^SESSION_SECRET=(.*)$/m.exec(secretsBefore)?.[1];
+  assert.ok(sessionSecret, "fixture should have a SESSION_SECRET to protect");
+
+  const { out, code } = level(
+    dir, "--set", "operator",
+    "--price", "cumulus=25",
+    "--stripe-key", "rk_test_x",
+    "--stripe-webhook", "whsec_x",
+    "--yes"
+  );
+  assert.equal(code, 0, out);
+
+  const config = readFileSync(join(dir, "config.env"), "utf8");
+  assert.match(config, /^PROVIDER_LEVEL=operator$/m);
+  assert.match(config, /^TIER_PRICES_JSON=\{"cumulus":2500\}$/m);
+  const secrets = readFileSync(join(dir, "secrets.env"), "utf8");
+  assert.match(secrets, /^STRIPE_SECRET_KEY=rk_test_x$/m);
+  assert.match(secrets, /^STRIPE_WEBHOOK_SECRET=whsec_x$/m);
+
+  // The whole point: `init --force` would have rewritten all of these.
+  untouched.forEach((f, i) => {
+    assert.equal(readFileSync(join(dir, f), "utf8"), before[i], `${f} was modified`);
+  });
+  assert.match(secrets, new RegExp(`^SESSION_SECRET=${sessionSecret}$`, "m"), "SESSION_SECRET was reminted");
+  assert.ok(readFileSync(join(dir, "config.env.bak"), "utf8").includes("PROVIDER_LEVEL=supporter"));
+  assert.equal(readFileSync(join(dir, "secrets.env.bak"), "utf8"), secretsBefore);
+});
+
+test("⭐ the level is in the SIGNED manifest, so the upgrade goes stale until you re-sign", () => {
+  const dir = scaffoldSupporter();
+  level(dir, "--set", "operator", "--price", "cumulus=25", "--yes");
+  const read = (f: string): string => readFileSync(join(dir, f), "utf8");
+
+  const stale = runDoctor({ configEnv: read("config.env"), manifestJson: read("manifest.json") });
+  assert.ok(
+    stale.findings.some((f) => f.rule === "MANIFEST_STALE"),
+    "a level change that did not re-sign must be reported"
+  );
+
+  execFileSync("npx", ["tsx", CLI, "sign"], { cwd: dir, stdio: "ignore" });
+  const fresh = runDoctor({ configEnv: read("config.env"), manifestJson: read("manifest.json") });
+  assert.equal(fresh.findings.filter((f) => f.rule === "MANIFEST_STALE").length, 0);
+  assert.equal(renderManifestBodyFromConfig(read("config.env")).level, "operator");
+  assert.equal(JSON.parse(read("manifest.json")).level, "operator");
+});
+
+test("a second identical upgrade changes nothing and exits 0", () => {
+  const dir = scaffoldSupporter();
+  level(dir, "--set", "operator", "--price", "cumulus=25", "--stripe-key", "rk_x", "--yes");
+  const config = readFileSync(join(dir, "config.env"), "utf8");
+  const { out, code } = level(dir, "--set", "operator", "--price", "cumulus=25", "--yes");
+  assert.equal(code, 0);
+  assert.match(out, /nothing to change/);
+  assert.equal(readFileSync(join(dir, "config.env"), "utf8"), config);
+});
+
+test("⭐ a below-floor price is refused and NOTHING is written", () => {
+  const dir = scaffoldSupporter();
+  const before = readFileSync(join(dir, "config.env"), "utf8");
+  const { out, code } = level(dir, "--set", "operator", "--price", "cumulus=1", "--yes");
+  assert.equal(code, 1);
+  assert.match(out, /below the \$7\.00 floor/);
+  assert.match(out, /Nothing was written/);
+  assert.equal(readFileSync(join(dir, "config.env"), "utf8"), before, "a rejected run must not half-apply");
+});
+
+test("--dry-run prints the same diff it would apply, and writes nothing", () => {
+  const dir = scaffoldSupporter();
+  const before = readFileSync(join(dir, "config.env"), "utf8");
+  const dry = level(dir, "--set", "operator", "--price", "cumulus=25", "--dry-run");
+  assert.equal(dry.code, 0);
+  assert.match(dry.out, /PROVIDER_LEVEL: supporter → operator/);
+  assert.match(dry.out, /nothing written/);
+  assert.equal(readFileSync(join(dir, "config.env"), "utf8"), before);
+});
+
+test("the downgrade clears the prices, keeps Stripe, and says what it cannot see", () => {
+  const dir = scaffoldSupporter();
+  level(dir, "--set", "operator", "--price", "cumulus=25", "--stripe-key", "rk_x", "--stripe-webhook", "whsec_x", "--yes");
+  const stripeLines = (): string[] =>
+    readFileSync(join(dir, "secrets.env"), "utf8").split("\n").filter((l) => l.startsWith("STRIPE_"));
+  const before = stripeLines();
+
+  const { out, code } = level(dir, "--set", "supporter", "--yes");
+  assert.equal(code, 0, out);
+  const config = readFileSync(join(dir, "config.env"), "utf8");
+  assert.match(config, /^PROVIDER_LEVEL=supporter$/m);
+  assert.match(config, /^TIER_PRICES_JSON=\{\}$/m);
+  assert.deepEqual(stripeLines(), before, "the webhook secret Stripe showed once must survive");
+  assert.match(out, /cannot see your live rentals/);
+});
+
+test("⭐ doctor reports both halves of a level that disagrees with what is for sale", () => {
+  const operatorNoTiers = runDoctor({
+    configEnv: "PROVIDER_LEVEL=operator\nTIER_PRICES_JSON={}\n",
+  });
+  assert.ok(operatorNoTiers.findings.some((f) => f.rule === "LEVEL_OPERATOR_NO_TIERS"));
+
+  const supporterWithPrices = runDoctor({
+    configEnv: 'PROVIDER_LEVEL=supporter\nTIER_PRICES_JSON={"cumulus":2500}\n',
+  });
+  assert.ok(supporterWithPrices.findings.some((f) => f.rule === "LEVEL_SUPPORTER_WITH_PRICES"));
+
+  // ...and neither fires when the two agree, in either direction.
+  for (const configEnv of [
+    'PROVIDER_LEVEL=operator\nTIER_PRICES_JSON={"cumulus":2500}\n',
+    "PROVIDER_LEVEL=supporter\nTIER_PRICES_JSON={}\n",
+  ]) {
+    assert.equal(
+      runDoctor({ configEnv }).findings.filter((f) => f.rule.startsWith("LEVEL_")).length,
+      0,
+      `a consistent config must not be flagged: ${configEnv}`
+    );
+  }
+});
