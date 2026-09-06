@@ -9,7 +9,7 @@ import { generateEd25519, signManifestBody } from "./signing";
 import { signFluxMessage } from "./wallet";
 import { manifestOwnerMessage, type ProviderManifest } from "./manifest";
 
-// `mt-manifest verify` is the command an operator reaches for when they suspect a
+// `fh-toolkit verify` is the command an operator reaches for when they suspect a
 // bad manifest, so a false FAILED sends them re-signing a manifest that was fine.
 // It once passed the raw payload straight to verifyManifestObject, which could only
 // fail on an 'authorize' wrapper (no top-level `signature`). These drive the real

@@ -1,6 +1,6 @@
 # Flux Hub Operator Toolkit
 
-Reference for the two commands an operator types: **`mt-manifest`** (scaffold, sign,
+Reference for the two commands an operator types: **`fh-toolkit`** (scaffold, sign,
 validate, assemble) and **`mt-agent`** (the long-running agent, plus its preflight).
 
 This is a *reference*, not a runbook. It answers "what does this flag do, what does this
@@ -8,40 +8,43 @@ command read and write, what happens if I get it wrong". For the ordered from-ze
 walkthrough, see [`operator-onboarding.md`](operator-onboarding.md). For what each file in
 your operator directory *is*, see [`FluxHub-overview.md`](FluxHub-overview.md).
 
-> **On the names.** The platform is **Flux Hub**; these docs use that name throughout.
-> The binaries, images and environment variables are still `mt-*` (`mt-manifest`,
-> `mt-agent`, `MT_BASE_URL`, `MT_PUBKEY`) and will keep those names until the rename
-> ships. **Every command in this document is literal** — type it exactly as written.
+> **On the names.** The platform is **Flux Hub**, and the toolkit is **`fh-toolkit`**
+> (renamed from `mt-manifest`: only two of its commands were ever about manifests).
+> The agent is still **`mt-agent`**, and the environment variables are still `MT_*`
+> (`MT_BASE_URL`, `MT_PUBKEY`) — that is deliberate, not an oversight. They point at an
+> unchanged endpoint and are read across three repos, so renaming them would buy nothing
+> and cost a coordinated migration. **Every command in this document is literal** — type
+> it exactly as written.
 
 ---
 
 ## The two tools at a glance
 
-| | `mt-manifest` | `mt-agent` |
+| | `fh-toolkit` | `mt-agent` |
 |---|---|---|
-| Image | `ghcr.io/w2vy/mt-manifest:latest` | `w2vy/mt-agent:latest` |
+| Image | `ghcr.io/w2vy/fh-toolkit:latest` | `w2vy/mt-agent:latest` |
 | Lifetime | one-shot, run by hand | long-running daemon |
 | Runs where | your agent host, in your operator directory | same host, via `compose.yaml` |
 | Holds secrets | no — your key is generated into the mounted directory, never baked in | yes — Proxmox token, manifest key |
 | Network | offline by default; only the `--check-*` flags reach out | outbound only, always |
 
-`mt-manifest` produces the files. `mt-agent` consumes two of them (`.env.operator`,
+`fh-toolkit` produces the files. `mt-agent` consumes two of them (`.env.operator`,
 `data/inventory.json`) and does the work.
 
 ---
 
 ## Running them
 
-### `mt-manifest` — define it as a shell function
+### `fh-toolkit` — define it as a shell function
 
 ⚠️ **A function, not an alias.** An alias does not expand when it appears as an argument
 to another command, so wrapping it (in a script, `time`, `sudo`, `watch`, a capture
 harness) fails with `command not found`.
 
 ```sh
-mt-manifest() {
-  local img=ghcr.io/w2vy/mt-manifest:latest
-  local stamp="${XDG_CACHE_HOME:-$HOME/.cache}/mt-manifest.pulled"
+fh-toolkit() {
+  local img=ghcr.io/w2vy/fh-toolkit:latest
+  local stamp="${XDG_CACHE_HOME:-$HOME/.cache}/fh-toolkit.pulled"
   # `--refresh` is consumed HERE and never passed on: the CLI runs inside the container
   # and cannot pull its own image. Alone it pulls and stops; followed by a command it
   # pulls and then runs it. A failed pull aborts rather than quietly using the old image.
@@ -59,22 +62,32 @@ mt-manifest() {
       echo "note: could not refresh $img — using the cached image" >&2
     fi
   fi
+  # -t only when both ends really are a terminal. With it, `init`'s prompts and the
+  # interactive session behave; without the guard, the same function inside a script or
+  # a pipeline dies with "the input device is not a TTY".
+  local tty=""
+  [ -t 0 ] && [ -t 1 ] && tty="-t"
   # /etc/hosts read-only so hostnames resolve inside the container as they do at your
   # prompt — see the caveat in operator-onboarding.md Step 0.5 for the loopback edge.
-  docker run --rm -i -v "$PWD:/work" -v /etc/hosts:/etc/hosts:ro -u "$(id -u):$(id -g)" "$img" "$@"
+  docker run --rm -i $tty -v "$PWD:/work" -v /etc/hosts:/etc/hosts:ro -u "$(id -u):$(id -g)" "$img" "$@"
 }
 ```
 
-`mt-manifest --refresh` forces the pull the stamp would otherwise defer — alone it pulls
-and stops, and followed by a command (`mt-manifest --refresh doctor --check-hub`) it pulls
+`fh-toolkit --refresh` forces the pull the stamp would otherwise defer — alone it pulls
+and stops, and followed by a command (`fh-toolkit --refresh doctor --check-hub`) it pulls
 and then runs it. It has to live in the wrapper: the CLI runs *inside* the container and
 cannot replace its own image.
 
-Three things in that wrapper are load-bearing:
+Four things in that wrapper are load-bearing:
 
 - **`-i`** — without it the container gets no stdin and `init`, the only subcommand that
   asks questions, prints its first prompt and exits at EOF with no error. Every other
   subcommand still works, so the tool looks half-broken rather than mis-invoked.
+- **the guarded `-t`** — `-i` gives the container stdin; `-t` gives it a *terminal*, which
+  is what makes prompts redraw, input echo sanely and the interactive session usable. It
+  is guarded because `-t` on something that is not a terminal fails outright with "the
+  input device is not a TTY" — so the same function keeps working inside a script or a
+  pipeline, where it silently drops to `-i` alone.
 - **`-v "$PWD:/work"`** — the container's `/work` *is* your operator directory. Every
   path default below (`.`) resolves there, which is why the commands take no arguments
   when you run them in the right place.
@@ -85,11 +98,11 @@ Three things in that wrapper are load-bearing:
   instead, drop the block and add `--pull always` to the `docker run`.
 
   Because of that window, a change that has merged can be up to two days from reaching
-  your box. `mt-manifest version` says which build is actually answering:
+  your box. `fh-toolkit version` says which build is actually answering:
 
   ```console
-  $ mt-manifest version
-  mt-manifest 0.1.0
+  $ fh-toolkit version
+  fh-toolkit 0.1.0
     build   9c6f819c8600429701eeb50640cf3ca30ae1fe41
     built   2026-08-24T19:42:00Z
   ```
@@ -100,7 +113,7 @@ Three things in that wrapper are load-bearing:
 
 ### `mt-agent` — compose, written for you
 
-`mt-manifest init` writes `compose.yaml` (pinned image, `./data` mounted read-only, its
+`fh-toolkit init` writes `compose.yaml` (pinned image, `./data` mounted read-only, its
 own project name, no published ports):
 
 ```sh
@@ -122,9 +135,9 @@ you first pulled — indefinitely. To take a newer build:
 docker compose pull && docker compose up -d --force-recreate
 ```
 
-The `mt-manifest` function above does this for you with its 48-hour stamp file; the agent
+The `fh-toolkit` function above does this for you with its 48-hour stamp file; the agent
 and the Coalition do not. Because the tag moves, **your files no longer record which build
-is live** — `mt-manifest doctor --check-hub` reports the deployed Coalition build, and that
+is live** — `fh-toolkit doctor --check-hub` reports the deployed Coalition build, and that
 is what replaces a version pin. For a run you need to reproduce byte-for-byte, deploy a
 digest (`w2vy/coalition@sha256:…`) instead of a tag.
 
@@ -137,15 +150,19 @@ docker run --rm --env-file .env.operator -v "$PWD/data:/data:ro" \
 
 ---
 
-# `mt-manifest`
+# `fh-toolkit`
 
 ```
-mt-manifest <keygen|init|doctor|sign|env|verify|authorize> [options]
+fh-toolkit <keygen|init|doctor|sign|env|verify> [options]   # one command, then exit
+fh-toolkit                                                  # an interactive session
 ```
 
-`mt-manifest help` (also `--help`, `-h`, or no subcommand at all) prints the whole command
-list, `doctor`'s live-check flags, and a pointer back to this document — exit 0. An unknown
-subcommand prints the same list and exits 1.
+`fh-toolkit help` (also `--help` or `-h`) prints the whole command list, `doctor`'s
+live-check flags, and a pointer back to this document — exit 0. An unknown subcommand
+prints the same list and exits 1.
+
+**With no arguments at all it opens an interactive session** — see
+[Interactive session](#interactive-session) below.
 
 **Every path option defaults to the file `init` wrote in the current directory.** Standing
 in your operator directory, `doctor`, `sign` and `env` take no arguments at all.
@@ -158,15 +175,78 @@ in your operator directory, `doctor`, `sign` and `env` take no arguments at all.
 | `sign` | re-sign after a `config.env` edit | `config.env`, key | `manifest.json` |
 | `env` | assemble the Flux environment blob | config + secrets + manifest | `env.json` |
 | `verify` | re-check a signature you were handed | a manifest | — |
-| `authorize` | LEGACY owner-signature wrapper | a manifest | `signed-manifest.json` |
 | `help` | the whole command list | — | — |
+
+---
+
+## Interactive session
+
+```
+fh-toolkit          # no arguments, and a terminal
+```
+
+Opens a session that runs the same commands, in one container, keeping state between
+them:
+
+```console
+$ fh-toolkit
+fh-toolkit 0.1.0
+  build   4de297f…  built 2026-09-06T14:02:11Z
+directory: /work
+`help` lists the commands. `exit` or Ctrl-D leaves.
+
+fh-toolkit> keygen
+Wrote manifest-key.pem (KEEP SECRET — this signs your manifest).
+...
+
+fh-toolkit> init
+...
+
+fh-toolkit> doctor
+...
+
+fh-toolkit> exit
+bye
+```
+
+**What it is for.** Three things a one-shot invocation cannot do:
+
+- **A real terminal.** `init` is the only command that asks questions, and it needs a TTY
+  to ask them properly. One `docker run -it` per session settles that once.
+- **State carried between commands.** The tier minimums are fetched from Flux Hub once
+  per base URL instead of once per command, so `init` then `doctor` makes one network
+  call, not two.
+- **One mount decision** instead of one per command.
+
+**What it is not.** It is the same commands with state, not a shell. There is no `cd`,
+no shell-out, no `!` escape, no globbing. The directory is **pinned** at start — the
+mount *is* the directory — and every path option still defaults to it, so the commands
+read exactly as they do at your prompt.
+
+A command that fails ends the *command*, not the session: you get `error: …` and the next
+prompt. That is the point of a session — a typo in `sign` should not throw away a fetched
+tier table and make you re-enter the container.
+
+`--refresh` is not a session command. It belongs to the shell function, because the CLI
+runs inside the container and cannot replace its own image; run `fh-toolkit --refresh`
+from your prompt instead.
+
+**History** is kept in `.fh-toolkit-history` in the pinned directory, mode 0600, most
+recent last. It holds no secrets — every option that takes a value takes a *path*
+(`--key`, `--secrets`, `--in`, `--out`), never key material — but it is per-machine
+scratch, so both `.gitignore` and `.dockerignore` exclude it.
+
+⚠️ **No arguments and no terminal is an error, not a session.** It prints usage and exits
+1. Opening a session on a pipe would read EOF and vanish, which is how a wrapper missing
+`-t` used to make `init` look half-broken rather than mis-invoked. If you see it, your
+wrapper predates the guarded `-t` — re-paste it from the top of this document.
 
 ---
 
 ## `keygen`
 
 ```
-mt-manifest keygen [--out <dir>] [--force]
+fh-toolkit keygen [--out <dir>] [--force]
 ```
 
 Generates an ed25519 keypair. Writes `manifest-key.pem` (mode 0600 — **KEEP SECRET**;
@@ -192,7 +272,7 @@ silently repointing it is how a rotation loses the old key.
 ## `init`
 
 ```
-mt-manifest init [--out <dir>] [--answers <answers.json>] [--force]
+fh-toolkit init [--out <dir>] [--answers <answers.json>] [--force]
 ```
 
 The installation interview. Roughly eight questions, then it writes and **signs** the
@@ -295,14 +375,14 @@ not expressible. This is unrelated to a *free rental*, which is a rental an admi
 
 ⚠️ **The signed manifest is a snapshot of `config.env`.** Edit `config.env` afterwards and
 it is stale — `doctor` compares the two and says so, which is what makes signing
-automatically here safe. The fix is `mt-manifest sign`.
+automatically here safe. The fix is `fh-toolkit sign`.
 
 ---
 
 ## `doctor`
 
 ```
-mt-manifest doctor [--dir <dir>] [--check-stripe] [--check-proxmox] [--check-hub]
+fh-toolkit doctor [--dir <dir>] [--check-stripe] [--check-proxmox] [--check-hub]
 ```
 
 The onboarding "which value must match where" table, executed. Exits **non-zero** on any
@@ -392,14 +472,14 @@ until a customer's checkout fails.
 ## `sign`
 
 ```
-mt-manifest sign [--dir <dir>] [--key <pem>]
+fh-toolkit sign [--dir <dir>] [--key <pem>]
                  [--from-config <config.env> | --in <body.json>]
                  [--out <manifest.json>] [--stdout]
 ```
 
 Renders the manifest body from `config.env`, fills in `pubkey` and `publishedAt`, signs
 it, and writes the full manifest. **In your operator directory this is just
-`mt-manifest sign`** — that is the command you type most often, because it is what
+`fh-toolkit sign`** — that is the command you type most often, because it is what
 `doctor` tells you to run after any `config.env` edit.
 
 | Option | Default | Meaning |
@@ -424,7 +504,7 @@ are *not* in the signed manifest: change them, re-run `env`, re-import — no re
 ## `env`
 
 ```
-mt-manifest env [--dir <dir>] [--from-config <config.env>] [--secrets <secrets.env>]
+fh-toolkit env [--dir <dir>] [--from-config <config.env>] [--secrets <secrets.env>]
                 [--manifest <manifest.json>] [--out <env.json>] [--stdout]
 ```
 
@@ -434,7 +514,7 @@ strings. In a finished scaffold it needs no arguments. Output is mode **0600** a
 
 It verifies the manifest signature *before* shipping it, so a placeholder or tampered
 manifest is refused rather than deployed. `--manifest` accepts a bare manifest **or** an
-`authorize` wrapper; a wrapper's owner signature is verified too, and the whole object
+owner-signed wrapper; a wrapper's owner signature is verified too, and the whole object
 ships verbatim so the owner authorization reaches FH intact. If `config.env`'s
 `OWNER_ADDRESS` differs from a wrapper's `ownerAddress`, it warns and ships the signed
 manifest's owner.
@@ -459,11 +539,11 @@ rather than dropped, since dropping a key you deliberately set is its own silent
 ## `verify`
 
 ```
-mt-manifest verify --in <manifest.json>
+fh-toolkit verify --in <manifest.json>
 ```
 
 Re-verifies a signed manifest. Accepts either shape you can hold — a bare manifest, or an
-`authorize` wrapper, whose owner signature is checked as well (verifying a wrapper's top
+owner-signed wrapper, whose owner signature is checked as well (verifying a wrapper's top
 level could only ever fail, which used to tell operators their valid manifest was broken).
 
 ```
@@ -475,22 +555,15 @@ FAILED — owner wallet signature does not verify against ownerAddress
 
 ---
 
-## `authorize` *(legacy)*
+## There is no `authorize`
 
-```
-mt-manifest authorize --in <manifest.json>
-mt-manifest authorize --in <manifest.json> --signature <b64> --out <signed-manifest.json>
-```
+It used to wrap a signed manifest and your wallet signature into a
+`SignedProviderManifest`. **The `/onboard` web flow does that now** — you sign in the
+browser and Flux Hub builds the wrapper itself — so the command was removed.
 
-⚠️ **The `/onboard` web flow is the supported path.** `authorize` remains for the
-URL-fetch ingest path.
-
-Two steps, because a one-shot container has no browser. The first prints the exact
-message to sign, the owner address, and a Zelcore deep link. The second validates your
-signature against the manifest's `ownerAddress` and emits the `SignedProviderManifest`.
-
-The wrapper embeds the **raw** manifest, not a schema-parsed copy — zod defaults would add
-fields and break the detached signature FH re-derives.
+Nothing you already hold stops working. `verify` and `env` both still accept either
+shape, a bare manifest or an owner-signed wrapper, and check the owner signature when
+one is present. What you submit at `/onboard` is the **bare** `manifest.json`.
 
 ---
 
@@ -509,7 +582,7 @@ agent, enable Proxmox clustering; the agent detects cluster mode automatically.
 
 ## `mt-agent doctor`
 
-The **credentialed** half of onboarding validation. `mt-manifest doctor` proves the files
+The **credentialed** half of onboarding validation. `fh-toolkit doctor` proves the files
 agree with each other but is deliberately secret-free and cannot ask the hypervisor
 anything; these checks need the Proxmox token, which lives here and nowhere else.
 Read-only — no VM is created — and exits non-zero on any failure, so it gates a bring-up
@@ -551,12 +624,12 @@ configuration. **Reading the startup banner**, below, decodes each field.
 ⚠️ **The courier switches itself off silently** unless `MANIFEST_KEY` **and**
 `COALITION_URL` **and** `OWNER_ADDRESS` are all set. There is no warning — you simply never
 receive authorization requests, and deletes and reprovisions sit forever.
-(`mt-manifest doctor` catches this as `COURIER_SILENT_OFF`.)
+(`fh-toolkit doctor` catches this as `COURIER_SILENT_OFF`.)
 
 ## Operating the agent
 
 `init` writes `compose.yaml`, so day-to-day operation is plain compose in your operator
-directory. There is no `mt-manifest start` — and deliberately so: `mt-manifest` runs as a
+directory. There is no `fh-toolkit start` — and deliberately so: `fh-toolkit` runs as a
 container with only your working directory mounted, and giving it control of the host's
 Docker would mean handing `/var/run/docker.sock` to the one tool that holds your signing
 key. Compose is already the right interface.
@@ -596,9 +669,9 @@ configuration. Read it before anything else:
 
 ### When something is wrong
 
-1. `mt-manifest doctor` — do the files still agree? Changes nothing; its last line is
+1. `fh-toolkit doctor` — do the files still agree? Changes nothing; its last line is
    usually the command to run next.
-2. `mt-manifest doctor --check-proxmox --check-hub` — do the credentials still work?
+2. `fh-toolkit doctor --check-proxmox --check-hub` — do the credentials still work?
 3. `docker compose logs --tail 50` — and read the banner above.
 
 | Symptom | Cause |
@@ -609,7 +682,7 @@ configuration. Read it before anything else:
 | `self-signed certificate in certificate chain` | the image is missing its CA store; not your network, not Proxmox |
 | inventory edits have no effect | `data/` was mounted as a file, not a directory |
 | your listing vanished from Flux Hub | agent or Coalition unreachable; FH hides it and restores it on its own |
-| checkout 502s | Coalition price ≠ listing price (`mt-manifest doctor`) |
+| checkout 502s | Coalition price ≠ listing price (`fh-toolkit doctor`) |
 | checkout 401s | `MT_PUBKEY` empty in the Coalition's environment |
 
 ---
@@ -666,3 +739,4 @@ store. It is not a middlebox on your network and not a Proxmox certificate probl
 | Checkout is failing and nothing looks wrong | `doctor --check-hub --check-stripe` |
 | I changed `.env.operator` | `docker compose up -d --force-recreate` |
 | Someone handed me a manifest | `verify --in <file>` |
+| Several of the above, back to back | `fh-toolkit` with no arguments — one session |

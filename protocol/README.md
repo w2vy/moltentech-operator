@@ -39,11 +39,11 @@ non-TS consumer.
 - **`Job` carries no hypervisor creds** — the agent injects its own.
 - **Idempotency** via `PaymentEvent.stripeEventId` and `CheckoutInitRequest.idempotencyKey`.
 
-## Signing CLI (`mt-manifest`)
+## Signing CLI (`fh-toolkit`)
 
 Operator tooling to produce a signed Provider Manifest (shares this package's
 ed25519 + canonicalization, so it always verifies on FH's side). Ships as the
-published image **`ghcr.io/w2vy/mt-manifest`** so operators need no source checkout
+published image **`ghcr.io/w2vy/fh-toolkit`** so operators need no source checkout
 or Node — it's secret-free (your key is generated into the mounted workdir, never
 baked in):
 
@@ -52,28 +52,27 @@ baked in):
 # command. The -i is required — without stdin, `init` prints one prompt and exits at EOF.
 # `docker run` never re-pulls, so refresh the image every 48h (see the onboarding doc for
 # the stamp-file version); --pull always is the one-liner alternative.
-mt-manifest() { docker run --rm -i --pull always -v "$PWD:/work" -u "$(id -u):$(id -g)" ghcr.io/w2vy/mt-manifest "$@"; }
-mt-manifest keygen                                                       # -> manifest-key.pem (KEEP SECRET) + pubkey
-mt-manifest sign --key manifest-key.pem --from-config config.env --out manifest.json
-mt-manifest verify --in manifest.json
+fh-toolkit() { docker run --rm -i --pull always -v "$PWD:/work" -u "$(id -u):$(id -g)" ghcr.io/w2vy/fh-toolkit "$@"; }
+fh-toolkit keygen                                                       # -> manifest-key.pem (KEEP SECRET) + pubkey
+fh-toolkit sign --key manifest-key.pem --from-config config.env --out manifest.json
+fh-toolkit verify --in manifest.json
 
-# Owner-authorize: prove you control config.env's OWNER_ADDRESS (two steps — the
-# first prints the message + a Zelcore deep link, then you re-run with the signature)
-mt-manifest authorize --in manifest.json
-mt-manifest authorize --in manifest.json --signature <base64> --out signed-manifest.json
+# Owner proof happens in the browser: paste manifest.json at /onboard and sign there.
+# Flux Hub builds the {manifest, ownerSignature} wrapper itself.
 
-mt-manifest env  --from-config config.env --secrets secrets.env --manifest signed-manifest.json --out env.json
+fh-toolkit env  --from-config config.env --secrets secrets.env --manifest manifest.json --out env.json
 ```
 
-Commands: `keygen` (ed25519 keypair); `sign` (canonical-sign the manifest —
-`--from-config config.env` is the current flow; legacy `init` + `--in
-manifest.body.json` still work); `verify`; `authorize` (wallet-sign the manifest so
-FH ingests it **owner-verified** — turns its blind-TOFU pubkey pin into proven
-ownership, auto-accepts a later key rotation from the same owner, and auto-issues
-your agent/coalition keys on a first ingest); and `env` (assemble the Coalition's
-Flux `env.json` = config + secrets + embedded signed manifest). `env` takes either a
-bare manifest or the `authorize` wrapper and ships it whole, so the owner signature
-reaches FH. `sign` stamps `pubkey`
+Commands: `keygen` (ed25519 keypair); `init` (interview → the whole scaffold); `sign`
+(canonical-sign the manifest — `--from-config config.env` is the current flow; `--in
+manifest.body.json` still works); `doctor` (prove the files agree, and optionally the
+live wiring); `verify`; and `env` (assemble the Coalition's Flux `env.json` = config +
+secrets + embedded signed manifest). Run it with no arguments for an interactive
+session. Owner proof is the `/onboard` web flow's job — you wallet-sign in the browser,
+which turns FH's blind-TOFU pubkey pin into proven ownership, auto-accepts a later key
+rotation from the same owner, and auto-issues your agent/coalition keys on a first
+ingest. `env` takes either a bare manifest or an owner-signed wrapper and ships it
+whole, so an owner signature you were handed still reaches FH. `sign` stamps `pubkey`
 (from the key) + a fresh `publishedAt`, schema-validates, signs the canonical bytes,
 and self-verifies. Publish `manifest.json` at the Coalition's
 `/.well-known/mt-provider.json`; the FH admin ingests that URL.

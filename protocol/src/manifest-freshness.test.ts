@@ -11,7 +11,7 @@ import { verifyManifestObject } from "./signing";
 /**
  * `init` now signs manifest.json itself. It used to stop one command short: the closing
  * steps said "paste your manifest at /onboard" while no manifest existed anywhere on
- * disk, and the missing `mt-manifest sign` was documented only in the runbook.
+ * disk, and the missing `fh-toolkit sign` was documented only in the runbook.
  *
  * Signing automatically buys a new failure mode, and these tests are the price of it.
  * A signed manifest is a SNAPSHOT of config.env; edit config.env afterwards and the file
@@ -93,7 +93,7 @@ test("⭐ editing config.env after signing is an ERROR that names what moved", (
   assert.match(stale.message, /trialDays/);
   // The FIX belongs in the headline, not buried at the end of the diagnosis — this is the
   // line the operator scans the report for.
-  assert.match(stale.summary!, /mt-manifest sign/);
+  assert.match(stale.summary!, /fh-toolkit sign/);
   assert.match(stale.summary!, /trialDays/);
 });
 
@@ -142,7 +142,7 @@ test("doctor with no manifest.json says nothing about it — mid-onboarding is n
  * `env` is the last command between a finished scaffold and a deployable Flux app, and
  * it used to be the longest to type: three required paths, all naming files `init` had
  * just written into the directory you were standing in. The runbook's own instruction —
- * "run `mt-manifest env`" — did not work as written.
+ * "run `fh-toolkit env`" — did not work as written.
  */
 
 test("⭐ `env` needs no arguments in a scaffold directory", () => {
@@ -176,7 +176,7 @@ test("a missing file names WHICH file and where env expected it", () => {
 });
 
 test("⭐ `sign` needs no arguments either — it is the command doctor tells you to run", () => {
-  // MANIFEST_STALE's headline says "re-run `mt-manifest sign`". That has to be the whole
+  // MANIFEST_STALE's headline says "re-run `fh-toolkit sign`". That has to be the whole
   // command, or the headline is a lie and the operator is back to copying three paths.
   const dir = scaffold();
   writeFileSync(join(dir, "config.env"), read(dir, "config.env").replace(/^TRIAL_DAYS=.*$/m, "TRIAL_DAYS=5"));

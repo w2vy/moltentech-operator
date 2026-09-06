@@ -117,7 +117,7 @@ export type ProviderManifest = z.infer<typeof ProviderManifest>;
  * onboarding payload that turns MT's blind-TOFU pubkey pin into *proven* ownership.
  * Ingest of this variant unlocks auto-accepted pubkey rotation (same owner) and
  * zero-click key issuance; a bare `ProviderManifest` still ingests via the legacy
- * path. Produced by `mt-manifest authorize`; verified by `verifyManifestOwnerSignature`.
+ * path. Produced by `fh-toolkit authorize`; verified by `verifyManifestOwnerSignature`.
  */
 export const SignedProviderManifest = z.object({
   manifest: ProviderManifest,
@@ -128,7 +128,7 @@ export type SignedProviderManifest = z.infer<typeof SignedProviderManifest>;
 
 /**
  * The exact, human-readable string the operator's wallet signs to authorize a
- * manifest's identity. Deterministic (the `mt-manifest authorize` signer and MT's
+ * manifest's identity. Deterministic (the `fh-toolkit authorize` signer and MT's
  * verifier derive identical bytes) and readable (the owner reviews slug/pubkey/owner
  * in-wallet before signing). Mirrors the `ownerAuthMessage` pattern in `messages.ts`.
  *
@@ -156,7 +156,7 @@ export function manifestOwnerMessage(m: ProviderManifest): string {
  * `ownerSignature` is present, `verifyManifestOwnerSignature` (owner wallet).
  *
  * The single source of the on-the-wire wrapper shape, reused by every consumer of a
- * published manifest (MT ingest, the `mt-manifest env` bundler, the Coalition console)
+ * published manifest (MT ingest, the `fh-toolkit env` bundler, the Coalition console)
  * so the detection lives in exactly one place.
  */
 export function unwrapManifest(raw: unknown): { manifest: unknown; ownerSignature?: string } {

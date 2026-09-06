@@ -15,7 +15,7 @@ export type CoalitionConfig = {
   /**
    * Ed25519 private key the Coalition SIGNS its four outbound reports to MT with
    * (Phase D) — base64 of the raw 32-byte seed, as `issueProviderKeys` hands it over
-   * at onboarding, or base64 of a PKCS#8 PEM from `mt-manifest coalition-keygen`.
+   * at onboarding, or base64 of a PKCS#8 PEM from `fh-toolkit coalition-keygen`.
    *
    * SECRET. Optional on purpose: unset keeps the legacy `AGENT_KEY` bearer, which is
    * what lets operators cut over one at a time. Distinct from the agent's MANIFEST_KEY

@@ -39,7 +39,7 @@ test("⭐ --refresh reaching the CLI is diagnosed, not answered with `unknown co
   assert.match(out, /shell function/i);
   // The escape hatch has to be here — an operator whose wrapper is broken cannot use
   // the wrapper to fix the wrapper.
-  assert.match(out, /docker pull ghcr\.io\/w2vy\/mt-manifest:latest/);
+  assert.match(out, /docker pull ghcr\.io\/w2vy\/fh-toolkit:latest/);
   // It must NOT silently degrade into the usage list, which reads as "flag accepted".
-  assert.doesNotMatch(out, /^usage: mt-manifest/m);
+  assert.doesNotMatch(out, /^usage: fh-toolkit/m);
 });

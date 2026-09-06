@@ -356,7 +356,7 @@ test("a live-minimums run does not print the stale-copy note", () => {
 });
 
 test("doctor catches the price MAP written where the listing ARRAY belongs", () => {
-  // The exact defect `mt-manifest init` shipped: the agent exits at startup with a
+  // The exact defect `fh-toolkit init` shipped: the agent exits at startup with a
   // ZodError and asserts nothing, so no later symptom points back here.
   const report = runDoctor({
     configEnv: 'PROVIDER_SLUG=acme\nTIER_PRICES_JSON={"cumulus":700}\n',

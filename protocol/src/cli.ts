@@ -1,6 +1,6 @@
 #!/usr/bin/env -S npx tsx
 /**
- * mt-manifest — operator tooling to generate a signing key and produce a SIGNED
+ * fh-toolkit — operator tooling to generate a signing key and produce a SIGNED
  * Provider Manifest for MoltenTech onboarding. Uses the same canonicalization +
  * ed25519 as MT's verifier (./signing), so a manifest this signs always verifies.
  *
@@ -22,7 +22,7 @@
  *   sign   [--dir <dir>] [--key <pem>] [--from-config <config.env>] [--in <body.json>]
  *          [--out <manifest.json>] [--stdout]
  *                                       every path defaults to the file `init` wrote in <dir>,
- *                                       so re-signing after a config edit is `mt-manifest sign`.
+ *                                       so re-signing after a config edit is `fh-toolkit sign`.
  *                                       render body (from config.env) or read body.json,
  *                                       fill pubkey + publishedAt, sign, emit full manifest
  *   env    [--dir <dir>] [--from-config <config.env>] [--secrets <secrets.env>]
@@ -32,24 +32,23 @@
  *                                       assemble the Flux "Import Environment Variables" blob (JSON array of
  *                                       "KEY=value"): non-secret config + secrets + the signed manifest as
  *                                       MANIFEST_JSON; passes TIER_PRICES_JSON through from config.env. --manifest may
- *                                       be a bare manifest OR an 'authorize' wrapper (owner-signed, shipped
+ *                                       be a bare manifest OR an owner-signed wrapper (shipped
  *                                       whole so MT ingests it owner-verified). Verifies the manifest (and any
  *                                       owner) signature first. Output contains SECRETS — never commit it.
  *   verify --in <manifest.json>         re-verify a signed manifest — accepts a bare manifest OR an
- *                                        'authorize' wrapper (whose owner signature is checked too)
- *   authorize --in <manifest.json>      LEGACY — the /onboard web flow is the supported path.
- *                                       Still serves the URL-fetch ingest path.
- *                                       print the owner-authorization message + a Zelcore
- *                                        deep link to sign (proves you control ownerAddress)
- *   authorize --in <manifest.json> --signature <b64> --out <signed-manifest.json>
- *                                        wrap the manifest + your wallet signature into the
- *                                        SignedProviderManifest MT ingests (proven identity)
+ *                                        owner-signed wrapper (whose owner signature is checked too)
+ *
+ * There is no `authorize` subcommand. It produced the owner-signed
+ * SignedProviderManifest wrapper; the /onboard web flow signs in the browser and Flux Hub
+ * builds the wrapper itself. Reading a wrapper is still fully supported — see `env` and
+ * `verify` above, which accept either shape.
  */
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { randomBytes } from "node:crypto";
 import { join, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
-import { ProviderManifest, ProviderManifestBody, manifestOwnerMessage, unwrapManifest } from "./manifest";
+import { ProviderManifest, ProviderManifestBody, unwrapManifest } from "./manifest";
 import { renderManifestBodyFromConfig, parseConfigEnv } from "./manifest-config";
 import {
   runDoctor,
@@ -81,7 +80,7 @@ import {
   slotLanIp,
   isIPv4,
   vmNameProblem,
-  SLUG_RE,
+  slugProblem,
   type LanNetwork,
   generateAll,
   GENERATED_PATHS,
@@ -98,7 +97,6 @@ import {
   type SlotAnswer,
 } from "./scaffold";
 import { verifyManifestOwnerSignature } from "./wallet";
-import { buildZelcoreSignLink } from "./sign-launcher";
 import {
   generateEd25519,
   exportPrivateKeyPem,
@@ -141,9 +139,63 @@ function noteUnproven(report: DoctorReport, scope: string, checks: ProbeResult[]
 }
 
 
+/**
+ * A command that could not do its job. Thrown rather than exited, because the
+ * interactive session has to survive one bad command and keep its state: an
+ * exit(1) inside a case would take the whole session down with it. The one-shot
+ * entry point turns it back into exit(1), so nothing changes for scripts and CI.
+ */
+export class CliError extends Error {}
+
 function die(msg: string): never {
-  console.error(`error: ${msg}`);
-  process.exit(1);
+  throw new CliError(msg);
+}
+
+/**
+ * What a session carries between commands. In one-shot mode it is built fresh for
+ * the single command and thrown away, so both modes run the same code path.
+ *
+ * `dir` is the pinned operator directory. A session resolves it once at start and
+ * every command's `--dir`/`--out` default resolves to it; a session cannot `cd`,
+ * because the mount is the directory and pretending otherwise invites paths that
+ * work at the prompt and not in the container.
+ */
+export type Ctx = {
+  dir: string;
+  interactive: boolean;
+  /**
+   * `fetchTierMinimums` is a network call `init` and `doctor` each make — and they do
+   * NOT agree on the base URL (`init` reads the environment, `doctor` reads the
+   * operator's own config.env), so the cache is keyed by URL rather than shared blind.
+   * Only successes are cached: a hub that was down for the first command should not be
+   * assumed down for the rest of the session.
+   */
+  tierMinimums?: Map<string, Record<string, number>>;
+};
+
+/**
+ * Which build is answering. Shared by `version` and the session banner: a session lasts
+ * long enough that "which image is this?" stops being obvious, and it is the first thing
+ * a bug report needs.
+ */
+function buildLine(): string {
+  const pkgVersion = ((): string => {
+    try {
+      const pkg = JSON.parse(readFileSync(join(import.meta.dirname, "..", "package.json"), "utf8"));
+      return typeof pkg.version === "string" ? pkg.version : "unknown";
+    } catch {
+      return "unknown";
+    }
+  })();
+  return formatBuildInfo(readBuildInfo(process.env, pkgVersion));
+}
+
+async function cachedTierMinimums(ctx: Ctx, baseUrl: string): Promise<Record<string, number> | null> {
+  const hit = ctx.tierMinimums?.get(baseUrl);
+  if (hit) return hit;
+  const fetched = await fetchTierMinimums(baseUrl);
+  if (fetched) (ctx.tierMinimums ??= new Map()).set(baseUrl, fetched);
+  return fetched;
 }
 
 /**
@@ -217,7 +269,7 @@ async function askAnswers(minimums: Record<string, number> = TIER_FLOORS_CENTS):
     }
   };
   try {
-    console.log("mt-manifest init — this writes every onboarding file from your answers.\n");
+    console.log("fh-toolkit init — this writes every onboarding file from your answers.\n");
 
     // Asked FIRST because it decides which of the later questions exist at all. A
     // Supporter is not a degenerate operator — it is the level most participants will
@@ -232,10 +284,9 @@ async function askAnswers(minimums: Record<string, number> = TIER_FLOORS_CENTS):
     const level: "supporter" | "operator" = levelAnswer.startsWith("1") ? "supporter" : "operator";
     console.log(`  → Flux Hub ${level === "supporter" ? "Supporter" : "Operator"}\n`);
 
-    const providerSlug = await askUntil("Provider slug (lowercase, PERMANENT once ingested)", (v) =>
-      SLUG_RE.test(v)
-        ? undefined
-        : "lowercase letters, digits and hyphens, 3-40 characters, not starting or ending with a hyphen."
+    const providerSlug = await askUntil(
+      "Provider slug (lowercase, PERMANENT once ingested)",
+      slugProblem
     );
     const providerName = await ask("Display name", providerSlug);
     const providerLocation = await ask("Location (shown on your marketplace card)", "");
@@ -292,7 +343,7 @@ async function askAnswers(minimums: Record<string, number> = TIER_FLOORS_CENTS):
       );
       if (proxmoxUrl.toLowerCase() === "skip") {
         proxmoxUrl = "";
-        console.log("  → skipped. Fill PROXMOX_* in .env.operator, then `mt-manifest doctor --check-proxmox`.");
+        console.log("  → skipped. Fill PROXMOX_* in .env.operator, then `fh-toolkit doctor --check-proxmox`.");
         break;
       }
       proxmoxTokenId = await ask("  PROXMOX_TOKEN_ID", proxmoxTokenId || "fluxhub@pve!agent");
@@ -324,7 +375,7 @@ async function askAnswers(minimums: Record<string, number> = TIER_FLOORS_CENTS):
       }
       const again = await ask("  → fix the above and retry, or `skip` to go on unverified", "retry");
       if (again.toLowerCase().startsWith("s")) {
-        console.log("  → going on unverified; re-run `mt-manifest doctor --check-proxmox` once it is fixed.");
+        console.log("  → going on unverified; re-run `fh-toolkit doctor --check-proxmox` once it is fixed.");
         break;
       }
     }
@@ -685,9 +736,7 @@ const BODY_TEMPLATE = {
   trustedSelfClaim: false,
 };
 
-async function main() {
-  const [cmd, ...args] = process.argv.slice(2);
-
+export async function runCommand(cmd: string | undefined, args: string[], ctx: Ctx): Promise<number> {
   switch (cmd) {
     case "coalition-keygen": {
       // Operator-held custody for the Phase D Coalition signing key. The DEFAULT path
@@ -715,7 +764,7 @@ async function main() {
         "\nOrder matters: MT must pin the public key BEFORE you set COALITION_SIGNING_KEY " +
           "and redeploy, or your Coalition signs with a key MT cannot verify and its reports 401."
       );
-      break;
+      return 0;
     }
     case "keygen": {
       const dir = flag(args, "--out") ?? ".";
@@ -750,7 +799,7 @@ async function main() {
             "update it by hand and re-onboard: MT still holds the old public half."
         );
       }
-      break;
+      return 0;
     }
     case "init": {
       // Replaces the vestigial body-template init: `sign --from-config` superseded
@@ -772,7 +821,7 @@ async function main() {
       const keyPath = join(dir, "manifest-key.pem");
       if (!existsSync(keyPath)) {
         die(
-          `${keyPath} not found. Run \`mt-manifest keygen\` first — your signing key is your ` +
+          `${keyPath} not found. Run \`fh-toolkit keygen\` first — your signing key is your ` +
             `provider identity, and init fills MANIFEST_KEY and MANIFEST_PUBKEY from it.`
         );
       }
@@ -794,7 +843,8 @@ async function main() {
 
       // Same rule as doctor: ask MT for the live minimums, fall back to the bundled
       // table. Done before the prompts so the wizard quotes the real floor.
-      const liveMinimums = await fetchTierMinimums(
+      const liveMinimums = await cachedTierMinimums(
+        ctx,
         process.env.MT_BASE_URL ?? "https://fluxhub.moltentech.us"
       );
       if (!liveMinimums) {
@@ -916,7 +966,7 @@ async function main() {
         .join(", ");
       console.log(`Wrote ${written} to ${where}\n`);
       // Only steps that are genuinely still OUTSTANDING belong in this list. It used to
-      // open with "1. mt-manifest keygen" — which init now requires to have happened
+      // open with "1. fh-toolkit keygen" — which init now requires to have happened
       // already — and with a base64-and-paste step init performs itself.
       // Pointed at explicitly: a generated README nobody is told about is a file nobody
       // opens, and this is the one written for the operator rather than for the tooling.
@@ -926,7 +976,7 @@ async function main() {
       console.log("  ✓ MANIFEST_PUBKEY pinned in .env.operator (`mt-agent doctor` now compares, not skips)");
       console.log("  ✓ SESSION_SECRET generated");
       console.log("  ✓ manifest.json signed — this is the file you paste at /onboard");
-      console.log("    (edit config.env later and it goes stale; re-run `mt-manifest sign`)\n");
+      console.log("    (edit config.env later and it goes stale; re-run `fh-toolkit sign`)\n");
       console.log("Next, in order:");
       console.log(`  1. open ${answers.mtBaseUrl}/onboard, paste manifest.json, sign with ${answers.ownerAddress}`);
       console.log("     → issues AGENT_KEY, COALITION_KEY, COALITION_SIGNING_KEY for secrets.env");
@@ -941,15 +991,15 @@ async function main() {
       // operator can act on: the app needs an environment, and nothing here said where it
       // comes from or that a command builds it. It is also the LAST thing that reads
       // secrets.env, so it belongs after /onboard has filled it in.
-      console.log("  3. `mt-manifest doctor`   ← run it here; it checks every file agrees");
-      console.log("  4. `mt-manifest env`      → env.json, the Flux \"Import Environment Variables\" blob");
+      console.log("  3. `fh-toolkit doctor`   ← run it here; it checks every file agrees");
+      console.log("  4. `fh-toolkit env`      → env.json, the Flux \"Import Environment Variables\" blob");
       console.log("     built from config.env + secrets.env + manifest.json. CONTAINS SECRETS.");
       console.log("     then `docker compose up -d` here to start the agent (compose.yaml is written)");
       console.log(`  5. deploy Flux app "${answers.fluxAppName}" as an ENTERPRISE app, import env.json`);
       console.log(`     → ${coalitionUrlFor(answers.fluxAppName)}`);
       console.log("     ⚠️  enterprise, not standard: a standard Flux app's environment is");
       console.log("         WORLD-READABLE, and yours holds your Stripe key.");
-      break;
+      return 0;
     }
     case "doctor": {
       // The runbook's "which value must match where" table, executed. File-level by
@@ -970,7 +1020,7 @@ async function main() {
       // set, and a copy in this repo is only a fallback. MT_BASE_URL is read from the
       // operator's own config so no flag is needed.
       const mtBaseUrl = configText ? parseConfigEnv(configText).MT_BASE_URL : undefined;
-      const tierMinimums = mtBaseUrl ? ((await fetchTierMinimums(mtBaseUrl)) ?? undefined) : undefined;
+      const tierMinimums = mtBaseUrl ? ((await cachedTierMinimums(ctx, mtBaseUrl)) ?? undefined) : undefined;
       const report = runDoctor({
         configEnv: configText,
         secretsEnv: read("secrets.env"),
@@ -1098,8 +1148,8 @@ async function main() {
       }
       const { text, ok } = formatReport(report);
       console.log(text);
-      if (!ok) process.exit(1);
-      break;
+      if (!ok) return 1;
+      return 0;
     }
     case "sign": {
       // Same defaults as `env`, for the same reason: every one of these names a file
@@ -1112,7 +1162,7 @@ async function main() {
       const fromConfig = inPath ? flag(args, "--from-config") : (flag(args, "--from-config") ?? join(dir, "config.env"));
       const outPath = flag(args, "--out") ?? (args.includes("--stdout") ? undefined : join(dir, "manifest.json"));
       if (!existsSync(keyPath)) {
-        die(`${keyPath} not found — run \`mt-manifest keygen\` first, or pass --key <pem>.`);
+        die(`${keyPath} not found — run \`fh-toolkit keygen\` first, or pass --key <pem>.`);
       }
       if (fromConfig && !existsSync(fromConfig)) die(`${fromConfig} not found — pass --from-config <config.env>.`);
 
@@ -1141,13 +1191,13 @@ async function main() {
       } else {
         process.stdout.write(out);
       }
-      break;
+      return 0;
     }
     case "env": {
       // ⭐ Defaults, because `init` writes all four of these files under exactly these
       // names into one directory. Requiring three explicit paths meant the one command
       // standing between a finished scaffold and a deployable Flux app was also the
-      // longest to type — and the runbook's own instruction ("run `mt-manifest env`")
+      // longest to type — and the runbook's own instruction ("run `fh-toolkit env`")
       // did not actually work as written.
       const dir = flag(args, "--dir") ?? ".";
       const fromConfig = flag(args, "--from-config") ?? join(dir, "config.env");
@@ -1172,7 +1222,7 @@ async function main() {
 
       // Verify the manifest is validly signed BEFORE shipping it as env — refuse a
       // placeholder or a tampered/unsigned manifest. Accepts either a bare
-      // ProviderManifest OR a SignedProviderManifest wrapper (from 'authorize'); the
+      // ProviderManifest OR a SignedProviderManifest wrapper; the
       // whole object is shipped verbatim so the owner signature reaches MT via the
       // /.well-known publish path.
       const manifestObj = JSON.parse(readFileSync(manifestPath, "utf8"));
@@ -1185,7 +1235,7 @@ async function main() {
         if (!parsed.success) die(`${manifestPath}: signed wrapper's manifest is invalid:\n${parsed.error.message}`);
         if (!parsed.data.ownerAddress) die(`${manifestPath}: signed manifest is missing ownerAddress`);
         if (!verifyManifestOwnerSignature(parsed.data, manifestOwnerSig)) {
-          die(`${manifestPath}: owner wallet signature does not verify against ownerAddress — re-run 'authorize'`);
+          die(`${manifestPath}: owner wallet signature does not verify against ownerAddress — re-onboard at /onboard to re-issue the wrapper`);
         }
         if (config.OWNER_ADDRESS && config.OWNER_ADDRESS !== parsed.data.ownerAddress) {
           console.error(
@@ -1284,98 +1334,41 @@ async function main() {
       } else {
         process.stdout.write(out);
       }
-      break;
+      return 0;
     }
     case "verify": {
       const inPath = flag(args, "--in") ?? die("--in <manifest.json> required");
       const raw = JSON.parse(readFileSync(inPath, "utf8"));
       // Accept either shape an operator can hold: a bare manifest, or the
-      // 'authorize' wrapper they publish. Verifying the wrapper's top level
+      // owner-signed wrapper they publish. Verifying the wrapper's top level
       // could only ever fail (it carries no `signature` of its own), which
       // told operators their VALID manifest was broken.
       const { manifest, ownerSignature } = unwrapManifest(raw);
       if (!verifyManifestObject(manifest)) {
         console.log("FAILED — manifest signature invalid");
-        process.exit(1);
+        return 1;
       }
       if (ownerSignature == null) {
         console.log("OK — manifest signature valid (bare manifest, no owner authorization)");
-        break;
+        return 0;
       }
       // A wrapper is only as good as its owner signature; verify it too rather
       // than reporting OK on the ed25519 alone. Mirrors the checks in `env`.
       const parsed = ProviderManifest.safeParse(manifest);
       if (!parsed.success) {
         console.log("FAILED — signed wrapper's manifest is invalid");
-        process.exit(1);
+        return 1;
       }
       if (!parsed.data.ownerAddress) {
         console.log("FAILED — signed manifest is missing ownerAddress");
-        process.exit(1);
+        return 1;
       }
       if (!verifyManifestOwnerSignature(parsed.data, ownerSignature)) {
         console.log("FAILED — owner wallet signature does not verify against ownerAddress");
-        process.exit(1);
+        return 1;
       }
       console.log(`OK — manifest + owner signature valid (owner ${parsed.data.ownerAddress})`);
-      break;
-    }
-    case "authorize": {
-      // Prove you control the manifest's ownerAddress by wallet-signing it, turning
-      // MT's blind-TOFU pubkey pin into proven ownership. Two-step (no browser in a
-      // one-shot container): print message + Zelcore deep link, then re-run with the
-      // resulting --signature to emit the SignedProviderManifest MT ingests.
-      const inPath = flag(args, "--in") ?? die("--in <manifest.json> required");
-      const signature = flag(args, "--signature");
-      const outPath = flag(args, "--out");
-
-      const raw = JSON.parse(readFileSync(inPath, "utf8"));
-      if (!verifyManifestObject(raw)) die(`${inPath}: manifest signature invalid — run 'sign' first`);
-      const parsed = ProviderManifest.safeParse(raw);
-      if (!parsed.success) die(`${inPath}: not a valid signed manifest:\n${parsed.error.message}`);
-      const manifest = parsed.data;
-      if (!manifest.ownerAddress) {
-        die(
-          "manifest has no ownerAddress — add your Flux/ZelID wallet address as \"ownerAddress\" " +
-            "in the body, re-run 'sign', then 'authorize'."
-        );
-      }
-      const message = manifestOwnerMessage(manifest);
-
-      if (!signature) {
-        // Step 1: show what to sign.
-        console.log("Sign this EXACT message with the wallet that owns the address below,");
-        console.log(`then re-run with --signature <base64> --out signed-manifest.json:\n`);
-        console.log(`owner address: ${manifest.ownerAddress}\n`);
-        console.log("─── message ───");
-        console.log(message);
-        console.log("───────────────\n");
-        console.log("Zelcore deep link (or paste the message into ZelID/SSP 'Sign Message'):");
-        console.log(buildZelcoreSignLink({ message }));
-        break;
-      }
-
-      // Step 2: validate the signature and emit the SignedProviderManifest.
-      if (!verifyManifestOwnerSignature(manifest, signature)) {
-        die(
-          "signature does not verify against the manifest's ownerAddress — check you signed the " +
-            "exact message with the right wallet (and that ownerAddress matches)."
-        );
-      }
-      // Embed the RAW manifest (not `manifest`, the zod-parsed copy) — zod defaults
-      // would add fields and break the detached ed25519 signature MT re-derives.
-      const signed = { manifest: raw, ownerSignature: signature };
-      const out = JSON.stringify(signed, null, 2) + "\n";
-      if (outPath) {
-        writeFileSync(outPath, out, { mode: 0o600 });
-        console.log(
-          `Wrote signed manifest to ${outPath}. Publish it at your Coalition's ` +
-            `/.well-known/mt-provider.json (or hand it to the MT admin to ingest).`
-        );
-      } else {
-        process.stdout.write(out);
-      }
-      break;
+      return 0;
     }
     // Which build am I? The image refreshes at most every 48h, so "the fix is merged"
     // and "the fix is what just ran" are different claims. This is how to tell them apart
@@ -1383,16 +1376,8 @@ async function main() {
     case "version":
     case "--version":
     case "-v": {
-      const pkgVersion = ((): string => {
-        try {
-          const pkg = JSON.parse(readFileSync(join(import.meta.dirname, "..", "package.json"), "utf8"));
-          return typeof pkg.version === "string" ? pkg.version : "unknown";
-        } catch {
-          return "unknown";
-        }
-      })();
-      console.log(formatBuildInfo(readBuildInfo(process.env, pkgVersion)));
-      break;
+      console.log(buildLine());
+      return 0;
     }
     // Reaching the CLI at all means the shell function did NOT consume it — so the
     // operator is on an alias, a hand-written `docker run`, or a wrapper predating
@@ -1400,22 +1385,22 @@ async function main() {
     // command": the image cannot pull itself, so the fix is always in the wrapper.
     case "--refresh":
       console.log(
-        "`--refresh` is handled by the mt-manifest SHELL FUNCTION, not by this CLI —\n" +
+        "`--refresh` is handled by the fh-toolkit SHELL FUNCTION, not by this CLI —\n" +
           "the CLI runs inside the container and cannot replace its own image. Reaching\n" +
           "me means your wrapper predates it, or you are not using the wrapper.\n\n" +
           "Pull directly:\n" +
-          "  docker pull ghcr.io/w2vy/mt-manifest:latest\n\n" +
+          "  docker pull ghcr.io/w2vy/fh-toolkit:latest\n\n" +
           "Or re-paste the current shell function from Step 0.5 of\n" +
           "docs/operator-onboarding.md — it also mounts /etc/hosts, so Proxmox\n" +
           "hostnames resolve inside the container."
       );
-      process.exit(1);
+      return 1;
     case "help":
     case "--help":
     case "-h":
     default:
       console.log(
-        "usage: mt-manifest <keygen|coalition-keygen|init|doctor|sign|env|verify|authorize|version> [options]\n"
+        "usage: fh-toolkit <keygen|coalition-keygen|init|doctor|sign|env|verify|version> [options]\n"
       );
       console.log("  keygen           [--out <dir>]");
       console.log("  coalition-keygen [--out <dir>]   Phase D signing key (operator-held custody)");
@@ -1427,8 +1412,6 @@ async function main() {
       console.log("            [--manifest <manifest|signed-manifest.json>] [--out <env.json>] [--stdout]");
       console.log("            defaults to the files `init` wrote in the current directory");
       console.log("  verify    --in <manifest.json>");
-      console.log("  authorize --in <manifest.json> [--signature <b64> --out <signed-manifest.json>]");
-      console.log("            (preferred) or the Coalition console. Works; retires with v2.");
       console.log("  version   which build of this CLI is running (paste it into a bug report)");
       console.log("  help      this list\n");
       console.log("Every path defaults to the file `init` wrote in the current directory,");
@@ -1438,11 +1421,11 @@ async function main() {
       console.log("  --check-stripe   the webhook is registered, on YOUR account");
       console.log("  --check-hub      Flux Hub and your Coalition still accept your keys\n");
       // Documented HERE even though the wrapper implements it: the operator has no way
-      // to tell which half of `mt-manifest` a flag belongs to, and the one flag they
+      // to tell which half of `fh-toolkit` a flag belongs to, and the one flag they
       // need when this CLI is out of date is the one it cannot carry out itself.
       console.log("Updating this tool:");
-      console.log("  mt-manifest --refresh          pull the newest image, then stop");
-      console.log("  mt-manifest --refresh <cmd>    pull, then run <cmd>");
+      console.log("  fh-toolkit --refresh          pull the newest image, then stop");
+      console.log("  fh-toolkit --refresh <cmd>    pull, then run <cmd>");
       console.log("Handled by the shell function, not by this CLI — a container cannot replace");
       console.log("its own image. Without it the wrapper re-pulls at most every 48h, so `version`");
       console.log("above is what is RUNNING and may trail what is merged.\n");
@@ -1450,8 +1433,153 @@ async function main() {
       console.log("Full reference: docs/fh-toolkit.md in the moltentech-operator repo.");
       // `help` asked for this; an unknown subcommand got it as an error message.
       const asked = cmd === undefined || cmd === "help" || cmd === "--help" || cmd === "-h";
-      process.exit(asked ? 0 : 1);
+      return asked ? 0 : 1;
   }
 }
 
-main();
+/**
+ * Split a session line the way a shell would, so `sign --out "my dir/manifest.json"`
+ * survives. Deliberately small: quotes and nothing else. There is no globbing, no
+ * variable expansion and no `!` escape, because a session is the same seven commands
+ * with state, not a shell — a half-implemented shell is worse than none.
+ */
+export function tokenize(line: string): string[] {
+  const out: string[] = [];
+  let cur = "";
+  let quote: '"' | "'" | null = null;
+  let started = false;
+  for (const ch of line) {
+    if (quote) {
+      if (ch === quote) quote = null;
+      else cur += ch;
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      started = true;
+      continue;
+    }
+    if (/\s/.test(ch)) {
+      if (started) out.push(cur);
+      cur = "";
+      started = false;
+      continue;
+    }
+    cur += ch;
+    started = true;
+  }
+  if (started) out.push(cur);
+  return out;
+}
+
+const HISTORY_FILE = ".fh-toolkit-history";
+const HISTORY_MAX = 500;
+
+function readHistory(dir: string): string[] {
+  try {
+    return readFileSync(join(dir, HISTORY_FILE), "utf8").split("\n").filter(Boolean).reverse();
+  } catch {
+    return [];
+  }
+}
+
+function writeHistory(dir: string, history: readonly string[]): void {
+  try {
+    // node hands history newest-first; store oldest-first so the file reads like a log.
+    const text = [...history].slice(0, HISTORY_MAX).reverse().join("\n");
+    writeFileSync(join(dir, HISTORY_FILE), text + "\n", { mode: 0o600 });
+  } catch {
+    // A read-only mount is not a reason to lose the session.
+  }
+}
+
+/**
+ * The interactive session. One `docker run -it` for many commands, which buys three
+ * things a one-shot cannot: a real TTY for `init`'s prompts, state carried between
+ * commands (see `Ctx`), and one mount decision instead of one per command.
+ */
+async function session(ctx: Ctx): Promise<number> {
+  const rl = createInterface({
+    input: process.stdin,
+    output: process.stdout,
+    history: readHistory(ctx.dir),
+    historySize: HISTORY_MAX,
+  });
+  rl.on("history", (h: string[]) => writeHistory(ctx.dir, h));
+
+  // Just the identity lines. formatBuildInfo's trailing "older than you expect?" note is
+  // written for someone reading `version` output in a bug report, not for a banner
+  // printed every time a session opens.
+  console.log(buildLine().split("\n\n")[0]);
+  console.log(`directory: ${ctx.dir}`);
+  console.log("`help` lists the commands. `exit` or Ctrl-D leaves.\n");
+
+  for (;;) {
+    let line: string;
+    try {
+      line = await rl.question("fh-toolkit> ");
+    } catch {
+      break; // Ctrl-C on the prompt
+    }
+    if (line === null || line === undefined) break;
+    const argv = tokenize(line);
+    if (argv.length === 0) continue;
+    const [cmd, ...args] = argv;
+    if (cmd === "exit" || cmd === "quit") break;
+    try {
+      await runCommand(cmd, args, ctx);
+    } catch (e) {
+      // A bad command ends the COMMAND, not the session. That is the whole reason
+      // `die` throws rather than exits.
+      if (e instanceof CliError) console.error(`error: ${e.message}`);
+      else console.error(`error: ${(e as Error).message ?? String(e)}`);
+    }
+    console.log("");
+  }
+  rl.close();
+  // stdin is still open on the readline's behalf; a session that has said goodbye
+  // should not hang waiting for it.
+  process.stdin.pause();
+  console.log("bye");
+  return 0;
+}
+
+async function main(): Promise<void> {
+  const [cmd, ...args] = process.argv.slice(2);
+  // The mounted directory IS the working directory (`-v "$PWD:/work"`, WORKDIR /work),
+  // and a session cannot cd — so the pinned dir and every command's `.` default are the
+  // same directory for the life of the process, and nothing needs rewiring.
+  const ctx: Ctx = { dir: process.cwd(), interactive: cmd === undefined };
+
+  if (cmd === undefined) {
+    // No arguments and no terminal is the wrapper being invoked without `-t` (or from a
+    // script). Printing usage beats opening a session that reads EOF and vanishes —
+    // which is exactly how the missing `-t` used to make `init` look half-broken.
+    if (!process.stdin.isTTY || !process.stdout.isTTY) {
+      console.error(
+        "error: no command given, and this is not a terminal.\n" +
+          "  Interactive session needs a TTY — run the wrapper with `docker run -it`.\n" +
+          "  Otherwise pass a command: `fh-toolkit help` lists them."
+      );
+      process.exit(1);
+    }
+    process.exit(await session(ctx));
+  }
+
+  try {
+    process.exit(await runCommand(cmd, args, ctx));
+  } catch (e) {
+    if (e instanceof CliError) {
+      console.error(`error: ${e.message}`);
+      process.exit(1);
+    }
+    throw e;
+  }
+}
+
+// Only when this file IS the program. Importing it (the session tests do) must not
+// launch a second CLI — the ENTRYPOINT runs `tsx /pkg/src/cli.ts`, so argv[1] is this
+// file there and the guard is transparent in the image.
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main();
+}

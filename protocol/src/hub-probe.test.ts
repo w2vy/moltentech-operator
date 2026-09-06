@@ -83,7 +83,7 @@ test("⭐ a 401 from the DEPLOYED Coalition is the drift the probe exists for", 
   );
   assert.deepEqual(rules(findings), ["COALITION_KEY_STALE_DEPLOY"]);
   assert.equal(findings[0]!.severity, "error");
-  assert.match(findings[0]!.fix!, /mt-manifest env/);
+  assert.match(findings[0]!.fix!, /fh-toolkit env/);
   assert.equal(check(checks, "COALITION_KEY").status, "fail");
 });
 

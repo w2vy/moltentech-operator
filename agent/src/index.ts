@@ -18,7 +18,7 @@ import { runPreflight, formatPreflight, checkManifestKey } from "./preflight";
 /**
  * `mt-agent doctor` — the credentialed half of onboarding validation.
  *
- * `mt-manifest doctor` checks that the five config files agree with each other, but it
+ * `fh-toolkit doctor` checks that the five config files agree with each other, but it
  * is deliberately secret-free and cannot ask the hypervisor anything. These checks need
  * the Proxmox token, which lives HERE and nowhere else. Read-only: no VM is created.
  *

@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { isIPv4, vmNameProblem, SLUG_RE } from "./scaffold";
+import { isIPv4, vmNameProblem, slugProblem } from "./scaffold";
+import { ProviderSlug } from "./common";
 import { FOUNDATION_VM_PREFIX } from "./messages";
 
 /**
@@ -47,9 +48,24 @@ test("a 63-character name passes and a 64-character one does not", () => {
 
 test("the slug rule is the one validateAnswers enforces, exported so the prompt can use it", () => {
   // PERMANENT once ingested — the single worst field to discover a rule about at the end.
-  assert.equal(SLUG_RE.test("acme-nodes"), true);
-  assert.equal(SLUG_RE.test("Acme-Nodes"), false, "uppercase");
-  assert.equal(SLUG_RE.test("-acme"), false, "leading hyphen");
-  assert.equal(SLUG_RE.test("acme-"), false, "trailing hyphen");
-  assert.equal(SLUG_RE.test("ab"), false, "too short");
+  assert.equal(slugProblem("acme-nodes"), undefined);
+  assert.ok(slugProblem("Acme-Nodes"), "uppercase");
+  assert.ok(slugProblem("-acme"), "leading hyphen");
+  assert.ok(slugProblem("acme-"), "trailing hyphen");
+  assert.ok(slugProblem("ab"), "too short");
+  assert.ok(slugProblem("a".repeat(41)), "too long");
+});
+
+test("⭐ the prompt rule IS the wire rule — a doubled hyphen is refused at the prompt", () => {
+  // The old local regex accepted `a--b`; `ProviderSlug` refuses it. That gap let `init`
+  // mint a PERMANENT slug the hub's ingest would reject, discovered at /onboard rather
+  // than at the question. Any divergence here is the same bug returning.
+  assert.ok(slugProblem("acme--nodes"), "doubled hyphen must be refused");
+  for (const s of ["acme-nodes", "acme--nodes", "Acme", "-acme", "acme-", "ab", "a".repeat(41), "acme_nodes"]) {
+    assert.equal(
+      slugProblem(s) === undefined,
+      ProviderSlug.safeParse(s).success,
+      `slugProblem and ProviderSlug disagree about ${JSON.stringify(s)}`
+    );
+  }
 });

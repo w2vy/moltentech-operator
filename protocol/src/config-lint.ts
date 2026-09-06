@@ -8,7 +8,7 @@
  * files or a default that is wrong on real hardware.
  *
  * Every rule here is a pure function over file TEXT — no network, no secrets held,
- * no Proxmox credentials (`mt-manifest` is deliberately secret-free; the checks that
+ * no Proxmox credentials (`fh-toolkit` is deliberately secret-free; the checks that
  * need creds live in `mt-agent doctor` instead). That purity is what makes the whole
  * rule set unit-testable from fixture strings.
  *
@@ -476,11 +476,11 @@ export function lintListing(
  * no longer exists.
  */
 const SUPPLIED_BY: Record<string, string> = {
-  MANIFEST_KEY: "`mt-manifest init`, from manifest-key.pem — re-run it, or paste `base64 -w0 manifest-key.pem`",
+  MANIFEST_KEY: "`fh-toolkit init`, from manifest-key.pem — re-run it, or paste `base64 -w0 manifest-key.pem`",
   OWNER_ADDRESS: "your wallet address — the one you sign with at /onboard",
   AGENT_KEY: "the /onboard web flow, after you sign",
   COALITION_KEY: "the /onboard web flow, after you sign",
-  SESSION_SECRET: "`mt-manifest init` — any long random string, e.g. `openssl rand -hex 32`",
+  SESSION_SECRET: "`fh-toolkit init` — any long random string, e.g. `openssl rand -hex 32`",
   STRIPE_SECRET_KEY: "the Stripe dashboard (Developers → API keys)",
   STRIPE_WEBHOOK_SECRET: "the Stripe dashboard, shown once when you create the endpoint",
   PROXMOX_TOKEN_ID: "`pveum user token add` — the id, e.g. `fluxhub@pve!agent`",
@@ -773,9 +773,9 @@ export function lintManifestFreshness(manifestJson: string, configEnv: string): 
         rule: "MANIFEST_UNPARSEABLE",
         severity: "error",
         file: "manifest.json",
-        message: `manifest.json is not valid JSON (${(e as Error).message}) — re-run \`mt-manifest sign\`.`,
-        summary: "not valid JSON — re-run `mt-manifest sign`",
-        fix: "mt-manifest sign",
+        message: `manifest.json is not valid JSON (${(e as Error).message}) — re-run \`fh-toolkit sign\`.`,
+        summary: "not valid JSON — re-run `fh-toolkit sign`",
+        fix: "fh-toolkit sign",
       },
     ];
   }
@@ -790,9 +790,9 @@ export function lintManifestFreshness(manifestJson: string, configEnv: string): 
         file: "manifest.json",
         message:
           "manifest.json does not verify against its own pubkey — it was edited by hand after " +
-          "signing. Change config.env instead and re-run `mt-manifest sign`.",
-        summary: "edited by hand after signing — re-run `mt-manifest sign`",
-        fix: "mt-manifest sign",
+          "signing. Change config.env instead and re-run `fh-toolkit sign`.",
+        summary: "edited by hand after signing — re-run `fh-toolkit sign`",
+        fix: "fh-toolkit sign",
       },
     ];
   }
@@ -817,8 +817,8 @@ export function lintManifestFreshness(manifestJson: string, configEnv: string): 
       message:
         `manifest.json was signed from an older config.env (differs at: ${changed.join(", ")}). ` +
         "Pasting it at /onboard would ingest the OLD values, correctly signed.",
-      summary: `signed from an older config.env (${changed.join(", ")}) — re-run \`mt-manifest sign\``,
-      fix: "mt-manifest sign",
+      summary: `signed from an older config.env (${changed.join(", ")}) — re-run \`fh-toolkit sign\``,
+      fix: "fh-toolkit sign",
     },
   ];
 }

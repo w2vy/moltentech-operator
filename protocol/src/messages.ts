@@ -210,7 +210,7 @@ export type OwnerAuth = z.infer<typeof OwnerAuth>;
 
 /**
  * The exact, human-readable string the owner signs in their wallet. Deterministic
- * so the `mt-authorize` signer and the operator verifier derive identical bytes;
+ * so the owner signer and the operator verifier derive identical bytes;
  * readable so the owner can review the action in-wallet before signing.
  */
 export function ownerAuthMessage(c: OwnerAuthClaim): string {

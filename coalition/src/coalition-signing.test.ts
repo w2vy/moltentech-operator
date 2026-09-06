@@ -19,7 +19,7 @@ import { loadCoalitionKey, mtAuthHeaders, signCoalitionRequest } from "./coaliti
 
 const SLUG = "pve25-lab";
 
-/** The wire form `mt-manifest coalition-keygen` emits: base64 of a PKCS#8 PEM. */
+/** The wire form `fh-toolkit coalition-keygen` emits: base64 of a PKCS#8 PEM. */
 function pemKeypair() {
   const { publicKeyBase64, privateKey } = generateEd25519();
   return {
