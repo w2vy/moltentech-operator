@@ -36,7 +36,8 @@ function readBody(req: http.IncomingMessage): Promise<Buffer> {
 
 /**
  * The inbound Coalition server. Public: the signed manifest + stats. Authenticated
- * (MT-issued coalitionKey): /checkout + /manage. Stripe-signed: /webhook (raw body).
+ * (a Flux Hub signature — the MT-issued `coalitionKey` bearer was removed in Phase E
+ * step 4, 2026-09-07): /checkout + /manage. Stripe-signed: /webhook (raw body).
  */
 /**
  * `stripe` is null when the operator offers nothing for sale. The payment routes then

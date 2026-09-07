@@ -537,11 +537,28 @@ export function lintListing(
  * was hand-edited, so each says how to get it back rather than describing a step that
  * no longer exists.
  */
+/**
+ * Keys that are no longer used by anything, and what to do about them.
+ *
+ * Phase E step 4 (2026-09-07) removed the `AGENT_KEY` / `COALITION_KEY` bearers from every
+ * code path in the agent, the Coalition and Flux Hub. They are not dangerous — nothing
+ * accepts them — but they are still sitting in the `secrets.env`, `.env.operator` and
+ * `env.json` of every operator onboarded before that date, and without this nothing would
+ * ever mention them again.
+ *
+ * ⭐ Deliberately NOT removed from `SECRET_KEYS_BANNED_IN_CONFIG`: a dead credential pasted
+ * into the file the runbook calls non-secret is still a credential in a file nobody treats
+ * as sensitive, and "it stopped working" is not the lesson to teach there.
+ */
+const OBSOLETE_KEYS: Record<string, string> = {
+  AGENT_KEY: "removed in Phase E — the agent signs with MANIFEST_KEY. Delete this line.",
+  COALITION_KEY:
+    "removed in Phase E — Flux Hub signs its calls to your Coalition. Delete this line.",
+};
+
 const SUPPLIED_BY: Record<string, string> = {
   MANIFEST_KEY: "`fh-toolkit init`, from manifest-key.pem — re-run it, or paste `base64 -w0 manifest-key.pem`",
   OWNER_ADDRESS: "your wallet address — the one you sign with at /onboard",
-  AGENT_KEY: "the /onboard web flow, after you sign",
-  COALITION_KEY: "the /onboard web flow, after you sign",
   SESSION_SECRET: "`fh-toolkit init` — any long random string, e.g. `openssl rand -hex 32`",
   STRIPE_SECRET_KEY: "the Stripe dashboard (Developers → API keys)",
   STRIPE_WEBHOOK_SECRET: "the Stripe dashboard, shown once when you create the endpoint",
@@ -614,6 +631,28 @@ export function lintCourier(operator: Record<string, string>, operatorFile: stri
 }
 
 /**
+ * Report keys that no longer do anything, wherever they appear.
+ *
+ * ⭐ A warning, not an error: nothing is broken and nothing is at risk — the credential is
+ * inert. But it is actionable and the action is one line, which is exactly what a warning
+ * is for here (`NOT_YET_FILLED` is one too). An operator whose `secrets.env` still lists
+ * `AGENT_KEY` has no other way to learn it is dead, and a line nobody can explain survives
+ * every future redeploy. The agent and the Coalition each say the same thing once at
+ * startup; this says it where the file is actually being edited.
+ */
+export function lintObsoleteKeys(entries: EnvEntry[], file: string): Finding[] {
+  return entries
+    .filter((e) => e.key in OBSOLETE_KEYS)
+    .map((e) => ({
+      rule: "OBSOLETE_KEY",
+      severity: "warning" as const,
+      file,
+      line: e.line,
+      message: `${e.key} ${OBSOLETE_KEYS[e.key]}`,
+    }));
+}
+
+/**
  * Report every empty slot in secrets.env as "not yet filled", naming its source.
  *
  * ⚠️ A Flux Hub SUPPORTER sells nothing and has no Stripe account, so an empty Stripe
@@ -626,6 +665,10 @@ function lintSkeletonSlots(entries: EnvEntry[], file: string, opts: { supporter?
   return entries
     .filter((e) => e.value === "")
     .filter((e) => !(opts.supporter && e.key.startsWith("STRIPE_")))
+    // An obsolete key is never "not yet filled" — `lintObsoleteKeys` reports it, and
+    // saying both would tell the operator to go and fetch a credential that no longer
+    // exists at the same time as telling them to delete it.
+    .filter((e) => !(e.key in OBSOLETE_KEYS))
     .map((e) => ({
       rule: "NOT_YET_FILLED",
       severity: "warning" as const,
@@ -920,6 +963,7 @@ export function runDoctor(input: DoctorInput): DoctorReport {
         supporter: configRec.PROVIDER_LEVEL === "supporter",
       })
     );
+    findings.push(...lintObsoleteKeys(secretEntries, "secrets.env"));
   }
 
   let operatorRec: Record<string, string> = {};
@@ -928,6 +972,7 @@ export function runDoctor(input: DoctorInput): DoctorReport {
     const entries = parseEnvLines(input.envOperator);
     operatorRec = entriesToRecord(entries);
     findings.push(...lintValueShape(entries, ".env.operator"));
+    findings.push(...lintObsoleteKeys(entries, ".env.operator"));
     findings.push(...lintSecretPlacement(entries, ".env.operator", SECRET_KEYS_BANNED_IN_OPERATOR));
     findings.push(...lintCourier(operatorRec, ".env.operator"));
     findings.push(...lintProxmoxCreds(operatorRec, ".env.operator"));

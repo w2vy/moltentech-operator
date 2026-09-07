@@ -144,20 +144,20 @@ test("nonces are single-use per request, never reused across calls", () => {
   assert.notEqual(hdr(a, HEADER_COALITION_NONCE), hdr(b, HEADER_COALITION_NONCE));
 });
 
-test("dual-accept: no signing key configured keeps the legacy bearer", () => {
-  const h = mtAuthHeaders(
-    { providerSlug: SLUG, agentKey: "legacy-agent-key-value", coalitionSigningKey: undefined },
-    "GET",
-    "/api/agent/nodes",
-    ""
+// ── Phase E step 4, 2026-09-07 ────────────────────────────────────────────────────────
+// The dual-accept test that used to live here asserted the opposite of this one.
+
+test("🔒 no signing key THROWS — there is no bearer to fall back to", () => {
+  assert.throws(
+    () => mtAuthHeaders({ providerSlug: SLUG, coalitionSigningKey: undefined }, "GET", "/api/agent/nodes", ""),
+    /COALITION_SIGNING_KEY is required/
   );
-  assert.deepEqual(h, { Authorization: "Bearer legacy-agent-key-value" });
 });
 
-test("with a signing key configured the bearer is GONE, not sent alongside", () => {
+test("the signed request carries no Authorization header at all", () => {
   const { value } = seedKeypair();
   const h = mtAuthHeaders(
-    { providerSlug: SLUG, agentKey: "legacy-agent-key-value", coalitionSigningKey: value },
+    { providerSlug: SLUG, coalitionSigningKey: value },
     "GET",
     "/api/agent/nodes",
     ""
@@ -173,18 +173,12 @@ test("a garbage COALITION_SIGNING_KEY throws at load, it does not silently fall 
   assert.throws(() => loadCoalitionKey("not-base64-at-all!!"));
 });
 
-// ⭐ Phase E polarity flip: `agentKey` is optional now, so the bearer branch can be
-// reached with nothing to put in it. `Bearer undefined` fails at MT as a bare 401 that
-// looks identical to a bad key — refuse to build the header instead.
-test("⭐ no signing key AND no agentKey throws instead of sending `Bearer undefined`", () => {
+// The throw is the whole contract now: an unsigned outbound call must never leave the
+// box. It used to be reachable only when BOTH keys were missing; it is now reachable
+// whenever the signing key is, which is the point.
+test("🔒 the refusal names the key to set, not the one that was removed", () => {
   assert.throws(
-    () =>
-      mtAuthHeaders(
-        { providerSlug: SLUG, agentKey: undefined, coalitionSigningKey: undefined },
-        "GET",
-        "/api/agent/nodes",
-        ""
-      ),
+    () => mtAuthHeaders({ providerSlug: SLUG, coalitionSigningKey: undefined }, "GET", "/api/agent/nodes", ""),
     /No outbound MT credential/
   );
 });

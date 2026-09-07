@@ -1,5 +1,13 @@
+import { randomBytes } from "node:crypto";
 import type { Finding } from "./config-lint";
 import type { ProbeResult } from "./proxmox-probe";
+import {
+  HEADER_AGENT_SIGNATURE,
+  HEADER_AGENT_TIMESTAMP,
+  HEADER_AGENT_NONCE,
+  HEADER_AGENT_SLUG,
+} from "./common";
+import { bodyHash, importPrivateKeyPem, signRequest, type RequestEnvelope } from "./signing";
 
 /**
  * Hub probe — proves the three issued keys are still the keys the other side holds.
@@ -60,8 +68,14 @@ export interface HubProbeInput {
   mtBaseUrl: string;
   /** `COALITION_URL` from config.env — the DEPLOYED app, not this directory. */
   coalitionUrl?: string;
-  agentKey?: string;
-  coalitionKey?: string;
+  /**
+   * `MANIFEST_KEY` from secrets.env — base64 of the PKCS#8 PEM. Phase E step 4 removed the
+   * `AGENT_KEY`/`COALITION_KEY` bearers, so this is the credential the agent actually uses
+   * and therefore the only one worth proving.
+   */
+  manifestKey?: string;
+  /** `PROVIDER_SLUG` — bound into the signed envelope, so it must match what MT expects. */
+  providerSlug?: string;
   /** Contents of `manifest-pubkey.txt`, to compare against what the Coalition serves. */
   localPubkey?: string;
   /** Contents of `manifest.json`, to prove the deployed manifest is the signed one. */
@@ -130,43 +144,67 @@ export async function probeHub(
   const checks: ProbeResult[] = [];
   const findings: Finding[] = [];
 
-  // ── 1. AGENT_KEY, against Flux Hub ────────────────────────────────────────────────
+  // ── 1. MANIFEST_KEY, against Flux Hub ─────────────────────────────────────────────
   //
-  // `GET /api/agent/state` is the same endpoint the running agent polls, so a 200 here
-  // is the agent's own credential exercised end to end rather than a proxy for it.
-  if (!input.agentKey) {
+  // `GET /api/agent/state` is the same endpoint the running agent polls, signed the same
+  // way the agent signs it, so a 200 here is the agent's own credential exercised end to
+  // end rather than a proxy for it.
+  //
+  // This checked the `AGENT_KEY` bearer until Phase E step 4 (2026-09-07). Flux Hub no
+  // longer accepts bearers at all, so that check could only ever have returned 401 — a
+  // healthy hub reported as rejecting a valid operator. Signing is not a nicety here; it
+  // is the difference between a useful check and a false alarm.
+  const NAME_HUB = "MANIFEST_KEY → Flux Hub";
+  if (!input.manifestKey || !input.providerSlug) {
     checks.push({
-      name: "AGENT_KEY → Flux Hub",
+      name: NAME_HUB,
       status: "skip",
-      detail: "not in secrets.env — /onboard issues it after you paste manifest.json.",
+      detail: !input.manifestKey
+        ? "no MANIFEST_KEY in secrets.env — `fh-toolkit init` writes it from manifest-key.pem."
+        : "no PROVIDER_SLUG in config.env — the slug is bound into the signature.",
     });
   } else {
     const url = `${base(input.mtBaseUrl)}/api/agent/state`;
     try {
+      const key = importPrivateKeyPem(Buffer.from(input.manifestKey, "base64").toString("utf8"));
+      const env: RequestEnvelope = {
+        method: "GET",
+        path: "/api/agent/state",
+        slug: input.providerSlug,
+        issuedAt: new Date().toISOString(),
+        nonce: randomBytes(16).toString("hex"),
+        bodyHash: bodyHash(""),
+      };
       const res = await http({
         method: "GET",
         url,
-        headers: { Authorization: `Bearer ${input.agentKey}` },
+        headers: {
+          [HEADER_AGENT_SIGNATURE]: signRequest(env, key),
+          [HEADER_AGENT_TIMESTAMP]: env.issuedAt,
+          [HEADER_AGENT_NONCE]: env.nonce,
+          [HEADER_AGENT_SLUG]: input.providerSlug,
+        },
       });
       if (isRejection(res.status)) {
-        checks.push({ name: "AGENT_KEY → Flux Hub", status: "fail", detail: `rejected (401) by ${url}` });
+        checks.push({ name: NAME_HUB, status: "fail", detail: `rejected (401) by ${url}` });
         findings.push({
-          rule: "AGENT_KEY_REJECTED",
+          rule: "MANIFEST_KEY_REJECTED",
           severity: "error",
           file: "secrets.env",
           summary:
-            "Flux Hub rejects AGENT_KEY — the agent cannot report or take work. Paste the " +
-            "re-issued keys into secrets.env, then `docker compose up -d --force-recreate`",
+            "Flux Hub rejects your signature — the agent cannot report or take work. Re-run " +
+            "`fh-toolkit keygen`, re-ingest the manifest, then `docker compose up -d --force-recreate`",
           message:
-            `Flux Hub returned 401 for AGENT_KEY at ${url}. The key in secrets.env is not the one ` +
-            "Flux Hub holds — most often because the keys were re-issued (admin → Providers → " +
-            "Rotate keys) after this file was written. Nothing else shows this: the stats pull " +
-            "Flux Hub uses to set lastSyncedAt is unauthenticated, so the provider page stays green.",
-          fix: "copy the re-issued keys into secrets.env, then `docker compose up -d --force-recreate`",
+            `Flux Hub returned 401 for a MANIFEST_KEY signature at ${url}. Either the key in ` +
+            "secrets.env is not the private half of the pubkey Flux Hub pinned as " +
+            "`Provider.manifestPubkey`, or the manifest was never re-ingested after a keygen. " +
+            "Nothing else shows this: the stats pull Flux Hub uses to set lastSyncedAt is " +
+            "unauthenticated, so the provider page stays green.",
+          fix: "re-ingest manifest.json at /onboard, then `docker compose up -d --force-recreate`",
         });
       } else if (res.status === 200) {
         checks.push({
-          name: "AGENT_KEY → Flux Hub",
+          name: NAME_HUB,
           status: "pass",
           detail: `accepted (200) — ${describeState(res.text)}`,
         });
@@ -174,102 +212,42 @@ export async function probeHub(
         // Accepted, but something else went wrong. Not a key problem; say so plainly
         // rather than making the operator suspect the credential.
         checks.push({
-          name: "AGENT_KEY → Flux Hub",
+          name: NAME_HUB,
           status: "skip",
           detail: `${url} answered ${res.status} — the key was NOT rejected; key validity is unproven.`,
         });
       }
     } catch (err) {
       checks.push({
-        name: "AGENT_KEY → Flux Hub",
+        name: NAME_HUB,
         status: "skip",
-        detail: `could not reach ${url} (${(err as Error).message}) — key validity is unproven.`,
+        detail: `could not sign or reach ${url} (${(err as Error).message}) — key validity is unproven.`,
       });
     }
   }
 
-  // ── 2. COALITION_KEY, against the DEPLOYED Coalition ──────────────────────────────
+  // ── 2. The deployed Coalition's inbound auth — NOT CHECKABLE FROM HERE ────────────
   //
-  // The one drift that really happens. `secrets.env` is what you would paste into a NEW
-  // deploy; the running Flux app holds whatever was imported when it was deployed, and
-  // nothing keeps those two in step.
-  if (!input.coalitionUrl) {
-    checks.push({
-      name: "COALITION_KEY → deployed Coalition",
-      status: "skip",
-      detail: "no COALITION_URL in config.env.",
-    });
-  } else if (!input.coalitionKey) {
-    checks.push({
-      name: "COALITION_KEY → deployed Coalition",
-      status: "skip",
-      detail: "not in secrets.env — /onboard issues it after you paste manifest.json.",
-    });
-  } else {
-    const url = `${base(input.coalitionUrl)}/checkout`;
-    try {
-      const res = await http({
-        method: "POST",
-        url,
-        headers: {
-          Authorization: `Bearer ${input.coalitionKey}`,
-          "Content-Type": "application/json",
-        },
-        // Deliberately invalid: auth runs first, so this separates "key rejected" from
-        // "key accepted" without creating anything.
-        body: "{}",
-      });
-      if (!isCoalitionResponse(res)) {
-        // Not the Coalition talking — most often Flux's own 503 for an app that is not
-        // deployed. Judging the status here would be judging the edge, not the key.
-        checks.push({
-          name: "COALITION_KEY → deployed Coalition",
-          status: "skip",
-          detail:
-            `${url} answered ${res.status}, but nothing there identifies itself as a Coalition ` +
-            `(no x-coalition-version). The Flux app is not deployed or not running, or ` +
-            `COALITION_URL points elsewhere — key validity is unproven.`,
-        });
-      } else if (isRejection(res.status)) {
-        checks.push({ name: "COALITION_KEY → deployed Coalition", status: "fail", detail: `rejected (401) by ${url}` });
-        findings.push({
-          rule: "COALITION_KEY_STALE_DEPLOY",
-          severity: "error",
-          file: "secrets.env",
-          summary:
-            "the deployed Coalition rejects COALITION_KEY — customer checkout will fail. " +
-            "Re-run `fh-toolkit env` and re-import env.json on the Flux app",
-          message:
-            `${url} returned 401 for the COALITION_KEY in secrets.env. The Flux app is running an ` +
-            "environment imported at deploy time; your keys have changed since. Flux Hub relays " +
-            "every checkout to that app with the key IT holds, so the first symptom otherwise is a " +
-            "customer's purchase failing. Rebuild env.json and re-import it on Flux.",
-          fix: "`fh-toolkit env`, then re-import env.json on the Flux app and redeploy",
-        });
-      } else if (res.status === 404) {
-        checks.push({
-          name: "COALITION_KEY → deployed Coalition",
-          status: "skip",
-          detail: `${url} answered 404 — no /checkout route there. Is COALITION_URL right?`,
-        });
-      } else {
-        // 400 "Invalid checkout request" is the expected pass: auth succeeded and the
-        // empty body was rejected afterwards. 503 (payments disabled) also means auth
-        // succeeded, and is the normal answer for a Supporter who sells nothing.
-        checks.push({
-          name: "COALITION_KEY → deployed Coalition",
-          status: "pass",
-          detail: `accepted — ${res.status} past the auth check, nothing created.`,
-        });
-      }
-    } catch (err) {
-      checks.push({
-        name: "COALITION_KEY → deployed Coalition",
-        status: "skip",
-        detail: `could not reach ${url} (${(err as Error).message}) — key validity is unproven.`,
-      });
-    }
-  }
+  // This used to POST `/checkout` with the `COALITION_KEY` bearer, which caught the one
+  // drift that really happens: `secrets.env` holds what you would paste into a NEW deploy,
+  // the running Flux app holds whatever was imported when it was deployed, and nothing
+  // keeps those in step.
+  //
+  // Phase E step 4 (2026-09-07) removed that bearer. Inbound `/checkout` and `/manage` now
+  // accept exactly one thing: a request signed by FLUX HUB's key — which the operator does
+  // not hold and must never hold. So this is not a check that regressed; it is one that
+  // stopped being the operator's to run.
+  //
+  // What still covers the same ground: check 3 proves the DEPLOYED Coalition is answering
+  // and which manifest it is serving, and a signed call that Flux Hub itself makes shows up
+  // as `authorized via=signature` in the Coalition's own log.
+  checks.push({
+    name: "Coalition inbound auth",
+    status: "skip",
+    detail:
+      "not checkable by the operator — /checkout accepts only a Flux Hub signature since " +
+      "Phase E. Reachability and manifest freshness are covered below.",
+  });
 
   // ── 3. The deployed manifest is the one you signed ────────────────────────────────
   //

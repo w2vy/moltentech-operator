@@ -1,4 +1,5 @@
 import { test } from "node:test";
+import { generateKeyPairSync } from "node:crypto";
 import assert from "node:assert/strict";
 import { probeHub, type HubHttp } from "./hub-probe";
 import type { ProbeResult } from "./proxmox-probe";
@@ -44,11 +45,17 @@ function fakeHttp(overrides: Record<string, { status: number; text?: string; hea
   };
 }
 
+// Phase E step 4: the probe signs with MANIFEST_KEY instead of presenting a bearer, so
+// the fixture needs a real key — the base64 of a PKCS#8 PEM, exactly as secrets.env holds it.
+const MANIFEST_KEY = Buffer.from(
+  generateKeyPairSync("ed25519").privateKey.export({ type: "pkcs8", format: "pem" }) as string
+).toString("base64");
+
 const INPUT = {
   mtBaseUrl: MT,
   coalitionUrl: COALITION,
-  agentKey: "agent-key",
-  coalitionKey: "coalition-key",
+  manifestKey: MANIFEST_KEY,
+  providerSlug: "pve25-lab",
   localPubkey: PUBKEY + "\n",
   localManifestJson: SIGNED,
 };
@@ -59,135 +66,51 @@ const check = (checks: ProbeResult[], needle: string) => checks.find((c) => c.na
 test("a fully in-step operator: nothing to report, and the slot list is echoed back", async () => {
   const { checks, findings } = await probeHub(INPUT, fakeHttp());
   assert.deepEqual(findings, []);
-  assert.ok(checks.every((c) => c.status === "pass"), checks.map((c) => `${c.name}:${c.status}`).join(" "));
-  assert.match(check(checks, "AGENT_KEY").detail, /sees 2 slot\(s\): mt1-187-c2, mt1-187-c3/);
+  // "Coalition inbound auth" is a permanent skip since Phase E step 4 — the operator
+  // cannot sign as Flux Hub — so `every(pass)` is no longer the right assertion. Nothing
+  // may FAIL, and every check that can still be performed must pass.
+  assert.equal(checks.filter((c) => c.status === "fail").length, 0, checks.map((c) => `${c.name}:${c.status}`).join(" "));
+  assert.deepEqual(
+    checks.filter((c) => c.status === "skip").map((c) => c.name),
+    ["Coalition inbound auth"]
+  );
+  assert.match(check(checks, "MANIFEST_KEY").detail, /sees 2 slot\(s\): mt1-187-c2, mt1-187-c3/);
   assert.match(check(checks, "build").detail, /0\.2\.8/);
 });
 
-test("⭐ Flux Hub rejecting AGENT_KEY is an ERROR that names the unauthenticated stats pull", async () => {
+test("⭐ Flux Hub rejecting the SIGNATURE is an ERROR that names the unauthenticated stats pull", async () => {
   // The reason this needs saying: the operator's evidence that "everything is fine" is
   // the provider page, and the provider page is fed by a GET that carries no key at all.
   const { checks, findings } = await probeHub(INPUT, fakeHttp({ [`GET ${MT}/api/agent/state`]: { status: 401 } }));
-  assert.deepEqual(rules(findings), ["AGENT_KEY_REJECTED"]);
+  assert.deepEqual(rules(findings), ["MANIFEST_KEY_REJECTED"]);
   assert.equal(findings[0]!.severity, "error");
   assert.match(findings[0]!.message, /unauthenticated/);
-  assert.equal(check(checks, "AGENT_KEY").status, "fail");
+  assert.equal(check(checks, "MANIFEST_KEY").status, "fail");
 });
 
-test("⭐ a 401 from the DEPLOYED Coalition is the drift the probe exists for", async () => {
-  // secrets.env is what you would paste into a NEW deploy; the running Flux app holds
-  // whatever was imported when it was deployed. Nothing keeps those two in step.
-  const { checks, findings } = await probeHub(
-    INPUT,
-    fakeHttp({ [`POST ${COALITION}/checkout`]: { status: 401, text: '{"error":"Unauthorized"}' } })
-  );
-  assert.deepEqual(rules(findings), ["COALITION_KEY_STALE_DEPLOY"]);
-  assert.equal(findings[0]!.severity, "error");
-  assert.match(findings[0]!.fix!, /fh-toolkit env/);
-  assert.equal(check(checks, "COALITION_KEY").status, "fail");
-});
+// ── Phase E step 4, 2026-09-07 ────────────────────────────────────────────────────────
+// Four tests lived here covering the `COALITION_KEY` bearer probe against the deployed
+// Coalition. That probe is gone: inbound /checkout now accepts only a Flux Hub signature,
+// which the operator does not hold and must never hold. It is not a check that regressed,
+// it is one that stopped being the operator's to run.
+//
+// Worth keeping from what they proved, because it cost a real measurement:
+//   - A Coalition that was never deployed answers every route with FLUX'S OWN edge page
+//     (`Error 503 FDM-USA-1-1`, text/html, no `x-coalition-version`). 503 sits on the
+//     accept side of a 401/not-401 split, so a naive probe read an UNDEPLOYED app as an
+//     accepted key — the one direction such a check must never fail in. Only the
+//     `x-coalition-version` header separates the app from the edge.
+// That lesson now lives on check 3, which is the one still asking the Coalition anything.
 
-test("⭐ 400 is the PASS — auth ran before the body was parsed, so nothing was created", async () => {
+test("🔒 the deployed-Coalition auth check is SKIPPED, and says whose signature it needs", async () => {
   const { checks, findings } = await probeHub(INPUT, fakeHttp());
   assert.deepEqual(findings, []);
-  assert.equal(check(checks, "COALITION_KEY").status, "pass");
-  assert.match(check(checks, "COALITION_KEY").detail, /nothing created/);
-});
-
-test("503 payments-disabled also passes — a Supporter sells nothing and still has a key", async () => {
-  const { checks, findings } = await probeHub(
-    INPUT,
-    fakeHttp({ [`POST ${COALITION}/checkout`]: { status: 503, text: '{"error":"payments disabled"}' } })
-  );
-  assert.deepEqual(findings, []);
-  assert.equal(check(checks, "COALITION_KEY").status, "pass");
-});
-
-test("⭐ Flux's own 503 for an UNDEPLOYED app must not read as an accepted key", async () => {
-  // Measured 2026-08-24: a Coalition that was never deployed answered every route with
-  // Flux's edge page (`Error 503 FDM-USA-1-1`, text/html). 503 is on the accept side of
-  // the 401/not-401 split, so the probe reported COALITION_KEY as ACCEPTED — the one
-  // direction this check must never fail in. The header is what separates them: the edge
-  // page has none, and a real Coalition sets it on 503 too.
-  const { checks, findings } = await probeHub(
-    INPUT,
-    fakeHttp({
-      [`POST ${COALITION}/checkout`]: {
-        status: 503,
-        text: "<html><head><title>Error 503 FDM-USA-1-1</title></head></html>",
-        headers: {},
-      },
-    })
-  );
-  assert.deepEqual(findings, []);
-  assert.equal(check(checks, "COALITION_KEY").status, "skip");
-  assert.match(check(checks, "COALITION_KEY").detail, /unproven/);
-  assert.doesNotMatch(check(checks, "COALITION_KEY").detail, /accepted/);
-});
-
-test("⭐ only 401 means rejected — a 403 must never send the operator to rotate a working key", async () => {
-  // The lesson --check-stripe learned against restricted keys: anything other than 401
-  // means the credential was ACCEPTED and something later went wrong.
-  for (const status of [403, 500]) {
-    const { findings } = await probeHub(INPUT, fakeHttp({ [`GET ${MT}/api/agent/state`]: { status } }));
-    assert.deepEqual(findings, [], `status ${status} must not produce a key finding`);
-  }
-});
-
-test("an unreachable hub is a SKIP that says validity is unproven, not a pass", async () => {
-  const http: HubHttp = async (req) => {
-    if (req.url.startsWith(MT)) throw new Error("getaddrinfo EAI_AGAIN fluxhub.moltentech.us");
-    return fakeHttp()(req);
-  };
-  const { checks, findings } = await probeHub(INPUT, http);
-  assert.deepEqual(findings, []);
-  assert.equal(check(checks, "AGENT_KEY").status, "skip");
-  assert.match(check(checks, "AGENT_KEY").detail, /unproven/);
-});
-
-test("⭐ a deployed manifest signed by ANOTHER key is an error, with head…tail keys", async () => {
-  const other = JSON.stringify({ pubkey: "b3RoZXJrZXlvdGhlcmtleQ==", signature: "sigAAA" });
-  const { checks, findings } = await probeHub(
-    INPUT,
-    fakeHttp({ [`GET ${COALITION}/.well-known/mt-provider.json`]: { status: 200, text: other } })
-  );
-  assert.deepEqual(rules(findings), ["COALITION_MANIFEST_WRONG_PUBKEY"]);
-  assert.equal(findings[0]!.severity, "error");
-  assert.match(findings[0]!.message, /…/, "keys are truncated head…tail, never head-only");
-  assert.equal(check(checks, "deployed manifest").status, "fail");
-});
-
-test("same key, older signature = a re-sign that was never redeployed — a WARNING", async () => {
-  // Nothing is broken; the listing customers see is simply not the one that was signed.
-  const stale = JSON.stringify({ pubkey: PUBKEY, signature: "sigOLD" });
-  const { findings } = await probeHub(
-    INPUT,
-    fakeHttp({ [`GET ${COALITION}/.well-known/mt-provider.json`]: { status: 200, text: stale } })
-  );
-  assert.deepEqual(rules(findings), ["COALITION_MANIFEST_STALE_DEPLOY"]);
-  assert.equal(findings[0]!.severity, "warning");
-});
-
-test("keys not yet issued are SKIPPED and point at /onboard — this is not a failure", async () => {
-  // The state of every operator between `init` and pasting the manifest. Reporting it as
-  // an error would train them to ignore the report at the exact moment it starts mattering.
-  const { checks, findings } = await probeHub(
-    { ...INPUT, agentKey: undefined, coalitionKey: undefined },
-    fakeHttp()
-  );
-  assert.deepEqual(findings, []);
-  assert.equal(check(checks, "AGENT_KEY").status, "skip");
-  assert.match(check(checks, "AGENT_KEY").detail, /onboard/);
-  assert.equal(check(checks, "COALITION_KEY").status, "skip");
-});
-
-test("a wrong COALITION_URL reads as a wrong URL, not as a rejected key", async () => {
-  const { checks, findings } = await probeHub(
-    INPUT,
-    fakeHttp({ [`POST ${COALITION}/checkout`]: { status: 404 } })
-  );
-  assert.deepEqual(findings, []);
-  assert.match(check(checks, "COALITION_KEY").detail, /COALITION_URL/);
+  const c = check(checks, "Coalition inbound auth");
+  assert.equal(c.status, "skip");
+  assert.match(c.detail, /Flux Hub signature/);
+  // Must not read as a pass. A skip that looks like a tick is how a missing check becomes
+  // invisible — the operator needs to know this ground is no longer covered here.
+  assert.notEqual(c.status, "pass");
 });
 
 test("a trailing slash on either URL does not produce a doubled path", async () => {

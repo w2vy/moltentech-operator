@@ -628,13 +628,14 @@ of file comparison, and fails only after a customer has paid.
 
 ### `--check-hub`
 
-The only probe that proves a **key** rather than a configuration. Needs `MT_BASE_URL`; uses
-`AGENT_KEY`, `COALITION_KEY`, `COALITION_URL`, `manifest-pubkey.txt` and `manifest.json`.
+The only probe that proves a **key** rather than a configuration. Needs `MT_BASE_URL` and
+`PROVIDER_SLUG`; uses `MANIFEST_KEY`, `COALITION_URL`, `manifest-pubkey.txt` and
+`manifest.json`.
 
 | Check | Proves |
 |---|---|
-| `AGENT_KEY → Flux Hub` | FH still accepts the key your agent authenticates with |
-| `COALITION_KEY → deployed Coalition` | the deployed Coalition still accepts it |
+| `MANIFEST_KEY → Flux Hub` | FH accepts a signature from the key your agent authenticates with — the same envelope the agent sends, so this is that credential exercised end to end |
+| `Coalition inbound auth` | **always skipped.** Since Phase E your Coalition accepts only a Flux Hub signature on `/checkout` and `/manage`, and you do not hold Flux Hub's key. It is not a check that regressed; it stopped being yours to run |
 | `deployed manifest` | what the Coalition actually serves is signed by **your** key, and is not older than your local `manifest.json` |
 | `deployed Coalition build` | which build is live |
 
@@ -697,7 +698,7 @@ manifest's owner.
 **What lands in the blob:** `PROVIDER_SLUG`, `MT_BASE_URL` (both required), then
 `MT_PUBKEY`, `OWNER_ADDRESS`, `PORT`, `TRIAL_DAYS`, `SESSION_TTL_HOURS`,
 `STATS_WINDOW_DAYS` if set; `TIER_PRICES_JSON` (validated as an object of integer cents);
-`AGENT_KEY` and `COALITION_KEY` (required); Stripe keys per the rule below;
+`COALITION_SIGNING_KEY` (required); Stripe keys per the rule below;
 `SESSION_SECRET`; and `MANIFEST_JSON`, the signed manifest minified to one line and served
 verbatim at `/.well-known/mt-provider.json`. Empty values are dropped.
 
@@ -837,7 +838,7 @@ configuration. Read it before anything else:
 
 | Field | Good | What the other value means |
 |---|---|---|
-| `auth=` | `signature` | `bearer` — it fell back to the legacy `AGENT_KEY`; `MANIFEST_KEY` did not load |
+| `auth=` | `signature` | anything else is a bug — since Phase E there is no other path, and a missing `MANIFEST_KEY` fails at boot rather than falling back |
 | `ownerAuth=` | `enforced` | `off` — `OWNER_ADDRESS` is unset; privileged actions are not owner-checked |
 | `courier=` | `on` | `off` — **you will never receive authorization requests**, and deletes/reprovisions sit forever |
 | `dryRun=` | `false` | `true` — it is pretending. Forced on when `PROXMOX_URL` or `PROXMOX_TOKEN_SECRET` did not load |
@@ -868,7 +869,7 @@ configuration. Read it before anything else:
 |---|---|---|
 | `MANIFEST_KEY` | — | base64 of the PEM; asymmetric auth, **preferred** |
 | `MANIFEST_PUBKEY` | — | the **public** pin `doctor` compares against. Not a secret. Leave it out and that check can only report `skip`, so a wrong key is not caught until FH rejects a signature |
-| `AGENT_KEY` | — | legacy bearer auth. At least one of these two must be set; keep both while rolling over |
+| `AGENT_KEY` | — | **removed in Phase E (2026-09-07).** Authenticates nothing; delete it from your env. The agent names it once at startup if it is still set |
 | `OWNER_ADDRESS` | — | enables owner-auth enforcement + the courier |
 | `COALITION_URL` | — | trailing slash stripped; required for the courier |
 | `PROXMOX_URL` | — | an address the **container** can reach: your Proxmox LAN IP, not `127.0.0.1` (which is the container's own loopback). Or run with `--network host` if the agent is on the Proxmox host |

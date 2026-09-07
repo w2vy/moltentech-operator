@@ -17,10 +17,15 @@ import {
 import { z } from "zod";
 import { signAgentRequest } from "./signing";
 
-/** How the client authenticates to MT: an asymmetric signature or the legacy bearer. */
-export type MtClientAuth =
-  | { kind: "signature"; key: KeyObject }
-  | { kind: "bearer"; agentKey: string };
+/**
+ * How the client authenticates to MT. One way, since Phase E step 4 (2026-09-07): a
+ * signature over the request envelope.
+ *
+ * Kept as a tagged union of one rather than collapsed to a bare `KeyObject`, because the
+ * shape is what makes adding a second mechanism a deliberate act with a name — which is
+ * how the bearer got removed cleanly rather than being tangled through every call site.
+ */
+export type MtClientAuth = { kind: "signature"; key: KeyObject };
 
 /**
  * Typed, outbound-only client for the MoltenTech agent API. Requests are
@@ -36,10 +41,7 @@ export class MtClient {
 
   /** Auth headers for one request; the signed envelope binds method/path/slug/body. */
   private authHeaders(method: string, path: string, rawBody: string): Record<string, string> {
-    if (this.auth.kind === "signature") {
-      return signAgentRequest(this.auth.key, method, path, this.providerSlug, rawBody);
-    }
-    return { Authorization: `Bearer ${this.auth.agentKey}` };
+    return signAgentRequest(this.auth.key, method, path, this.providerSlug, rawBody);
   }
 
   private headers(method: string, path: string, rawBody: string): Record<string, string> {

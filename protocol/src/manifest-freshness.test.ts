@@ -147,12 +147,11 @@ test("doctor with no manifest.json says nothing about it — mid-onboarding is n
 
 test("⭐ `env` needs no arguments in a scaffold directory", () => {
   const dir = scaffold();
-  // Fill the three keys /onboard issues; env legitimately requires them.
+  // Only Stripe is left to fill: Phase E step 4 stopped `env` requiring AGENT_KEY and
+  // COALITION_KEY, and the scaffold no longer emits blanks for them.
   writeFileSync(
     join(dir, "secrets.env"),
     read(dir, "secrets.env")
-      .replace(/^AGENT_KEY=$/m, "AGENT_KEY=ak_test")
-      .replace(/^COALITION_KEY=$/m, "COALITION_KEY=ck_test")
       .replace(/^STRIPE_SECRET_KEY=$/m, "STRIPE_SECRET_KEY=rk_test")
       .replace(/^STRIPE_WEBHOOK_SECRET=$/m, "STRIPE_WEBHOOK_SECRET=whsec_test")
   );
@@ -160,7 +159,10 @@ test("⭐ `env` needs no arguments in a scaffold directory", () => {
   const pairs = JSON.parse(read(dir, "env.json")) as string[];
   assert.ok(Array.isArray(pairs) && pairs.length > 0);
   assert.ok(pairs.some((p) => p.startsWith("MANIFEST_JSON=")), "the signed manifest must ship");
-  assert.ok(pairs.some((p) => p === "AGENT_KEY=ak_test"));
+  // 🔒 The dead credentials must not reappear in env.json — that file is what an operator
+  // pastes into a Flux app spec, where every value is PUBLIC.
+  assert.equal(pairs.some((p) => p.startsWith("AGENT_KEY=")), false);
+  assert.equal(pairs.some((p) => p.startsWith("COALITION_KEY=")), false);
 });
 
 test("a missing file names WHICH file and where env expected it", () => {

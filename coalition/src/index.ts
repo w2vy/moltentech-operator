@@ -30,14 +30,19 @@ async function main() {
   const server = createServer(stripe, cfg);
   server.listen(cfg.port, () => {
     console.log(`[coalition] provider=${cfg.providerSlug} listening on :${cfg.port} (mt=${cfg.mtBaseUrl})`);
-    // The startup auth readout the Phase D runbook asked for. A Coalition that fell
-    // back to bearer used to look identical to one that signed until you grepped MT's
-    // logs; say it here, once, on the box that knows.
-    console.log(
-      `[coalition] auth: outbound=${cfg.coalitionSigningKey ? "signed" : "bearer"}` +
-        ` inbound=${cfg.mtPubkey ? "signature" : "bearer-only"}` +
-        ` legacy-bearers=${[cfg.agentKey && "AGENT_KEY", cfg.coalitionKey && "COALITION_KEY"].filter(Boolean).join(",") || "none"}`
-    );
+    // The startup auth readout the Phase D runbook asked for. It used to report which of
+    // two paths this box would take; since Phase E step 4 there is only one, so it says so
+    // flatly — a line that can only ever print one thing is still worth printing, because
+    // its ABSENCE is how you spot a Coalition running an older image.
+    console.log("[coalition] auth: outbound=signed inbound=signature (legacy bearers removed)");
+    if (cfg.legacyBearersPresent.length > 0) {
+      // Not a warning about danger — they authenticate nothing now. It is the only chance
+      // the operator gets to be told the lines in their env.json are dead.
+      console.log(
+        `[coalition] ${cfg.legacyBearersPresent.join(" and ")} ` +
+          `${cfg.legacyBearersPresent.length === 1 ? "is" : "are"} set but no longer used — safe to delete`
+      );
+    }
   });
 
   const stop = () => server.close(() => process.exit(0));

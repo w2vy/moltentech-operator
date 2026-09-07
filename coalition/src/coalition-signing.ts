@@ -67,19 +67,22 @@ export function signCoalitionRequest(
 }
 
 /** The config fields every outbound MT call needs to authenticate itself. */
-export type MtCallerConfig = Pick<CoalitionConfig, "providerSlug" | "agentKey"> & {
-  // Spelled optional here even though `CoalitionConfig` now requires it: this function
-  // IS the dual-accept fork, so it has to be callable with the key absent — that is the
-  // rollback path it exists to describe.
+export type MtCallerConfig = Pick<CoalitionConfig, "providerSlug"> & {
+  // Still spelled optional, even though `CoalitionConfig` requires it: the absence is now
+  // an ERROR this function raises rather than a fork it takes, and the type has to admit
+  // the value in order to say so with a useful message.
   coalitionSigningKey?: string;
 };
 
 /**
- * Auth headers for one outbound MT call: signature when a signing key is configured,
- * legacy bearer otherwise.
+ * Auth headers for one outbound MT call. Always a signature — the legacy `AGENT_KEY`
+ * bearer fallback was removed in Phase E step 4 (2026-09-07).
  *
- * The single place the choice is made, so a fifth outbound call cannot quietly ship on
- * bearer-only. Callers pass the exact `path` and `rawBody` they are about to send —
+ * This was the single place the choice was made, so that a fifth outbound call could not
+ * quietly ship on bearer-only. There is no choice left to make, which is the point: MT
+ * dropped the columns that stored those keys, so a bearer could only ever have produced a
+ * 401 that looked like a signing bug. Callers pass the exact `path` and `rawBody` they are
+ * about to send —
  * signing anything else produces a valid signature over the wrong request, which MT
  * rejects and which is tedious to diagnose from the 401 alone.
  */
@@ -91,13 +94,10 @@ export function mtAuthHeaders(
   key = loadCoalitionKey(cfg.coalitionSigningKey)
 ): Record<string, string> {
   if (key) return signCoalitionRequest(key, method, path, cfg.providerSlug, rawBody);
-  // Same reasoning as the inbound guard: `agentKey` is optional since the Phase E
-  // polarity flip, and `Bearer undefined` is a request that fails at MT with an
-  // undiagnosable 401. Refuse to build the header instead.
-  if (!cfg.agentKey) {
-    throw new Error(
-      "No outbound MT credential: set COALITION_SIGNING_KEY (preferred) or the legacy AGENT_KEY"
-    );
-  }
-  return { Authorization: `Bearer ${cfg.agentKey}` };
+  // Fail loudly here rather than send an unauthenticated request. There is no fallback to
+  // reach for any more, and a missing signing key is a misconfiguration the operator can
+  // fix in one line — whereas an unsigned call fails at MT as an opaque 401.
+  throw new Error(
+    "No outbound MT credential: COALITION_SIGNING_KEY is required (the legacy AGENT_KEY bearer was removed in Phase E)"
+  );
 }

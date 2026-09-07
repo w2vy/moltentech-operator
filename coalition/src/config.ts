@@ -9,18 +9,15 @@ export type CoalitionConfig = {
   providerSlug: string;
   mtBaseUrl: string;
   /**
-   * LEGACY per-provider bearer the Coalition relays payment events to MT with
-   * (operator -> MT). Optional since the Phase E polarity flip: `coalitionSigningKey`
-   * is the credential now, and this is only the rollback path. Absent = outbound calls
-   * MUST sign; `mtAuthHeaders` throws rather than send `Bearer undefined`.
+   * Legacy bearer env vars still SET on this box, if any — `AGENT_KEY`, `COALITION_KEY`.
+   *
+   * Deliberately not the values. Phase E step 4 removed both credentials from every code
+   * path, but they are still sitting in operators' `env.json` and `.env.operator` files,
+   * and nothing would ever have told them so. Startup names them once and says they are
+   * safe to delete. Reading env stays inside this module, which is the only place that
+   * touches `process.env`.
    */
-  agentKey?: string;
-  /**
-   * LEGACY MT-issued bearer accepted on inbound /checkout and /manage (MT -> operator).
-   * Optional since the Phase E polarity flip. Absent = the dual-accept fallback in
-   * `auth.ts` is off and only a valid MT signature authenticates.
-   */
-  coalitionKey?: string;
+  legacyBearersPresent: string[];
   /**
    * Ed25519 private key the Coalition SIGNS its four outbound reports to MT with
    * (Phase D) — base64 of the raw 32-byte seed, as `issueProviderKeys` hands it over
@@ -99,9 +96,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CoalitionConfi
     port: Number(env.PORT ?? 8088),
     providerSlug: req(env, "PROVIDER_SLUG"),
     mtBaseUrl: req(env, "MT_BASE_URL").replace(/\/$/, ""),
-    // Phase E polarity: the SIGNING keys are required, the bearers are optional.
-    agentKey: env.AGENT_KEY || undefined,
-    coalitionKey: env.COALITION_KEY || undefined,
+    // Phase E step 4: the signing keys are the ONLY keys. The legacy bearers are read
+    // solely so startup can tell the operator they are dead weight.
+    legacyBearersPresent: ["AGENT_KEY", "COALITION_KEY"].filter((k) => env[k]),
     coalitionSigningKey: req(env, "COALITION_SIGNING_KEY"),
     mtPubkey: req(env, "MT_PUBKEY"),
     stripeSecretKey: env.STRIPE_SECRET_KEY || undefined,
