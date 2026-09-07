@@ -30,6 +30,14 @@ async function main() {
   const server = createServer(stripe, cfg);
   server.listen(cfg.port, () => {
     console.log(`[coalition] provider=${cfg.providerSlug} listening on :${cfg.port} (mt=${cfg.mtBaseUrl})`);
+    // The startup auth readout the Phase D runbook asked for. A Coalition that fell
+    // back to bearer used to look identical to one that signed until you grepped MT's
+    // logs; say it here, once, on the box that knows.
+    console.log(
+      `[coalition] auth: outbound=${cfg.coalitionSigningKey ? "signed" : "bearer"}` +
+        ` inbound=${cfg.mtPubkey ? "signature" : "bearer-only"}` +
+        ` legacy-bearers=${[cfg.agentKey && "AGENT_KEY", cfg.coalitionKey && "COALITION_KEY"].filter(Boolean).join(",") || "none"}`
+    );
   });
 
   const stop = () => server.close(() => process.exit(0));

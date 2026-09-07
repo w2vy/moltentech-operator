@@ -94,7 +94,7 @@ test("a failed payment reads the same relocated field", () => {
 
 // ── the silence ────────────────────────────────────────────────────────────────
 
-const cfg = { mtBaseUrl: "https://mt.test", agentKey: "k", providerSlug: SLUG };
+const cfg = { mtBaseUrl: "https://mt.test", agentKey: "k", providerSlug: SLUG, coalitionSigningKey: undefined };
 const mtSays = (status: number, body: unknown) =>
   (async () =>
     new Response(JSON.stringify(body), {

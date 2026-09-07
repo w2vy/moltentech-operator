@@ -8,27 +8,39 @@ export type CoalitionConfig = {
   port: number;
   providerSlug: string;
   mtBaseUrl: string;
-  /** Per-provider key the Coalition uses to relay payment events to MT (operator -> MT). */
-  agentKey: string;
-  /** MT-issued key the Coalition requires on inbound /checkout and /manage (MT -> operator). */
-  coalitionKey: string;
+  /**
+   * LEGACY per-provider bearer the Coalition relays payment events to MT with
+   * (operator -> MT). Optional since the Phase E polarity flip: `coalitionSigningKey`
+   * is the credential now, and this is only the rollback path. Absent = outbound calls
+   * MUST sign; `mtAuthHeaders` throws rather than send `Bearer undefined`.
+   */
+  agentKey?: string;
+  /**
+   * LEGACY MT-issued bearer accepted on inbound /checkout and /manage (MT -> operator).
+   * Optional since the Phase E polarity flip. Absent = the dual-accept fallback in
+   * `auth.ts` is off and only a valid MT signature authenticates.
+   */
+  coalitionKey?: string;
   /**
    * Ed25519 private key the Coalition SIGNS its four outbound reports to MT with
    * (Phase D) — base64 of the raw 32-byte seed, as `issueProviderKeys` hands it over
    * at onboarding, or base64 of a PKCS#8 PEM from `fh-toolkit coalition-keygen`.
    *
-   * SECRET. Optional on purpose: unset keeps the legacy `AGENT_KEY` bearer, which is
-   * what lets operators cut over one at a time. Distinct from the agent's MANIFEST_KEY
-   * — the Coalition must never hold that one.
+   * SECRET. REQUIRED since the Phase E polarity flip (2026-09-07). It was optional
+   * while `AGENT_KEY` was required, which is backwards: a Coalition redeployed from a
+   * stale `env.json` booted cleanly and silently fell back to bearer — the exact
+   * regression the Phase D soak watches for. Now the new key is the mandatory one and
+   * a stale env fails loudly at boot instead. Distinct from the agent's MANIFEST_KEY —
+   * the Coalition must never hold that one.
    */
-  coalitionSigningKey?: string;
+  coalitionSigningKey: string;
   /**
    * Global MT ed25519 public key (base64 raw), pinned at deploy from MT's
-   * /api/mt-pubkey. When set, inbound /checkout + /manage are verified by
-   * signature; the `coalitionKey` bearer stays as a dual-accept fallback. Leave
-   * unset to keep bearer-only until the operator has pinned the key.
+   * /api/mt-pubkey. Inbound /checkout + /manage are verified against it. REQUIRED
+   * since the Phase E polarity flip — an unpinned Coalition is bearer-only, which is
+   * precisely the state Phase E removes.
    */
-  mtPubkey?: string;
+  mtPubkey: string;
   /** Operator's restricted Stripe key + webhook signing secret (the only secrets here). */
   /** Stripe credentials are OPTIONAL: required only when a PAID tier is listed.
    * A self-hoster running their own nodes on Foundation collateral has no customers
@@ -87,10 +99,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CoalitionConfi
     port: Number(env.PORT ?? 8088),
     providerSlug: req(env, "PROVIDER_SLUG"),
     mtBaseUrl: req(env, "MT_BASE_URL").replace(/\/$/, ""),
-    agentKey: req(env, "AGENT_KEY"),
-    coalitionKey: req(env, "COALITION_KEY"),
-    coalitionSigningKey: env.COALITION_SIGNING_KEY || undefined,
-    mtPubkey: env.MT_PUBKEY || undefined,
+    // Phase E polarity: the SIGNING keys are required, the bearers are optional.
+    agentKey: env.AGENT_KEY || undefined,
+    coalitionKey: env.COALITION_KEY || undefined,
+    coalitionSigningKey: req(env, "COALITION_SIGNING_KEY"),
+    mtPubkey: req(env, "MT_PUBKEY"),
     stripeSecretKey: env.STRIPE_SECRET_KEY || undefined,
     stripeWebhookSecret: env.STRIPE_WEBHOOK_SECRET || undefined,
     manifestPath: env.MANIFEST_PATH ?? "./manifest.json",

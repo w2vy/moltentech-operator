@@ -22,6 +22,7 @@ function cfg(over: Partial<CoalitionConfig> = {}): CoalitionConfig {
     mtBaseUrl: "https://mt.example",
     agentKey: "agent-key",
     coalitionKey: BEARER,
+    coalitionSigningKey: "unused-by-the-inbound-verifier",
     stripeSecretKey: "sk_test",
     stripeWebhookSecret: "whsec",
     manifestPath: "./manifest.json",
@@ -133,4 +134,38 @@ test("without a pinned MT pubkey, signatures are ignored and bearer is required"
     authorization: `Bearer ${BEARER}`,
   });
   assert.deepEqual(withBearer, { ok: true, via: "bearer" });
+});
+
+// ⭐ Phase E polarity flip (2026-09-07). `coalitionKey` became optional, and an
+// unguarded template literal would turn an unset key into the literal string
+// "Bearer undefined" — a credential any caller can type. The guard in auth.ts is the
+// only thing standing between "bearer disabled" and "bearer is a known constant".
+test("⭐ an UNSET coalitionKey does not accept the literal `Bearer undefined`", () => {
+  const c = cfg({ coalitionKey: undefined });
+  const r = verifyMtRequest(c, "POST", "/checkout", Buffer.from(""), {
+    authorization: "Bearer undefined",
+  });
+  assert.equal(r.ok, false);
+  assert.equal((r as { status: number }).status, 401);
+});
+
+test("⭐ an UNSET coalitionKey still admits a valid MT signature", () => {
+  const c = cfg({ coalitionKey: undefined });
+  const issuedAt = new Date().toISOString();
+  const nonce = "nonce-phase-e-1";
+  const env = {
+    method: "POST",
+    path: "/checkout",
+    slug: SLUG,
+    issuedAt,
+    nonce,
+    bodyHash: bodyHash(Buffer.from("")),
+  };
+  const r = verifyMtRequest(c, "POST", "/checkout", Buffer.from(""), {
+    "x-mt-signature": signRequest(env, mt.privateKey),
+    "x-mt-timestamp": issuedAt,
+    "x-mt-nonce": nonce,
+  });
+  assert.equal(r.ok, true);
+  assert.equal((r as { via: string }).via, "signature");
 });
