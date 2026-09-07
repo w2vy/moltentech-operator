@@ -14,6 +14,9 @@ const BASE = {
   MT_BASE_URL: "https://fluxhub.moltentech.us",
   AGENT_KEY: "agent-key",
   COALITION_KEY: "coalition-key",
+  // Required since the Phase E polarity flip (see config-phase-e-polarity.test.ts).
+  COALITION_SIGNING_KEY: "not-a-real-signing-key",
+  MT_PUBKEY: "not-a-real-mt-pubkey",
 };
 
 test("selling nothing loads with no Stripe keys at all", () => {

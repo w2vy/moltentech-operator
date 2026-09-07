@@ -52,6 +52,8 @@ function cfg(): CoalitionConfig {
     mtBaseUrl: "https://mt.example",
     agentKey: "agent-key",
     coalitionKey: "bearer",
+    coalitionSigningKey: "unused-here",
+    mtPubkey: "unused-here",
     stripeSecretKey: "sk_test",
     stripeWebhookSecret: "whsec",
     manifestPath: "./manifest.json",

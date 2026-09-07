@@ -109,12 +109,19 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AgentConfig {
     inventory = z.array(InventoryHost).parse(JSON.parse(inventoryRaw));
   }
 
-  // Auth: prefer asymmetric signing (MANIFEST_KEY) and fall back to the legacy
-  // AGENT_KEY bearer; at least one must be present.
+  // Auth: MANIFEST_KEY is REQUIRED since the Phase E polarity flip (2026-09-07).
+  // AGENT_KEY remains accepted alongside it as the rollback path, but it can no longer
+  // be the ONLY credential — an agent restarted from a stale `env.json` used to boot
+  // clean on the bearer and silently authenticate `via=bearer`, which is the regression
+  // the Phase D soak exists to catch. Fail at boot instead, where it is diagnosable.
   const agentKey = env.AGENT_KEY || undefined;
   const manifestKey = env.MANIFEST_KEY || undefined;
-  if (!agentKey && !manifestKey) {
-    throw new Error("Missing agent auth: set MANIFEST_KEY (preferred) or AGENT_KEY");
+  if (!manifestKey) {
+    throw new Error(
+      agentKey
+        ? "Missing MANIFEST_KEY: AGENT_KEY alone is no longer sufficient (Phase E). Re-run `fh-toolkit keygen` and re-ingest, or restore MANIFEST_KEY from your env.json."
+        : "Missing agent auth: set MANIFEST_KEY"
+    );
   }
 
   return {

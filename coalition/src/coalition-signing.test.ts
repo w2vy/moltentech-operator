@@ -172,3 +172,19 @@ test("a garbage COALITION_SIGNING_KEY throws at load, it does not silently fall 
   // cutover: the reports keep succeeding and via=bearer is the only tell.
   assert.throws(() => loadCoalitionKey("not-base64-at-all!!"));
 });
+
+// ⭐ Phase E polarity flip: `agentKey` is optional now, so the bearer branch can be
+// reached with nothing to put in it. `Bearer undefined` fails at MT as a bare 401 that
+// looks identical to a bad key — refuse to build the header instead.
+test("⭐ no signing key AND no agentKey throws instead of sending `Bearer undefined`", () => {
+  assert.throws(
+    () =>
+      mtAuthHeaders(
+        { providerSlug: SLUG, agentKey: undefined, coalitionSigningKey: undefined },
+        "GET",
+        "/api/agent/nodes",
+        ""
+      ),
+    /No outbound MT credential/
+  );
+});

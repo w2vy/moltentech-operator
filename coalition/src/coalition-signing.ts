@@ -67,10 +67,12 @@ export function signCoalitionRequest(
 }
 
 /** The config fields every outbound MT call needs to authenticate itself. */
-export type MtCallerConfig = Pick<
-  CoalitionConfig,
-  "providerSlug" | "agentKey" | "coalitionSigningKey"
->;
+export type MtCallerConfig = Pick<CoalitionConfig, "providerSlug" | "agentKey"> & {
+  // Spelled optional here even though `CoalitionConfig` now requires it: this function
+  // IS the dual-accept fork, so it has to be callable with the key absent — that is the
+  // rollback path it exists to describe.
+  coalitionSigningKey?: string;
+};
 
 /**
  * Auth headers for one outbound MT call: signature when a signing key is configured,
@@ -89,5 +91,13 @@ export function mtAuthHeaders(
   key = loadCoalitionKey(cfg.coalitionSigningKey)
 ): Record<string, string> {
   if (key) return signCoalitionRequest(key, method, path, cfg.providerSlug, rawBody);
+  // Same reasoning as the inbound guard: `agentKey` is optional since the Phase E
+  // polarity flip, and `Bearer undefined` is a request that fails at MT with an
+  // undiagnosable 401. Refuse to build the header instead.
+  if (!cfg.agentKey) {
+    throw new Error(
+      "No outbound MT credential: set COALITION_SIGNING_KEY (preferred) or the legacy AGENT_KEY"
+    );
+  }
   return { Authorization: `Bearer ${cfg.agentKey}` };
 }

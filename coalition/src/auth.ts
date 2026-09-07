@@ -73,8 +73,11 @@ export function verifyMtRequest(
     return { ok: true, via: "signature" };
   }
 
-  // Dual-accept fallback: legacy MT-issued symmetric bearer.
-  if (headers["authorization"] === `Bearer ${cfg.coalitionKey}`) {
+  // Dual-accept fallback: legacy MT-issued symmetric bearer. The `cfg.coalitionKey`
+  // guard is load-bearing since the Phase E polarity flip made the column optional —
+  // without it an unset key interpolates to the literal `Bearer undefined`, which any
+  // caller can send. An absent bearer must mean "signature only", never "any string".
+  if (cfg.coalitionKey && headers["authorization"] === `Bearer ${cfg.coalitionKey}`) {
     return { ok: true, via: "bearer" };
   }
 
