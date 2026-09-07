@@ -22,15 +22,15 @@ Stripe ────▶ POST /webhook ──relay(Bearer agentKey)──▶ MT /a
 |---|---|---|---|
 | GET | `/.well-known/mt-provider.json` | none | signed manifest |
 | GET | `/stats` | none | StatsSnapshot |
-| POST | `/checkout` | `Bearer COALITION_KEY` | mint Checkout Session (trial) |
-| POST | `/manage` | `Bearer COALITION_KEY` | billing portal / cancel |
+| POST | `/checkout` | Flux Hub signature (`x-mt-signature`) | mint Checkout Session (trial) |
+| POST | `/manage` | Flux Hub signature (`x-mt-signature`) | billing portal / cancel |
 | POST | `/webhook` | Stripe signature | verify + relay to MT |
 
 ## Run
 ```sh
 npm install
 PROVIDER_SLUG=my-op MT_BASE_URL=https://fluxhub.moltentech.us \
-AGENT_KEY=<relay key (operator->MT)> COALITION_KEY=<MT-issued key (MT->operator)> \
+COALITION_SIGNING_KEY=<ed25519 seed or PKCS#8, from /onboard> MT_PUBKEY=<Flux Hub's pubkey> \
 STRIPE_SECRET_KEY=rk_live_<restricted> STRIPE_WEBHOOK_SECRET=whsec_... \
 TIER_PRICES_JSON='{"nimbus":2200,"cumulus":700}' TRIAL_DAYS=1 \
 MANIFEST_PATH=./manifest.json npm start

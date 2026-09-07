@@ -16,6 +16,17 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { normalizeListEndpoint, checkCollateralOnce } from "./collateral";
 import type { CoalitionConfig } from "./config";
+import { generateKeyPairSync } from "node:crypto";
+
+// A real ed25519 seed, so `mtAuthHeaders` signs rather than throwing. Phase E step 4
+// removed the bearer fallback, so an outbound call with no signing key is now an error
+// and every fixture that reaches one has to carry a usable key.
+// The raw 32-byte seed, which is the form `loadCoalitionKey` expects — the full PKCS#8
+// DER is 48 bytes and is rejected with a message that says so.
+const SIGNING_KEY = generateKeyPairSync("ed25519")
+  .privateKey.export({ type: "pkcs8", format: "der" })
+  .subarray(-32)
+  .toString("base64");
 
 const TXID = "a".repeat(64);
 
@@ -56,7 +67,10 @@ function cfg(): CoalitionConfig {
     port: 8088,
     providerSlug: "endpoint-test",
     mtBaseUrl: "https://mt.example",
-    agentKey: "agent-key",
+    legacyBearersPresent: [],
+    // Required since Phase E step 4: `mtAuthHeaders` throws without it rather than
+    // falling back to a bearer, so every fixture that reaches an outbound call needs one.
+    coalitionSigningKey: SIGNING_KEY,
     fluxApiUrl: "https://flux.example",
   } as unknown as CoalitionConfig;
 }

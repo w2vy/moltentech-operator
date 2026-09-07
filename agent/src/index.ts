@@ -50,9 +50,13 @@ async function main() {
   if (process.argv[2] === "doctor") return doctor();
   const cfg = loadConfig();
   const manifestKey = loadManifestKey(cfg.manifestKey);
-  const auth: MtClientAuth = manifestKey
-    ? { kind: "signature", key: manifestKey }
-    : { kind: "bearer", agentKey: cfg.agentKey! };
+  // `loadConfig` already refuses to return without a MANIFEST_KEY, so this cannot be
+  // null in practice — but the non-null assertion that used to live on `cfg.agentKey!`
+  // is exactly the kind of thing that survives a refactor and starts lying, so check.
+  if (!manifestKey) {
+    throw new Error("MANIFEST_KEY did not parse into a usable signing key");
+  }
+  const auth: MtClientAuth = { kind: "signature", key: manifestKey };
   const client = new MtClient(cfg.mtBaseUrl, auth).withProvider(cfg.providerSlug);
   const executor = pickExecutor(cfg);
 
@@ -69,6 +73,12 @@ async function main() {
       `ownerAuth=${cfg.ownerAddress ? "enforced" : "off"} courier=${coalition ? "on" : "off"} ` +
       `dryRun=${cfg.dryRun} poll=${cfg.pollIntervalMs}ms listing=${cfg.listingIntervalMs}ms`
   );
+  if (cfg.legacyAgentKeyPresent) {
+    // Not a danger warning — it authenticates nothing since Phase E step 4. It is the one
+    // chance the operator gets to learn the line in their env.json is dead, and without it
+    // that line survives every future redeploy because nothing ever mentions it again.
+    console.log("[agent] AGENT_KEY is set but no longer used — safe to delete");
+  }
 
   let stopping = false;
   const stop = () => {

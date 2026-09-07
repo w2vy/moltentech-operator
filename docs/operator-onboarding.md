@@ -381,8 +381,9 @@ payment method at all. Stripe is what lets strangers buy from you.
   and you are asked for the Proxmox token pair (Step 0.1 already printed it) and — if
   you are selling — your Stripe keys.
 - So an empty value in the generated `secrets.env` means **another system has to issue
-  it**, not that a question was skipped. On a self-hoster's first run exactly three are
-  empty: `AGENT_KEY`, `COALITION_KEY`, `COALITION_SIGNING_KEY`, all minted by `/onboard`.
+  it**, not that a question was skipped. On a self-hoster's first run exactly one is
+  empty: `COALITION_SIGNING_KEY`, minted by `/onboard`. (It was three until Phase E,
+  2026-09-07, when the `AGENT_KEY`/`COALITION_KEY` bearers were removed everywhere.)
   Each comment stays on its own line, because a comment after `=` becomes part of the
   value — which is why the file is generated rather than described.
 
@@ -450,8 +451,13 @@ explicitly — a clean report from such a key means *not checked*, never *checke
 A 403 on the *account* read is expected and is no longer reported: nothing depends on it.
 
 `--check-hub` is the only check that proves a **key** rather than a configuration. It
-presents `AGENT_KEY` to Flux Hub and `COALITION_KEY` to your **deployed** Coalition, and
-compares the manifest that Coalition serves against the one you signed here.
+signs a request to Flux Hub with your `MANIFEST_KEY` — the same envelope the running agent
+sends, so a pass is your agent's own credential exercised end to end — and compares the
+manifest your **deployed** Coalition serves against the one you signed here.
+
+Your Coalition's *inbound* auth is no longer checkable from your side: since Phase E it
+accepts only a signature from Flux Hub, and you do not hold Flux Hub's key. `doctor` says
+so rather than pretending, and the reachability half is still covered.
 
 🔴 **Nothing else you can see checks a key.** Flux Hub's stats pull is an *unauthenticated*
 GET, so the provider page keeps showing you as synced while your Coalition holds a dead
@@ -590,9 +596,10 @@ Open **`{MT_BASE_URL}/onboard`** in a browser on a machine with your wallet. You
 
    | Key | Direction | Where it goes |
    |---|---|---|
-   | `AGENT_KEY` | your agent + Coalition → FH | Coalition env (Step 4); optional on the agent (Step 6) |
-   | `COALITION_KEY` | FH → your Coalition (`/checkout`, `/manage`) | Coalition env only |
-   | `COALITION_SIGNING_KEY` | signs your Coalition's outbound reports to FH | **store it; nothing reads it yet** |
+   | `COALITION_SIGNING_KEY` | signs your Coalition's outbound reports to FH | Coalition env (Step 4) — **REQUIRED**, it will not start without it |
+
+   (`AGENT_KEY` and `COALITION_KEY` were issued here until Phase E, 2026-09-07. Both are
+   gone: your agent signs with `MANIFEST_KEY`, and Flux Hub signs its calls to you.)
 
 ⚠️ **`COALITION_SIGNING_KEY` has no consumer today.** It is issued ahead of the Phase D
 verifier so nobody onboarded in the meantime has to be re-opened. FH keeps only the
@@ -677,8 +684,8 @@ directly rather than the UI is the one case where you must supply an owner yours
 **1. Assemble the secrets.** Alongside `config.env` keep a private **`secrets.env`**
 (never commit, `chmod 600`):
 
-Same rule as `config.env`: **comments on their own line only** — a trailing comment
-after `AGENT_KEY`/`COALITION_KEY` becomes part of the key and FH will reject it (401).
+Same rule as `config.env`: **comments on their own line only** — a trailing comment after
+a key becomes part of its value, and FH will reject the result (401).
 
 ```sh
 # secrets.env
@@ -691,12 +698,8 @@ STRIPE_WEBHOOK_SECRET=whsec_<from step 3>
 # dashboard would publish your node names, tiers, live status and your customers'
 # rental codes to anyone with the URL. Node ACTIONS are wallet-signed either way.
 SESSION_SECRET=<openssl rand -hex 32>
-# AGENT_KEY / COALITION_KEY — the real values from Step 2.
-AGENT_KEY=<agentKey from /onboard>
-COALITION_KEY=<coalitionKey from /onboard>
-# COALITION_SIGNING_KEY — store it here for later. `fh-toolkit env` ignores it today;
-# nothing consumes it until Phase D. Keeping it beside the others is how you avoid
-# losing the only copy.
+# COALITION_SIGNING_KEY — the real value from Step 2. REQUIRED: your Coalition refuses
+# to start without it, and it is shown ONCE.
 COALITION_SIGNING_KEY=<coalitionSigningKey from /onboard>
 ```
 
@@ -877,14 +880,13 @@ Put its config in a private **`.env.operator`** (never commit, `chmod 600`):
 ```sh
 MT_BASE_URL=https://fluxhub.moltentech.us
 PROVIDER_SLUG=your-slug
-# Auth. MANIFEST_KEY (asymmetric signing) is preferred; AGENT_KEY is the legacy bearer.
-# At least one must be set — keep both while you roll over.
+# Auth. MANIFEST_KEY signs every agent -> Flux Hub request. REQUIRED, and the only
+# agent credential since Phase E (2026-09-07) removed the AGENT_KEY bearer.
 MANIFEST_KEY=<base64 of manifest-key.pem — see below>
 # The PUBLIC half, from manifest-pubkey.txt. Not a secret: it is the pin `mt-agent
 # doctor` compares MANIFEST_KEY against. Leave it out and that check can only report
 # `skip`, so a wrong key is not caught until FH rejects a signature.
 MANIFEST_PUBKEY=<contents of manifest-pubkey.txt>
-AGENT_KEY=<agentKey from /onboard>
 OWNER_ADDRESS=<the wallet address you sign with>
 COALITION_URL=https://<your-coalition>
 AGENT_INVENTORY_PATH=/data/inventory.json
@@ -1126,8 +1128,7 @@ Nothing compares these for you, and each pair has bitten a real onboarding:
 | `MT_BASE_URL` | `config.env`, `.env.operator` | itself — a staging/prod mix leaves you half-onboarded |
 | `OWNER_ADDRESS` | `config.env`, `.env.operator`, your wallet | the address you signed with at `/onboard` |
 | `COALITION_URL` | `config.env`, `.env.operator`, Stripe endpoint | the real Flux app URL |
-| `AGENT_KEY` | `secrets.env` → `env.json`, `.env.operator` | the value issued at `/onboard` |
-| `MANIFEST_KEY` | `.env.operator` | `base64 -w0 manifest-key.pem` |
+| `MANIFEST_KEY` | `.env.operator` | `base64 -w0 manifest-key.pem`, and the pubkey Flux Hub pinned |
 | tier price | `TIER_PRICES_JSON`, `AGENT_LISTING_JSON` | each other, and ≥ the platform floor |
 | host names | `HOSTS` in `config.env`, `inventory.json` | each other (409 otherwise) |
 

@@ -20,8 +20,7 @@ function cfg(over: Partial<CoalitionConfig> = {}): CoalitionConfig {
     port: 8088,
     providerSlug: SLUG,
     mtBaseUrl: "https://mt.example",
-    agentKey: "agent-key",
-    coalitionKey: BEARER,
+    legacyBearersPresent: [],
     coalitionSigningKey: "unused-by-the-inbound-verifier",
     stripeSecretKey: "sk_test",
     stripeWebhookSecret: "whsec",
@@ -62,13 +61,6 @@ const BODY = Buffer.from(JSON.stringify({ tier: "nimbus" }));
 test("valid signature authenticates via signature", () => {
   const res = verifyMtRequest(cfg(), "POST", "/checkout", BODY, headersFor(envFor(BODY)));
   assert.deepEqual(res, { ok: true, via: "signature" });
-});
-
-test("legacy bearer still accepted (dual-accept)", () => {
-  const res = verifyMtRequest(cfg(), "POST", "/checkout", BODY, {
-    authorization: `Bearer ${BEARER}`,
-  });
-  assert.deepEqual(res, { ok: true, via: "bearer" });
 });
 
 test("wrong bearer is rejected", () => {
@@ -126,31 +118,45 @@ test("a bad signature does not burn the nonce", () => {
   assert.deepEqual(accepted, { ok: true, via: "signature" });
 });
 
-test("without a pinned MT pubkey, signatures are ignored and bearer is required", () => {
-  const noKey = cfg({ mtPubkey: undefined });
-  const sigOnly = verifyMtRequest(noKey, "POST", "/checkout", BODY, headersFor(envFor(BODY)));
-  assert.equal(sigOnly.ok, false);
-  const withBearer = verifyMtRequest(noKey, "POST", "/checkout", BODY, {
+// ── Phase E step 4, 2026-09-07: the bearer is GONE ───────────────────────────────────
+// These replace the dual-accept tests. The previous versions asserted that a bearer was
+// accepted, and one asserted that an UNSET key must not accept the literal string
+// "Bearer undefined" — a good guard, now moot because there is no key to interpolate.
+
+test("🔒 a bearer is REFUSED — a signature is the only way in", () => {
+  // The exact credential the old dual-accept path honoured. MT dropped the column that
+  // issued it, so nothing can present a valid one; this asserts we would refuse it even
+  // if something did.
+  const r = verifyMtRequest(cfg(), "POST", "/checkout", BODY, {
     authorization: `Bearer ${BEARER}`,
   });
-  assert.deepEqual(withBearer, { ok: true, via: "bearer" });
+  assert.equal(r.ok, false);
+  assert.equal((r as { status: number }).status, 401);
 });
 
-// ⭐ Phase E polarity flip (2026-09-07). `coalitionKey` became optional, and an
-// unguarded template literal would turn an unset key into the literal string
-// "Bearer undefined" — a credential any caller can type. The guard in auth.ts is the
-// only thing standing between "bearer disabled" and "bearer is a known constant".
-test("⭐ an UNSET coalitionKey does not accept the literal `Bearer undefined`", () => {
-  const c = cfg({ coalitionKey: undefined });
-  const r = verifyMtRequest(c, "POST", "/checkout", Buffer.from(""), {
+test("🔒 `Bearer undefined` is refused — there is no key left to interpolate", () => {
+  const r = verifyMtRequest(cfg(), "POST", "/checkout", Buffer.from(""), {
     authorization: "Bearer undefined",
   });
   assert.equal(r.ok, false);
   assert.equal((r as { status: number }).status, 401);
 });
 
-test("⭐ an UNSET coalitionKey still admits a valid MT signature", () => {
-  const c = cfg({ coalitionKey: undefined });
+test("🔒 with no pinned MT pubkey there is no way in at all — bearer no longer rescues it", () => {
+  // `mtPubkey` is `req()`d at config load, so this shape should be unreachable. It is
+  // asserted anyway: this is the case that USED to fall through to the bearer, and the
+  // failure mode of getting it wrong is silent acceptance rather than a crash.
+  const noKey = cfg({ mtPubkey: undefined as unknown as string });
+  const sigOnly = verifyMtRequest(noKey, "POST", "/checkout", BODY, headersFor(envFor(BODY)));
+  assert.equal(sigOnly.ok, false);
+  const withBearer = verifyMtRequest(noKey, "POST", "/checkout", BODY, {
+    authorization: `Bearer ${BEARER}`,
+  });
+  assert.equal(withBearer.ok, false);
+});
+
+test("a valid MT signature is still admitted", () => {
+  const c = cfg();
   const issuedAt = new Date().toISOString();
   const nonce = "nonce-phase-e-1";
   const env = {

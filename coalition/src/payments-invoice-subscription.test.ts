@@ -16,6 +16,7 @@
  */
 import test from "node:test";
 import assert from "node:assert/strict";
+import { generateKeyPairSync } from "node:crypto";
 import { normalizeEvent, relayPaymentEvent, handleWebhook } from "./payments.js";
 import type { StripeEvent, StripeLike } from "./stripe.js";
 
@@ -94,7 +95,14 @@ test("a failed payment reads the same relocated field", () => {
 
 // ── the silence ────────────────────────────────────────────────────────────────
 
-const cfg = { mtBaseUrl: "https://mt.test", agentKey: "k", providerSlug: SLUG, coalitionSigningKey: undefined };
+// Phase E step 4: the relay signs, so the fixture needs a real seed — `coalitionSigningKey:
+// undefined` used to be fine because `mtAuthHeaders` fell back to the `agentKey` bearer,
+// and that fallback is gone.
+const SIGNING_KEY = generateKeyPairSync("ed25519")
+  .privateKey.export({ type: "pkcs8", format: "der" })
+  .subarray(-32)
+  .toString("base64");
+const cfg = { mtBaseUrl: "https://mt.test", providerSlug: SLUG, coalitionSigningKey: SIGNING_KEY };
 const mtSays = (status: number, body: unknown) =>
   (async () =>
     new Response(JSON.stringify(body), {

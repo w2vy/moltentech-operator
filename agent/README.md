@@ -20,7 +20,7 @@ inbound leg). This agent is control-plane only; the Flux nodes run on Proxmox.
 ```sh
 npm install
 MT_BASE_URL=https://fluxhub.moltentech.us \
-AGENT_KEY=<per-provider agent key from FH admin> \
+MANIFEST_KEY=$(base64 -w0 manifest-key.pem) \
 PROVIDER_SLUG=<your-slug> \
 PROXMOX_URL=https://127.0.0.1:8006 \
 PROXMOX_TOKEN_ID='root@pam!agent' \
@@ -38,8 +38,7 @@ touching Proxmox — useful to validate connectivity/auth against Flux Hub.
 |---|---|---|
 | `MT_BASE_URL` | yes | Flux Hub base URL |
 | `PROVIDER_SLUG` | yes | your provider slug |
-| `MANIFEST_KEY` | **one of** | base64 PKCS#8 PEM of your manifest ed25519 key — the agent SIGNS its requests. Preferred. |
-| `AGENT_KEY` | **one of** | legacy per-provider bearer (FH admin → Providers → Issue keys). Startup fails only if BOTH are unset; if both are set, signing wins. |
+| `MANIFEST_KEY` | yes | base64 PKCS#8 PEM of your manifest ed25519 key — the agent SIGNS every request with it. The only agent credential: the `AGENT_KEY` bearer was removed in Phase E (2026-09-07) and Flux Hub dropped the column that stored it. If your env still sets `AGENT_KEY`, the agent says so at startup; delete the line. |
 | `OWNER_ADDRESS` | recommended | your Flux/ZelID address. Set = the agent REFUSES privileged jobs (delete/reprovision/move) without a matching owner signature. Unset = enforcement off. Never sourced from FH. |
 | `COALITION_URL` | for the courier | your Coalition's base URL. **Unset silently means `courier=off`** — check the startup banner. |
 | `AGENT_INVENTORY_PATH` / `AGENT_INVENTORY_JSON` | to declare hardware | the hosts + slots you declare to FH (path is re-read each heartbeat, so edits apply without a restart). FH materializes ProxmoxHost/Slot rows from this — it is the source of truth for what hardware exists, and FH rejects any host not in your owner-signed manifest. |

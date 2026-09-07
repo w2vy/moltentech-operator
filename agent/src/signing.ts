@@ -17,8 +17,11 @@ import {
  * per-provider `AGENT_KEY` bearer on agent → MT calls. The agent reuses its
  * manifest ed25519 key (the private half of the pubkey MT pinned as
  * `Provider.manifestPubkey`) to sign a canonical request envelope; MT re-derives
- * the envelope and verifies it against that pubkey. When `MANIFEST_KEY` is unset
- * the agent falls back to the legacy bearer, so operators roll independently.
+ * the envelope and verifies it against that pubkey.
+ *
+ * There is no longer a fallback: Phase E step 4 (2026-09-07) removed the bearer, and
+ * `loadConfig` refuses to start without `MANIFEST_KEY`. The independent-roll window the
+ * fallback existed for is closed — MT dropped the column that stored the bearer.
  *
  * `MANIFEST_KEY` is the base64 of the PKCS#8 PEM (single-line env value) of the
  * key produced by `fh-toolkit keygen`. It is a SECRET — never commit it.

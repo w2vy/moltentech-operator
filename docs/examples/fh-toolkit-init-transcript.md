@@ -1,5 +1,17 @@
 # `fh-toolkit init` — a full run
 
+> ⚠️ **Recorded before Phase E (2026-09-07), and NOT re-recorded.** The run below is left
+> byte-for-byte as the tool actually printed it, because doctoring a transcript to show
+> output a tool never produced is worse than a stale one. Two lines have since changed:
+>
+> - `→ issues AGENT_KEY, COALITION_KEY, COALITION_SIGNING_KEY for secrets.env` now reads
+>   `→ issues COALITION_SIGNING_KEY for secrets.env`;
+> - `secrets.env` no longer contains `AGENT_KEY=` or `COALITION_KEY=` lines at all.
+>
+> Both bearers were removed from every code path: your agent signs with `MANIFEST_KEY`,
+> and Flux Hub signs its calls to your Coalition. Everything else in the run is current.
+> Re-recording this is tracked separately — it needs a live interactive session.
+
 A **redacted transcript** of one real onboarding, from `keygen` to a signed
 `manifest.json` and the Flux env blob. It is here so you can see the shape of the run
 before you start one: what gets asked, in what order, and what `init` writes at the end.

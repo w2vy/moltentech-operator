@@ -16,8 +16,17 @@ import type { CoalitionConfig } from "./config";
  * actual body — and take only `issuedAt`/`nonce` from headers, so a byte-level
  * mismatch in path, slug, or body fails verification.
  *
- * Dual-accept fallback: the legacy MT-issued symmetric `coalitionKey` bearer is
- * still accepted while operators/MT roll to signatures. Drops in Phase D.
+ * 🔒 **A signature is the only way in.** The legacy MT-issued symmetric `coalitionKey`
+ * bearer was removed in Phase E step 4 (2026-09-07) — it is no longer accepted, and
+ * `CoalitionConfig` no longer carries the key at all.
+ *
+ * The dual-accept existed so operators and MT could roll to signatures independently. That
+ * roll is complete: MT dropped `Provider.coalitionKey`/`agentKey` on 2026-09-07, so the hub
+ * can no longer send a bearer even if it wanted to, and a 14-day prod soak before the drop
+ * recorded 35038 `via=agent` + 3512 `via=coalition` and **0 `via=bearer`**.
+ *
+ * Leaving an accepted bearer behind would have kept a second, weaker way in — one with no
+ * replay protection, no body binding and no expiry — for a credential nothing was using.
  */
 
 const NONCE_TTL_MS = 5 * 60_000; // > the ±120s freshness window
@@ -33,7 +42,7 @@ function rememberNonce(nonce: string): boolean {
 }
 
 export type AuthResult =
-  | { ok: true; via: "signature" | "bearer" }
+  | { ok: true; via: "signature" }
   | { ok: false; status: number; error: string };
 
 export function verifyMtRequest(
@@ -73,13 +82,9 @@ export function verifyMtRequest(
     return { ok: true, via: "signature" };
   }
 
-  // Dual-accept fallback: legacy MT-issued symmetric bearer. The `cfg.coalitionKey`
-  // guard is load-bearing since the Phase E polarity flip made the column optional —
-  // without it an unset key interpolates to the literal `Bearer undefined`, which any
-  // caller can send. An absent bearer must mean "signature only", never "any string".
-  if (cfg.coalitionKey && headers["authorization"] === `Bearer ${cfg.coalitionKey}`) {
-    return { ok: true, via: "bearer" };
-  }
-
+  // No fallback. An `Authorization: Bearer …` header is now simply ignored — there is no
+  // key to compare it against, so there is nothing to get wrong. (The interpolation trap
+  // this replaces: `Bearer ${undefined}` matches the literal string "Bearer undefined",
+  // which any caller can send. Guarding it was correct; deleting it is better.)
   return { ok: false, status: 401, error: "Unauthorized" };
 }

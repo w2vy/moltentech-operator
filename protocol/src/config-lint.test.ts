@@ -11,6 +11,7 @@ import {
   lintTierPrices,
   fetchTierMinimums,
   TIER_FLOORS_CENTS,
+  lintObsoleteKeys,
 } from "./config-lint";
 
 /** Every rule is asserted in BOTH directions on purpose: these failures are silent in
@@ -444,4 +445,34 @@ PROXMOX_TOKEN_SECRET=
 `,
   });
   assert.deepEqual(rules(report), ["NOT_YET_FILLED", "NOT_YET_FILLED"]);
+});
+
+// ── Phase E step 4, 2026-09-07 — obsolete keys ────────────────────────────────────────
+
+test("🔒 an obsolete key is reported as obsolete, with the reason and the fix", () => {
+  const found = lintObsoleteKeys(parseEnvLines("AGENT_KEY=ak_live\nCOALITION_KEY=\n"), "secrets.env");
+  assert.deepEqual(found.map((f) => f.rule), ["OBSOLETE_KEY", "OBSOLETE_KEY"]);
+  // Reported whether or not it has a value — a filled one is the commoner case, and the
+  // advice is identical.
+  assert.match(found[0]!.message, /AGENT_KEY removed in Phase E/);
+  assert.match(found[0]!.message, /MANIFEST_KEY/);
+  assert.match(found[0]!.message, /Delete this line/);
+  assert.match(found[1]!.message, /COALITION_KEY removed in Phase E/);
+  // A warning, not an error: nothing is broken, and an error would fail a `doctor` run
+  // over a line that authenticates nothing.
+  assert.ok(found.every((f) => f.severity === "warning"));
+});
+
+test("a live key is not reported as obsolete", () => {
+  const found = lintObsoleteKeys(
+    parseEnvLines("MANIFEST_KEY=x\nCOALITION_SIGNING_KEY=y\nSTRIPE_SECRET_KEY=z\n"),
+    "secrets.env"
+  );
+  assert.deepEqual(found, []);
+});
+
+test("the finding carries the LINE, so the operator can go straight to it", () => {
+  const found = lintObsoleteKeys(parseEnvLines("MANIFEST_KEY=x\n\nAGENT_KEY=ak\n"), "secrets.env");
+  assert.equal(found.length, 1);
+  assert.equal(found[0]!.line, 3);
 });

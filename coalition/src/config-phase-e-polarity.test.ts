@@ -18,8 +18,7 @@ const BASE = {
 
 test("⭐ boots with NEITHER legacy bearer set", () => {
   const cfg = loadConfig({ ...BASE });
-  assert.equal(cfg.agentKey, undefined);
-  assert.equal(cfg.coalitionKey, undefined);
+  assert.deepEqual(cfg.legacyBearersPresent, []);
   assert.equal(cfg.coalitionSigningKey, "not-a-real-signing-key");
 });
 
@@ -35,8 +34,19 @@ test("⭐ REFUSES to boot without MT_PUBKEY — an unpinned Coalition is bearer-
   assert.throws(() => loadConfig(env), /MT_PUBKEY/);
 });
 
-test("the legacy bearers still load when present (the rollback path survives)", () => {
+// Phase E step 4 (2026-09-07): the bearers are gone from every code path. What survives
+// is a NOTICE — an operator whose env.json still carries them is told once, at startup,
+// that the lines are dead. Nothing else in the config knows they exist.
+test("🔒 legacy bearers are NOT loaded as credentials, only NAMED as dead weight", () => {
   const cfg = loadConfig({ ...BASE, AGENT_KEY: "ak", COALITION_KEY: "ck" });
-  assert.equal(cfg.agentKey, "ak");
-  assert.equal(cfg.coalitionKey, "ck");
+  assert.deepEqual(cfg.legacyBearersPresent, ["AGENT_KEY", "COALITION_KEY"]);
+  // The VALUES must not survive anywhere on the config — a credential the code cannot
+  // use is one nobody audits, and it would still be sitting in a heap dump.
+  assert.equal(JSON.stringify(cfg).includes("ak"), false);
+  assert.equal(JSON.stringify(cfg).includes("ck"), false);
+});
+
+test("only the bearer actually present is named", () => {
+  assert.deepEqual(loadConfig({ ...BASE, AGENT_KEY: "ak" }).legacyBearersPresent, ["AGENT_KEY"]);
+  assert.deepEqual(loadConfig({ ...BASE, COALITION_KEY: "ck" }).legacyBearersPresent, ["COALITION_KEY"]);
 });

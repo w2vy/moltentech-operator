@@ -117,14 +117,19 @@ test("🔴 a legacy manifest with no level still validates — and still VERIFIE
 });
 
 test("doctor stops nagging a supporter about Stripe keys they will never have", () => {
-  const secrets = "STRIPE_SECRET_KEY=\nSTRIPE_WEBHOOK_SECRET=\nAGENT_KEY=\n";
+  // AGENT_KEY was the "a system really does issue this one" control here. Phase E step 4
+  // made it obsolete, so it now proves something better: an obsolete key is reported as
+  // obsolete for BOTH levels, and never as "not yet filled" — telling an operator to go
+  // and fetch a credential that no longer exists is worse than saying nothing.
+  const secrets = "STRIPE_SECRET_KEY=\nSTRIPE_WEBHOOK_SECRET=\nCOALITION_SIGNING_KEY=\nAGENT_KEY=\n";
   const asOperator = runDoctor({ configEnv: "PROVIDER_LEVEL=operator\n", secretsEnv: secrets });
   const asSupporter = runDoctor({ configEnv: "PROVIDER_LEVEL=supporter\n", secretsEnv: secrets });
   assert.equal(asOperator.findings.filter((f) => f.message.includes("STRIPE")).length, 2);
   assert.equal(asSupporter.findings.filter((f) => f.message.includes("STRIPE")).length, 0);
-  // ...but the key another system really does issue is still reported for both.
   for (const r of [asOperator, asSupporter]) {
-    assert.ok(r.findings.some((f) => f.message.startsWith("AGENT_KEY is empty")));
+    assert.ok(r.findings.some((f) => f.message.startsWith("COALITION_SIGNING_KEY is empty")));
+    assert.ok(r.findings.some((f) => f.rule === "OBSOLETE_KEY" && f.message.startsWith("AGENT_KEY")));
+    assert.equal(r.findings.some((f) => f.message.startsWith("AGENT_KEY is empty")), false);
   }
 });
 

@@ -15,8 +15,14 @@ const ListingTierConfig = z.object({
 
 export type AgentConfig = {
   mtBaseUrl: string;
-  /** Legacy per-provider bearer (agent → MT). Optional once MANIFEST_KEY is set. */
-  agentKey?: string;
+  /**
+   * Whether a legacy `AGENT_KEY` is still set in the environment. NOT the value — the
+   * credential was removed from every code path in Phase E step 4 (2026-09-07). It is
+   * read only so startup can tell the operator the line in their env.json is dead, and
+   * so a missing MANIFEST_KEY alongside a present AGENT_KEY still gets the specific
+   * error rather than the generic one.
+   */
+  legacyAgentKeyPresent: boolean;
   /** base64 PKCS#8 PEM of the manifest ed25519 key; when set the agent SIGNS instead of bearer. */
   manifestKey?: string;
   /**
@@ -109,24 +115,27 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AgentConfig {
     inventory = z.array(InventoryHost).parse(JSON.parse(inventoryRaw));
   }
 
-  // Auth: MANIFEST_KEY is REQUIRED since the Phase E polarity flip (2026-09-07).
-  // AGENT_KEY remains accepted alongside it as the rollback path, but it can no longer
-  // be the ONLY credential — an agent restarted from a stale `env.json` used to boot
-  // clean on the bearer and silently authenticate `via=bearer`, which is the regression
-  // the Phase D soak exists to catch. Fail at boot instead, where it is diagnosable.
-  const agentKey = env.AGENT_KEY || undefined;
+  // Auth: MANIFEST_KEY is the only credential. Phase E step 4 (2026-09-07) removed the
+  // AGENT_KEY bearer from every code path — MT dropped the column that stored it, so it
+  // could not authenticate anything even if the agent still sent it.
+  //
+  // ⭐ AGENT_KEY is still READ, for one reason: an operator restarting from a stale
+  // `env.json` that has AGENT_KEY and no MANIFEST_KEY deserves to be told exactly that,
+  // not "missing agent auth". The specific message is the difference between a two-minute
+  // fix and an hour of guessing, and it costs one env lookup.
+  const legacyAgentKeyPresent = Boolean(env.AGENT_KEY);
   const manifestKey = env.MANIFEST_KEY || undefined;
   if (!manifestKey) {
     throw new Error(
-      agentKey
-        ? "Missing MANIFEST_KEY: AGENT_KEY alone is no longer sufficient (Phase E). Re-run `fh-toolkit keygen` and re-ingest, or restore MANIFEST_KEY from your env.json."
+      legacyAgentKeyPresent
+        ? "Missing MANIFEST_KEY: AGENT_KEY is no longer used at all (Phase E) — it does not authenticate anything. Re-run `fh-toolkit keygen` and re-ingest, or restore MANIFEST_KEY from your env.json."
         : "Missing agent auth: set MANIFEST_KEY"
     );
   }
 
   return {
     mtBaseUrl: req(env, "MT_BASE_URL").replace(/\/$/, ""),
-    agentKey,
+    legacyAgentKeyPresent,
     ownerAddress: env.OWNER_ADDRESS || undefined,
     // `??` not `||`: an explicit empty string is a meaningful setting (exemption off), and
     // `||` would silently restore the default for the one operator who deliberately opted out.

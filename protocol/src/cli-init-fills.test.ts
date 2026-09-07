@@ -154,14 +154,16 @@ function emptyKeys(dir: string): string[] {
     .sort();
 }
 
-const ISSUED_BY_ONBOARD = ["AGENT_KEY", "COALITION_KEY", "COALITION_SIGNING_KEY"];
+// Phase E step 4 (2026-09-07): /onboard no longer issues the two bearers, and the
+// scaffold no longer emits blanks for them. One key, not three.
+const ISSUED_BY_ONBOARD = ["COALITION_SIGNING_KEY"];
 
-test("⭐ a self-hoster is left with exactly the three keys /onboard issues", () => {
+test("⭐ a self-hoster is left with exactly the key /onboard issues", () => {
   const { dir } = scaffold({ ...ANSWERS, selling: false });
   assert.deepEqual(emptyKeys(dir), ISSUED_BY_ONBOARD);
 });
 
-test("⭐ an operator who supplied Stripe is left with the same three", () => {
+test("⭐ an operator who supplied Stripe is left with the same one", () => {
   const { dir } = scaffold({
     ...ANSWERS,
     tierPricesCents: { cumulus: 700 },
@@ -171,7 +173,7 @@ test("⭐ an operator who supplied Stripe is left with the same three", () => {
   assert.deepEqual(emptyKeys(dir), ISSUED_BY_ONBOARD);
 });
 
-test("an operator who has not done Stripe yet is left with those three plus the Stripe pair", () => {
+test("an operator who has not done Stripe yet is left with that one plus the Stripe pair", () => {
   // These two are legitimately NOT_YET_FILLED: the restricted key comes from the Stripe
   // dashboard and the webhook secret does not exist until the endpoint is created against
   // the Coalition URL. Empty here means WAITING ON SOMEONE ELSE, which is the contract.

@@ -812,7 +812,7 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
     case "coalition-keygen": {
       // Operator-held custody for the Phase D Coalition signing key. The DEFAULT path
       // is not this command: MT auto-issues a Coalition keypair at first ingest and
-      // hands the operator the private half once, alongside AGENT_KEY/COALITION_KEY.
+      // hands the operator the private half once.
       // This exists for the operator who would rather MT never saw the private key at
       // all, and for backfilling a provider onboarded before auto-issue existed.
       //
@@ -1050,7 +1050,7 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
       console.log("    (edit config.env later and it goes stale; re-run `fh-toolkit sign`)\n");
       console.log("Next, in order:");
       console.log(`  1. open ${answers.mtBaseUrl}/onboard, paste manifest.json, sign with ${answers.ownerAddress}`);
-      console.log("     → issues AGENT_KEY, COALITION_KEY, COALITION_SIGNING_KEY for secrets.env");
+      console.log("     → issues COALITION_SIGNING_KEY for secrets.env");
       if (hasPaidTier(prices)) {
         console.log("  2. Stripe: create the webhook endpoint against your Coalition URL.");
         console.log("     ⚠️  the webhook secret is bound to THAT endpoint — a secret from another");
@@ -1205,8 +1205,9 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
           const probe = await probeHub({
             mtBaseUrl,
             coalitionUrl: config.COALITION_URL,
-            agentKey: secrets.AGENT_KEY || operator.AGENT_KEY,
-            coalitionKey: secrets.COALITION_KEY || operator.COALITION_KEY,
+            // Phase E step 4: the bearers are gone; the signature is what doctor proves.
+            manifestKey: secrets.MANIFEST_KEY || operator.MANIFEST_KEY,
+            providerSlug: config.PROVIDER_SLUG,
             localPubkey: read("manifest-pubkey.txt"),
             localManifestJson: read("manifest.json"),
           });
@@ -1550,9 +1551,11 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
       }
       put("TIER_PRICES_JSON", JSON.stringify(prices));
 
-      // Secrets from secrets.env (required + optional SESSION_SECRET).
-      put("AGENT_KEY", needSecret("AGENT_KEY"));
-      put("COALITION_KEY", needSecret("COALITION_KEY"));
+      // Secrets from secrets.env. AGENT_KEY/COALITION_KEY used to be required here and
+      // are no longer written at all — Phase E step 4 removed both from every code path,
+      // and REQUIRING a dead credential to build env.json would have blocked every new
+      // operator on a value /onboard no longer issues.
+      
 
       // NO_STRIPE: Stripe is required only when a tier is actually listed for sale.
       // A self-hoster running their own nodes on Foundation collateral has no
