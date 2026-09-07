@@ -100,7 +100,10 @@ jobs:
           blocks = re.findall(r"```(?:sh|bash|env)?\n(.*?)```", doc, re.S)
 
           cfg = [b for b in blocks if "PROVIDER_SLUG=" in b and "COALITION_URL=" in b]
-          sec = [b for b in blocks if "STRIPE_SECRET_KEY=" in b and "AGENT_KEY=" in b]
+          # Fingerprinted on COALITION_SIGNING_KEY since Phase E step 4 removed AGENT_KEY
+          # from the doc's secrets.env block. Whatever this keys on must be a line the block
+          # will keep having — the point of the check is to notice when the doc moves.
+          sec = [b for b in blocks if "STRIPE_SECRET_KEY=" in b and "COALITION_SIGNING_KEY=" in b]
           if not cfg or not sec:
               sys.exit("FAIL: could not find the config.env / secrets.env blocks in "
                        "docs/operator-onboarding.md — did the doc's structure change?")
@@ -225,17 +228,17 @@ jobs:
             grep '^SESSION_SECRET=' "$work/secrets.env"; exit 1
           }
           # Asserted on the FRESH file, before anything is filled in. Every empty value
-          # must be one another system issues: the three /onboard mints, plus — for this
-          # SELLING fixture, which supplies no Stripe answers — the Stripe pair, whose
-          # webhook secret genuinely does not exist until the endpoint is created.
+          # must be one another system issues: the /onboard mint, plus — for this SELLING
+          # fixture, which supplies no Stripe answers — the Stripe pair, whose webhook
+          # secret genuinely does not exist until the endpoint is created.
           # Anything else appearing here is a question init failed to ask.
+          # (Was three /onboard mints until Phase E step 4 dropped AGENT_KEY/COALITION_KEY.)
           left="$(grep -E '^[A-Z_]+=$' "$work/secrets.env" | tr -d '=' | sort | tr '\n' ' ')"
-          [ "$left" = "AGENT_KEY COALITION_KEY COALITION_SIGNING_KEY STRIPE_SECRET_KEY STRIPE_WEBHOOK_SECRET " ] || {
+          [ "$left" = "COALITION_SIGNING_KEY STRIPE_SECRET_KEY STRIPE_WEBHOOK_SECRET " ] || {
             echo "unexpected empty values in secrets.env: $left"; exit 1
           }
 
           # Now fill what an operator would be handed later, and take the same path.
-          sed -i 's/^AGENT_KEY=$/AGENT_KEY=ci-dummy/;s/^COALITION_KEY=$/COALITION_KEY=ci-dummy/' "$work/secrets.env"
           sed -i 's/^STRIPE_SECRET_KEY=$/STRIPE_SECRET_KEY=ci-dummy/' "$work/secrets.env"
           sed -i 's/^STRIPE_WEBHOOK_SECRET=$/STRIPE_WEBHOOK_SECRET=ci-dummy/' "$work/secrets.env"
 
@@ -351,12 +354,12 @@ jobs:
             grep '^AGENT_LISTING_JSON=' "$work/.env.operator"; exit 1
           }
           # ⭐ A self-hoster has no Stripe account and no external step but /onboard, so
-          # this is where the invariant is at its sharpest: exactly three empty values.
+          # this is where the invariant is at its sharpest: exactly ONE empty value since
+          # Phase E step 4 (three before it).
           left="$(grep -E '^[A-Z_]+=$' "$work/secrets.env" | tr -d '=' | sort | tr '\n' ' ')"
-          [ "$left" = "AGENT_KEY COALITION_KEY COALITION_SIGNING_KEY " ] || {
-            echo "a self-hoster should be left with only the /onboard keys, got: $left"; exit 1
+          [ "$left" = "COALITION_SIGNING_KEY " ] || {
+            echo "a self-hoster should be left with only the /onboard key, got: $left"; exit 1
           }
-          sed -i 's/^AGENT_KEY=$/AGENT_KEY=ci-dummy/;s/^COALITION_KEY=$/COALITION_KEY=ci-dummy/' "$work/secrets.env"
           run sign --key manifest-key.pem --from-config config.env --out manifest.json
           python3 -c "import json,sys; m=json.load(open('$work/manifest.json')); assert m['level']=='supporter', m.get('level'); print('manifest declares level=supporter')"
           run env --from-config config.env --secrets secrets.env \
@@ -408,8 +411,6 @@ jobs:
           TRIAL_DAYS=1
           EOF
           cat > "$work/secrets.env" <<'EOF'
-          AGENT_KEY=d
-          COALITION_KEY=d
           STRIPE_SECRET_KEY=d
           STRIPE_WEBHOOK_SECRET=d
           EOF
