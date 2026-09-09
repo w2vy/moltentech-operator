@@ -1101,6 +1101,24 @@ and improvising on them will leave Flux Hub's view of the slot out of step with 
 Include the **VM name** (e.g. `mt-187-c4`), your **provider slug**, and roughly **when** it
 happened — that is enough to find the job.
 
+### Your agent logs `refused: 403 (provider suspended)` or `(provider retired)`
+
+Your keys are fine — a 403 means the signature verified. What changed is your provider's
+**standing** on Flux Hub, and every agent and Coalition call is refused until it is restored.
+The reason travels in the response, so your own logs say which it was:
+
+```
+[agent] listing assert error: listing refused: 403 (provider retired) — This provider is
+RETIRED on Flux Hub, so its agent requests are refused. Nothing has been torn down …
+```
+
+Nothing of yours has been destroyed: your hosts, slots and any live rentals keep their
+records, and no VM is touched. A **suspension** is a sanction and is lifted by an admin. A
+**retirement** is bookkeeping, and coming back is a support interaction rather than a
+button — the provider returns to `pending` and a **new Coalition signing key is issued**,
+which you set as `COALITION_SIGNING_KEY` and redeploy. Contact Flux Hub admin either way;
+include your provider slug.
+
 ---
 
 ## Verify it works end to end

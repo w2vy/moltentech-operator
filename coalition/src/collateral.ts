@@ -3,6 +3,7 @@ import {
   AgentNode,
   type LifecycleNodeStatus,
   type LifecycleReport,
+  hubError,
 } from "@moltentech/protocol";
 import type { CoalitionConfig } from "./config";
 import { mtAuthHeaders } from "./coalition-signing";
@@ -44,7 +45,7 @@ async function fetchWatchedNodes(cfg: CoalitionConfig, fetchImpl: typeof fetch):
   const res = await fetchImpl(`${cfg.mtBaseUrl}/api/agent/nodes`, {
     headers: mtAuthHeaders(cfg, "GET", "/api/agent/nodes", ""),
   });
-  if (!res.ok) throw new Error(`nodes list failed: ${res.status}`);
+  if (!res.ok) throw await hubError("nodes list", res);
   const body = (await res.json()) as { nodes?: unknown[] };
   return (body.nodes ?? [])
     .map((n) => AgentNode.parse(n))
@@ -225,7 +226,7 @@ async function postLifecycleReport(
     },
     body: rawBody,
   });
-  if (!res.ok) throw new Error(`lifecycle report failed: ${res.status}`);
+  if (!res.ok) throw await hubError("lifecycle report", res);
 }
 
 /**
