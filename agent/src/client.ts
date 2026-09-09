@@ -13,6 +13,7 @@ import {
   type NodeStateItem,
   HealthReport,
   type NodeHealth,
+  hubError,
 } from "@moltentech/protocol";
 import { z } from "zod";
 import { signAgentRequest } from "./signing";
@@ -55,7 +56,7 @@ export class MtClient {
       method: "POST",
       headers: this.headers("POST", path, ""),
     });
-    if (!res.ok) throw new Error(`claim failed: ${res.status}`);
+    if (!res.ok) throw await hubError("claim", res);
     const body = (await res.json()) as { jobs?: unknown[] };
     return (body.jobs ?? []).map((j) => Job.parse(j));
   }
@@ -70,7 +71,7 @@ export class MtClient {
       headers: this.headers("POST", path, raw),
       body: raw,
     });
-    if (!res.ok) throw new Error(`result failed: ${res.status}`);
+    if (!res.ok) throw await hubError("result", res);
   }
 
   /** Re-assert the operator's desired price + slots offered (heartbeat + on change). */
@@ -89,7 +90,7 @@ export class MtClient {
       headers: this.headers("PUT", path, raw),
       body: raw,
     });
-    if (!res.ok) throw new Error(`listing failed: ${res.status}`);
+    if (!res.ok) throw await hubError("listing", res);
   }
 
   /** Declare the operator's agent-managed hosts + slots so MT materializes them. */
@@ -108,14 +109,14 @@ export class MtClient {
       headers: this.headers("PUT", path, raw),
       body: raw,
     });
-    if (!res.ok) throw new Error(`inventory failed: ${res.status}`);
+    if (!res.ok) throw await hubError("inventory", res);
   }
 
   /** Fetch the provider's privileged actions awaiting the owner's signature. */
   async getPendingAuth(): Promise<PendingAuthItem[]> {
     const path = "/api/agent/pending-auth";
     const res = await fetch(`${this.baseUrl}${path}`, { headers: this.headers("GET", path, "") });
-    if (!res.ok) throw new Error(`pending-auth fetch failed: ${res.status}`);
+    if (!res.ok) throw await hubError("pending-auth fetch", res);
     const parsed = z.object({ items: z.array(PendingAuthItem) }).safeParse(await res.json());
     if (!parsed.success) throw new Error("invalid pending-auth payload");
     return parsed.data.items;
@@ -125,7 +126,7 @@ export class MtClient {
   async getState(): Promise<NodeStateItem[]> {
     const path = "/api/agent/state";
     const res = await fetch(`${this.baseUrl}${path}`, { headers: this.headers("GET", path, "") });
-    if (!res.ok) throw new Error(`state fetch failed: ${res.status}`);
+    if (!res.ok) throw await hubError("state fetch", res);
     const parsed = NodeStateList.safeParse(await res.json());
     if (!parsed.success) throw new Error("invalid state payload");
     return parsed.data.items;
@@ -140,7 +141,7 @@ export class MtClient {
       headers: this.headers("POST", path, raw),
       body: raw,
     });
-    if (!res.ok) throw new Error(`authorize failed: ${res.status}`);
+    if (!res.ok) throw await hubError("authorize", res);
   }
 
   /** Fetch this provider's live nodes so the agent knows which local VMs to health-check. */
@@ -149,7 +150,7 @@ export class MtClient {
   > {
     const path = "/api/agent/nodes";
     const res = await fetch(`${this.baseUrl}${path}`, { headers: this.headers("GET", path, "") });
-    if (!res.ok) throw new Error(`nodes fetch failed: ${res.status}`);
+    if (!res.ok) throw await hubError("nodes fetch", res);
     const body = (await res.json()) as {
       nodes?: { tier: string; host: string; apiPort: number; vmName: string; nodeName: string }[];
     };
@@ -172,7 +173,7 @@ export class MtClient {
       headers: this.headers("PUT", path, raw),
       body: raw,
     });
-    if (!res.ok) throw new Error(`health report failed: ${res.status}`);
+    if (!res.ok) throw await hubError("health report", res);
   }
 
   // providerSlug is set by the caller via withProvider() so requests can stamp it
