@@ -591,8 +591,8 @@ Open **`{MT_BASE_URL}/onboard`** in a browser on a machine with your wallet. You
 2. **Sign with your wallet.** SSP signs in-browser; "Sign with Zelcore" opens a deep
    link and posts the signature back automatically. The page holds your manifest the
    whole time — FH never stores an unverified manifest server-side.
-3. **You are handed three keys, shown once.** Copy all three immediately (the page has a
-   "Copy all three (`secrets.env`)" button):
+3. **You are handed one key, shown once.** Copy it immediately (the page's copy button
+   is still labelled "Copy all three (`secrets.env`)" — it copies the one key below):
 
    | Key | Direction | Where it goes |
    |---|---|---|
@@ -618,6 +618,11 @@ Your provider now exists at FH in status `pending`. Step 7 activates it.
 ---
 
 ## Step 3 — Stripe setup *(Operator only)*
+
+⏭️ **Supporter? Skip this entire step and go to Step 4.** You have nothing for sale, so
+you need no Stripe account, no API key and no webhook. If you later upgrade to Operator,
+**come back here** — the upgrade instructions under *Ongoing operations* send you to
+`fh-toolkit level --set operator`, which asks for a Stripe key it assumes you already have.
 
 1. Create a **restricted API key** (Stripe Dashboard → Developers → API keys →
    **Create restricted key**). This must be a *restricted* key (`rk_…`), **not** a
@@ -1021,9 +1026,18 @@ Coalition.
 
 ## Step 7 — Activation and the operator console
 
-FH reviews your `pending` provider and **activates** it; your cards then appear on
-`/providers`. Within a minute of activation the agent's heartbeat publishes your price
-and slots offered (admin → Providers shows `lastAsserted`).
+FH reviews your `pending` provider and **activates** it.
+
+**Operator:** your cards then appear on `/providers`. Within a minute of activation the
+agent's heartbeat publishes your price and slots offered (admin → Providers shows
+`lastAsserted`).
+
+⚠️ **Supporter: you get no card on `/providers`, and that is correct.** The marketplace
+lists what is for sale, and you are selling nothing — so `TIER_PRICES_JSON` is `{}`,
+`AGENT_LISTING_JSON` is `[]`, and `lastAssertedAt` stays **NULL** because there is no
+listing to assert. None of that is a failed onboarding. What proves your activation
+worked is your provider reaching `active` with a fresh `agentLastSeenAt` — ask Flux Hub
+admin, or watch your own agent log keep polling without a 403.
 
 Owner authorization for privileged actions is a **wallet signature you make yourself**.
 There are two places you can make it, and they are equivalent — the same claim, the same
@@ -1209,8 +1223,11 @@ Proxmox credentials, and never the private half of anything you generated.
   `PROVIDER_LEVEL` is in your **signed manifest**, so this is a re-sign, not a config
   edit: `fh-toolkit sign` → re-paste `manifest.json` at `/onboard` and sign with your
   owner wallet. Until you do, Flux Hub still has you as a Supporter, and
-  `fh-toolkit doctor` reports `MANIFEST_STALE`. Then register your Stripe webhook
-  endpoint, check it with `doctor --check-stripe`, and re-run `env` → re-import.
+  `fh-toolkit doctor` reports `MANIFEST_STALE`. Then **go back to Step 3** and create the
+  restricted Stripe key with the exact permission list there — upgrading does not create
+  one for you, and `level --set operator` will ask for a key you do not have yet. Register
+  your Stripe webhook endpoint, check it with `doctor --check-stripe`, and re-run `env` →
+  re-import.
 
   Run `fh-toolkit level` with no flags first to see where you stand, and
   `--dry-run` to read the diff before it writes. `--set supporter` is the way back: it
