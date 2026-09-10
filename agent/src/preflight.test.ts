@@ -225,3 +225,35 @@ test("a fully healthy host passes everything", async () => {
   );
   assert.equal(formatPreflight(results).ok, true);
 });
+
+/**
+ * ⭐ `ARCANE_ISO` has no default, because the one it had named nothing.
+ *
+ * `FluxLive.iso` was the fallback until 2026-09-10 and matches no published build —
+ * releases are dated (`FluxLive-1775071308.iso`). Preflight compares by substring, so the
+ * fake default failed as `FluxLive.iso is not on local`, which reads like a storage
+ * problem on a host whose storage is fine. Empty lets the check say the true thing.
+ */
+test("an unset ARCANE_ISO is reported as unset, not as a missing file", async () => {
+  const cfg = { ...CFG, host: { ...CFG.host, arcaneIso: "" } } as unknown as AgentConfig;
+  const results = await runPreflight(cfg, [{ nodeName: "pve30" }], {
+    get: fakeGet({
+      version: {},
+      "/storage": [{ storage: "ssd" }, { storage: "pve55-shared" }],
+      "disks/list": [{ devpath: "/dev/nvme0n1", type: "nvme" }],
+      content: [{ volid: "pve55-shared:iso/FluxLive-1775071308.iso" }],
+    }),
+  });
+  const iso = results.find((r) => r.name.includes("ARCANE_ISO"));
+  assert.ok(iso, `no ARCANE_ISO check in: ${results.map((r) => r.name).join(", ")}`);
+  assert.equal(iso.status, "fail");
+  assert.match(iso.detail, /empty/);
+  // The fix has to be IN the message: the shape of a real name, and where to get it.
+  assert.match(iso.detail, /FluxLive-\d+\.iso/);
+  // And the substring compare must not be reached with an empty needle — every volid
+  // "contains" "", so the old code would have passed this host as healthy.
+  assert.equal(
+    results.some((r) => r.name.includes("holds") && r.status === "pass"),
+    false
+  );
+});

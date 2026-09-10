@@ -105,6 +105,9 @@ import {
   hasPaidTier,
   coalitionUrlFor,
   suggestFluxAppName,
+  agentImageFor,
+  STAGING_BASE_URL,
+  PRODUCTION_BASE_URL,
   type Answers,
   type HostAnswer,
   type SlotAnswer,
@@ -221,10 +224,36 @@ async function withPrompts<T>(
   ctx: Ctx,
   fn: (ask: Ask, askUntil: AskUntil) => Promise<T>
 ): Promise<T> {
+  // ⚠️ Refuse a non-terminal stdin rather than reading from it. Piping answers in LOOKS
+  // like it works: readline resolves the first question, then stdin hits EOF and every
+  // later `question()` promise simply never settles — node runs out of work and exits
+  // **0**, having written nothing. A success exit code on a wizard that produced no files
+  // is the worst shape a failure can take, and it cost an afternoon on 2026-09-10.
+  // `--answers` is the scripted path and takes the same answers as a file.
+  if (!ctx.rl && !process.stdin.isTTY) {
+    die(
+      "this command asks questions and stdin is not a terminal.\n" +
+        "  Piped answers are NOT read: the first is consumed, the rest never arrive, and\n" +
+        "  the command would exit 0 having written nothing.\n" +
+        "  Scripted runs: fh-toolkit init --answers answers.json\n" +
+        "  Interactive:   make sure your wrapper passes `-it` (fh-toolkit --update-wrapper)"
+    );
+  }
   const own = ctx.rl ? undefined : createInterface({ input: process.stdin, output: process.stdout });
   const rl = ctx.rl ?? own!;
+  // A terminal can still go away mid-run (^D, a closed ssh session). Racing `close`
+  // turns that into an error instead of the same silent exit-0.
+  let closed = false;
+  const onClose = (): void => void (closed = true);
+  rl.on("close", onClose);
   const ask: Ask = async (q, def) => {
-    const a = (await rl.question(def ? `${q} [${def}]: ` : `${q}: `)).trim();
+    if (closed) die("stdin closed before the questions were finished — nothing was written.");
+    const answer = await Promise.race([
+      rl.question(def ? `${q} [${def}]: ` : `${q}: `),
+      new Promise<null>((resolve) => rl.once("close", () => resolve(null))),
+    ]);
+    if (answer === null) die("stdin closed before the questions were finished — nothing was written.");
+    const a = answer.trim();
     return a || def || "";
   };
   /**
@@ -246,6 +275,7 @@ async function withPrompts<T>(
   try {
     return await fn(ask, askUntil);
   } finally {
+    rl.off("close", onClose);
     own?.close();
   }
 }
@@ -415,7 +445,9 @@ async function askAnswers(
     // Offered as a choice, never free text by default: free-typing this is what put
     // half a deployment on staging and half on prod.
     const which = await ask("Flux Hub environment — 1) production  2) staging", "1");
-    const mtBaseUrl = which.startsWith("2") ? "https://staging.moltentech.us" : "https://fluxhub.moltentech.us";
+    const mtBaseUrl = which.startsWith("2") ? STAGING_BASE_URL : PRODUCTION_BASE_URL;
+    // The compose file follows this answer: staging gets `:staging`, production `:latest`.
+    console.log(`  → the agent will run ${agentImageFor(mtBaseUrl)}`);
 
     const fluxAppName = await ask("Flux app name for your Coalition", suggestFluxAppName(providerSlug));
     console.log(`  → COALITION_URL will be ${coalitionUrlFor(fluxAppName)}`);

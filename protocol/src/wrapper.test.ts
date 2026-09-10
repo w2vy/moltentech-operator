@@ -103,7 +103,7 @@ test("the header says where it came from and how to regenerate it", () => {
   const s = wrapperScript({ build: { version: "9.9.9", sha: "abcdef0123456789" } });
   assert.match(s, /GENERATED, do not edit/);
   assert.match(s, /fh-toolkit 9\.9\.9 \(abcdef012345\)/);
-  assert.match(s, /wrapper format v1/);
+  assert.match(s, new RegExp(`wrapper format v${WRAPPER_VERSION}`));
   assert.match(s, /fh-toolkit --update-wrapper/);
   // A source checkout must say so rather than invent a build.
   assert.match(wrapperScript(), /source checkout/);
@@ -262,7 +262,36 @@ test("⭐ `mt-agent doctor` mounts data read-only and passes the env file", () =
   const line = call.join(" ");
   assert.match(line, /--env-file \.env\.operator/);
   assert.match(line, /-v .*\/data:\/data:ro/);
-  assert.ok(line.endsWith(`${AGENT_IMAGE} doctor`), line);
+  // `npm run doctor`, not a bare `doctor`: the image has no ENTRYPOINT of its own, so a
+  // bare subcommand reaches node and dies MODULE_NOT_FOUND /app/agent/doctor.
+  assert.ok(line.endsWith(`${AGENT_IMAGE} npm run doctor`), line);
+});
+
+test("⭐ the image comes from compose.yaml, not from a hardcoded :latest", () => {
+  // The defect: every `mt-agent` subcommand ran `w2vy/mt-agent:latest` regardless of what
+  // compose was running. On a staging onboarding that means `doctor` validates the
+  // PRODUCTION build while the loop beside it runs `:staging` — a green check for an image
+  // nobody is running.
+  const box = shellBox();
+  writeFileSync(join(box.dir, ".env.operator"), "x=1\n");
+  writeFileSync(
+    join(box.dir, "compose.yaml"),
+    "name: fh-agent-demo\nservices:\n  agent:\n    image: w2vy/mt-agent:staging\n"
+  );
+  box.run("mt-agent doctor");
+  const line = box.argv().find((a) => a.includes("run"))!.join(" ");
+  assert.match(line, /w2vy\/mt-agent:staging npm run doctor$/);
+  assert.doesNotMatch(line, /mt-agent:latest/);
+});
+
+test("with no compose.yaml the wrapper falls back to the published image", () => {
+  // `mt-agent` is usable in a directory that has .env.operator and nothing else — an
+  // operator checking creds before generating the rest.
+  const box = shellBox();
+  writeFileSync(join(box.dir, ".env.operator"), "x=1\n");
+  box.run("mt-agent doctor");
+  const line = box.argv().find((a) => a.includes("run"))!.join(" ");
+  assert.ok(line.endsWith(`${AGENT_IMAGE} npm run doctor`), line);
 });
 
 test("`mt-agent dry-run` sets the env var, and passes no argument", () => {

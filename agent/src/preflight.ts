@@ -226,6 +226,19 @@ export async function runPreflight(
       try {
         const content = await get<StorageContent[]>(cfg, `/api2/json/nodes/${node}/storage/${iso}/content`);
         const wanted = cfg.host.arcaneIso;
+        if (!wanted) {
+          out.push({
+            name: `${node}: ARCANE_ISO set`,
+            status: "fail",
+            detail:
+              "empty — set it to the exact ISO filename on this host " +
+              "(published builds are dated, e.g. FluxLive-1775071308.iso; " +
+              "https://images.runonflux.io/arcane/api/latest_release names the current one), " +
+              "or declare inventory and let ISO auto-refresh keep it current. " +
+              `On ${iso}: ${[...byName.keys()].join(", ") || "(none)"}`,
+          });
+          continue;
+        }
         const has = content.some((c) => (c.volid ?? "").includes(wanted));
         out.push({
           name: `${node}: storageIso "${iso}" holds ${wanted}`,

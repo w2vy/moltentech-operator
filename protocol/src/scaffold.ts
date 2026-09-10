@@ -730,6 +730,32 @@ export const COALITION_IMAGE = "w2vy/coalition:latest";
 export const AGENT_IMAGE = "w2vy/mt-agent:latest";
 
 /**
+ * The agent image built from `staging`, which is what a staging onboarding must run.
+ *
+ * ⚠️ The two tags are not interchangeable. `:latest` is the production build and lags
+ * `:staging` by whatever has not been promoted — on 2026-09-10 that was four phases of
+ * operator retirement, so a staging onboarding on `:latest` ran an agent with no refusal
+ * handling at all against a hub that refuses. It looked like a hub bug for an afternoon.
+ */
+export const AGENT_IMAGE_STAGING = "w2vy/mt-agent:staging";
+
+/** The staging hub, as `init` offers it. The only thing that selects the staging image. */
+export const STAGING_BASE_URL = "https://staging.moltentech.us";
+
+/** The production hub, as `init` offers it. */
+export const PRODUCTION_BASE_URL = "https://fluxhub.moltentech.us";
+
+/**
+ * Which agent image belongs beside this hub.
+ *
+ * Keyed off `mtBaseUrl` — the answer `init` already takes — rather than a second question,
+ * because two answers that can disagree is how half a deployment ends up on each side.
+ */
+export function agentImageFor(mtBaseUrl: string): string {
+  return mtBaseUrl.replace(/\/$/, "") === STAGING_BASE_URL ? AGENT_IMAGE_STAGING : AGENT_IMAGE;
+}
+
+/**
  * `README.txt` — the directory explaining itself, in the words of someone who has never
  * seen it before.
  *
@@ -885,7 +911,7 @@ export function renderAgentCompose(a: Answers): string {
     "",
     "services:",
     "  agent:",
-    `    image: ${AGENT_IMAGE}`,
+    `    image: ${agentImageFor(a.mtBaseUrl)}`,
     "    restart: unless-stopped",
     "    env_file: [.env.operator]",
     "    volumes:",
