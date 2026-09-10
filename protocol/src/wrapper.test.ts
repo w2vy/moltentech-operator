@@ -87,8 +87,8 @@ test("⭐ no backtick survives inside a double-quoted string", () => {
 
 test("both functions are emitted, and either alone on request", () => {
   assert.match(script(), /^fh-toolkit\(\) \{$/m);
-  assert.match(script(), /^mt-agent\(\) \{$/m);
-  assert.doesNotMatch(wrapperScript({ only: "toolkit" }), /^mt-agent\(\) \{$/m);
+  assert.match(script(), /^fh-agent\(\) \{$/m);
+  assert.doesNotMatch(wrapperScript({ only: "toolkit" }), /^fh-agent\(\) \{$/m);
   assert.doesNotMatch(wrapperScript({ only: "agent" }), /^fh-toolkit\(\) \{$/m);
   // Each half must still stand alone as bash — `--toolkit` output is what a docs snippet
   // shows, and half a case statement would not parse.
@@ -213,39 +213,39 @@ test("a successful update replaces the file and re-sources it", () => {
   assert.equal(readFileSync(rc, "utf8"), script());
 });
 
-// ---------------------------------------------------------------- mt-agent()
+// ---------------------------------------------------------------- fh-agent()
 
-test("⭐ bare `mt-agent` refuses and points at compose", () => {
+test("⭐ bare `fh-agent` refuses and points at compose", () => {
   // The deliberate divergence from the image's own CLI, where bare means "run the main
   // loop". Through a wrapper that would start a SECOND agent for this provider.
   const box = shellBox();
   let threw = false;
   try {
-    box.run("mt-agent");
+    box.run("fh-agent");
   } catch (e) {
     threw = true;
     assert.match(String((e as { stderr?: string }).stderr), /docker compose up -d/);
   }
-  assert.ok(threw, "bare mt-agent must exit non-zero");
+  assert.ok(threw, "bare fh-agent must exit non-zero");
   assert.deepEqual(box.argv(), [], "and must not run anything");
 });
 
-test("bare `mt-agent` answers before the directory guard", () => {
+test("bare `fh-agent` answers before the directory guard", () => {
   // Someone in the wrong directory needs to hear what the command is for, not where they
   // are standing.
   const box = shellBox();
   try {
-    box.run("mt-agent");
+    box.run("fh-agent");
   } catch (e) {
     assert.doesNotMatch(String((e as { stderr?: string }).stderr), /\.env\.operator/);
   }
 });
 
-test("`mt-agent doctor` outside an operator directory says so, and runs nothing", () => {
+test("`fh-agent doctor` outside an operator directory says so, and runs nothing", () => {
   const box = shellBox();
   let threw = false;
   try {
-    box.run("mt-agent doctor");
+    box.run("fh-agent doctor");
   } catch (e) {
     threw = true;
     assert.match(String((e as { stderr?: string }).stderr), /no \.env\.operator here/);
@@ -254,10 +254,10 @@ test("`mt-agent doctor` outside an operator directory says so, and runs nothing"
   assert.deepEqual(box.argv(), []);
 });
 
-test("⭐ `mt-agent doctor` mounts data read-only and passes the env file", () => {
+test("⭐ `fh-agent doctor` mounts data read-only and passes the env file", () => {
   const box = shellBox();
   writeFileSync(join(box.dir, ".env.operator"), "MT_BASE_URL=https://example\n");
-  box.run("mt-agent doctor");
+  box.run("fh-agent doctor");
   const call = box.argv().find((a) => a.includes("run"))!;
   const line = call.join(" ");
   assert.match(line, /--env-file \.env\.operator/);
@@ -268,7 +268,7 @@ test("⭐ `mt-agent doctor` mounts data read-only and passes the env file", () =
 });
 
 test("⭐ the image comes from compose.yaml, not from a hardcoded :latest", () => {
-  // The defect: every `mt-agent` subcommand ran `w2vy/mt-agent:latest` regardless of what
+  // The defect: every `fh-agent` subcommand ran `ghcr.io/w2vy/fh-agent:latest` regardless of what
   // compose was running. On a staging onboarding that means `doctor` validates the
   // PRODUCTION build while the loop beside it runs `:staging` — a green check for an image
   // nobody is running.
@@ -276,43 +276,43 @@ test("⭐ the image comes from compose.yaml, not from a hardcoded :latest", () =
   writeFileSync(join(box.dir, ".env.operator"), "x=1\n");
   writeFileSync(
     join(box.dir, "compose.yaml"),
-    "name: fh-agent-demo\nservices:\n  agent:\n    image: w2vy/mt-agent:staging\n"
+    "name: fh-agent-demo\nservices:\n  agent:\n    image: ghcr.io/w2vy/fh-agent:staging\n"
   );
-  box.run("mt-agent doctor");
+  box.run("fh-agent doctor");
   const line = box.argv().find((a) => a.includes("run"))!.join(" ");
-  assert.match(line, /w2vy\/mt-agent:staging npm run doctor$/);
-  assert.doesNotMatch(line, /mt-agent:latest/);
+  assert.match(line, /w2vy\/fh-agent:staging npm run doctor$/);
+  assert.doesNotMatch(line, /fh-agent:latest/);
 });
 
 test("with no compose.yaml the wrapper falls back to the published image", () => {
-  // `mt-agent` is usable in a directory that has .env.operator and nothing else — an
+  // `fh-agent` is usable in a directory that has .env.operator and nothing else — an
   // operator checking creds before generating the rest.
   const box = shellBox();
   writeFileSync(join(box.dir, ".env.operator"), "x=1\n");
-  box.run("mt-agent doctor");
+  box.run("fh-agent doctor");
   const line = box.argv().find((a) => a.includes("run"))!.join(" ");
   assert.ok(line.endsWith(`${AGENT_IMAGE} npm run doctor`), line);
 });
 
-test("`mt-agent dry-run` sets the env var, and passes no argument", () => {
+test("`fh-agent dry-run` sets the env var, and passes no argument", () => {
   // The image takes it as AGENT_DRY_RUN, not as an argument — the whole reason it is worth
   // wrapping. Passing `dry-run` through would make the agent reject an unknown command.
   const box = shellBox();
   writeFileSync(join(box.dir, ".env.operator"), "x=1\n");
-  box.run("mt-agent dry-run");
+  box.run("fh-agent dry-run");
   const line = box.argv().find((a) => a.includes("run"))!.join(" ");
   assert.match(line, /-e AGENT_DRY_RUN=1/);
   assert.ok(line.endsWith(AGENT_IMAGE), line);
 });
 
 test("⭐ the agent is never pulled", () => {
-  // Pulling it would mean `mt-agent doctor` validates a build the running loop is NOT on:
+  // Pulling it would mean `fh-agent doctor` validates a build the running loop is NOT on:
   // passed here, fails in prod. Drift is reported, never applied.
   const box = shellBox();
   writeFileSync(join(box.dir, ".env.operator"), "x=1\n");
-  box.run("mt-agent doctor");
+  box.run("fh-agent doctor");
   const pulls = box.argv().filter((a) => a[0] === "pull");
-  assert.deepEqual(pulls, [], "mt-agent must not pull");
+  assert.deepEqual(pulls, [], "fh-agent must not pull");
 });
 
 test("the drift check is silent when nothing is running", () => {
@@ -320,7 +320,7 @@ test("the drift check is silent when nothing is running", () => {
   // and the honest answer is to say nothing at all.
   const box = shellBox();
   writeFileSync(join(box.dir, ".env.operator"), "x=1\n");
-  const out = box.run("mt-agent doctor 2>&1");
+  const out = box.run("fh-agent doctor 2>&1");
   assert.doesNotMatch(out, /note:/);
 });
 
@@ -340,7 +340,7 @@ exit 0
 `
   );
   chmodSync(join(box.dir, "bin", "docker"), 0o755);
-  const out = box.run("mt-agent doctor 2>&1");
+  const out = box.run("fh-agent doctor 2>&1");
   assert.match(out, /ON THIS HOST than the one your agent is running/);
   assert.match(out, /--force-recreate/);
   assert.match(out, /1111111111111111/);
@@ -440,4 +440,22 @@ test("⭐ doctor reports a wrapper predating the handshake, and stays quiet abou
   assert.match(stale, /WRAPPER_UNKNOWN/);
   assert.match(stale, /--update-wrapper/);
   assert.doesNotMatch(doctor({ FH_WRAPPER: String(WRAPPER_VERSION) }), /WRAPPER_/);
+});
+
+test("⭐ the old `mt-agent` name is a signpost, not a silent failure", () => {
+  // The `mt-manifest` -> `fh-toolkit` rename taught this: the only operator kept running
+  // the old function against an image name that no longer publishes, and nothing said so.
+  const box = shellBox();
+  writeFileSync(join(box.dir, ".env.operator"), "x=1\n");
+  let threw = false;
+  try {
+    box.run("mt-agent doctor");
+  } catch (e) {
+    threw = true;
+    const err = String((e as { stderr?: string }).stderr);
+    assert.match(err, /now fh-agent/);
+    assert.match(err, /fh-agent doctor/);
+  }
+  assert.ok(threw, "the old name must exit non-zero");
+  assert.deepEqual(box.argv(), [], "and must run no container");
 });

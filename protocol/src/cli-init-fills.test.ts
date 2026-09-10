@@ -109,7 +109,7 @@ test("⭐ MANIFEST_KEY is filled in BOTH files, and is base64 of the key on disk
   assert.ok(!expected.includes("\n"), "MANIFEST_KEY must be one line");
 });
 
-test("MANIFEST_PUBKEY is pinned, so mt-agent doctor compares instead of skipping", () => {
+test("MANIFEST_PUBKEY is pinned, so fh-agent doctor compares instead of skipping", () => {
   const { dir } = scaffold();
   const pinned = valueOf(read(dir, ".env.operator"), "MANIFEST_PUBKEY");
   assert.equal(pinned, read(dir, "manifest-pubkey.txt").trim());

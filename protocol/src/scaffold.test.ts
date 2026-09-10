@@ -303,7 +303,7 @@ test("a slot inherits the host's bridge and storage, and can override both", () 
 
 test(".env.operator always carries a MANIFEST_PUBKEY slot, empty until keygen", () => {
   // Empty-but-present, the same rule the other not-yet-issued values follow: an absent
-  // line is invisible, and its absence is why `mt-agent doctor`'s key check could only
+  // line is invisible, and its absence is why `fh-agent doctor`'s key check could only
   // ever report `skip`.
   assert.match(generateAll(ANSWERS)[".env.operator"], /^MANIFEST_PUBKEY=$/m);
   assert.match(generateAll(ANSWERS, { manifestPubkey: "PUB" })[".env.operator"], /^MANIFEST_PUBKEY=PUB$/m);
@@ -315,7 +315,7 @@ test("fillManifestPubkey fills an empty slot and leaves a pinned one alone", () 
   assert.equal(filled.result, "filled");
   assert.match(filled.text, /^MANIFEST_PUBKEY=NEWPUB$/m);
 
-  // Rotating over an existing pin would erase the mismatch `mt-agent doctor` exists to
+  // Rotating over an existing pin would erase the mismatch `fh-agent doctor` exists to
   // report, so a non-empty value is never rewritten.
   const again = fillManifestPubkey(filled.text, "OTHERPUB");
   assert.equal(again.result, "already-set");

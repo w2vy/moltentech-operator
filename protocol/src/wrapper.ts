@@ -1,7 +1,7 @@
 /**
  * The shell functions, emitted by the tool they wrap.
  *
- * `fh-toolkit` and `mt-agent` both run as containers, and both need a fiddly `docker run`
+ * `fh-toolkit` and `fh-agent` both run as containers, and both need a fiddly `docker run`
  * line to be useful: a bind mount that makes `$PWD` the operator directory, `-i` for the
  * prompts, a guarded `-t`, `/etc/hosts` so Proxmox hostnames resolve. Until now that line
  * lived only in the docs, and operators pasted it once — which meant it went stale
@@ -29,7 +29,7 @@ export const TOOLKIT_IMAGE = "ghcr.io/w2vy/fh-toolkit:latest";
  * from a stale one from one predating the handshake entirely (`undefined`). That is the
  * whole point of the exercise — a stale wrapper used to be undetectable from either side.
  */
-export const WRAPPER_VERSION = 2;
+export const WRAPPER_VERSION = 3;
 
 /** Where `--update-wrapper` installs, unless the operator overrides it. */
 export const WRAPPER_RC = "${FH_TOOLKIT_RC:-$HOME/.fh-toolkit.sh}";
@@ -137,16 +137,16 @@ export function toolkitFunction(): string {
 }
 
 /**
- * The `mt-agent` function — the ONE-SHOT invocations only.
+ * The `fh-agent` function — the ONE-SHOT invocations only.
  *
  * ⚠️ This is the one place a wrapper deliberately disagrees with the tool it wraps. The
- * image's own CLI is \`mt-agent [doctor]\`, where bare means "run the main loop in the
+ * image's own CLI is \`fh-agent [doctor]\`, where bare means "run the main loop in the
  * foreground". Through a wrapper that is a footgun: a loop is already running under
  * compose, and a second agent for one provider is a real failure mode. So bare refuses and
  * points at compose.
  *
  * It also never pulls. The toolkit's stamp is safe because the toolkit is the thing you are
- * invoking; pulling the agent would mean \`mt-agent doctor\` validates a build your running
+ * invoking; pulling the agent would mean \`fh-agent doctor\` validates a build your running
  * loop is not on — passed here, fails in prod. Instead it compares digests and REPORTS.
  */
 export function agentFunction(): string {
@@ -154,10 +154,10 @@ export function agentFunction(): string {
 #
 # NOT \`${AGENT_IMAGE}\` unconditionally, which is what this wrapper assumed until
 # 2026-09-10: \`init\` pins the image that matches the hub you chose, so on a staging
-# onboarding compose runs \`${AGENT_IMAGE_STAGING}\` while every \`mt-agent\` subcommand
+# onboarding compose runs \`${AGENT_IMAGE_STAGING}\` while every \`fh-agent\` subcommand
 # ran the PRODUCTION image — a doctor that passes against a build your loop is not on.
 # compose.yaml is the file compose itself reads, so it is the one to believe.
-mt-agent-image() {
+fh-agent-image() {
   local pinned=""
   if [ -f compose.yaml ]; then
     pinned="$(awk '$1 == "image:" { print $2; exit }' compose.yaml)"
@@ -165,10 +165,22 @@ mt-agent-image() {
   echo "\${pinned:-${AGENT_IMAGE}}"
 }
 
+# The old name, kept as a signpost rather than deleted.
+#
+# The \`mt-manifest\` -> \`fh-toolkit\` rename shipped on 2026-09-06 and the only operator
+# saw nothing: his shell still defined the old function against an image name that no
+# longer publishes. Renaming \`mt-agent\` -> \`fh-agent\` on 2026-09-10 has the same shape,
+# and three lines is cheaper than the afternoon that cost.
 mt-agent() {
+  echo "mt-agent is now fh-agent (image ghcr.io/w2vy/fh-agent, was w2vy/mt-agent)." >&2
+  echo "  same arguments: fh-agent $*" >&2
+  return 1
+}
+
+fh-agent() {
   local img
-  img="$(mt-agent-image)"
-  # The bare case is answered BEFORE the directory guard: someone who types \`mt-agent\` in
+  img="$(fh-agent-image)"
+  # The bare case is answered BEFORE the directory guard: someone who types \`fh-agent\` in
   # the wrong directory needs to hear what the command is for, not where they are standing.
   if [ $# -eq 0 ]; then
     # Deliberate divergence from the image's own CLI, where bare means "run the main loop".
@@ -180,7 +192,7 @@ mt-agent() {
     echo "  docker compose down               # stop" >&2
     echo "  docker compose pull && docker compose up -d --force-recreate   # take a new build" >&2
     echo "" >&2
-    echo "one-shot checks:  mt-agent doctor   mt-agent dry-run" >&2
+    echo "one-shot checks:  fh-agent doctor   fh-agent dry-run" >&2
     return 1
   fi
   if [ ! -f .env.operator ]; then
@@ -191,7 +203,7 @@ mt-agent() {
   case "$1" in
     doctor)
       shift
-      mt-agent-image-drift
+      fh-agent-image-drift
       # \`npm run doctor\`, not a bare \`doctor\`: the image sets CMD but no ENTRYPOINT, so it
       # inherits node's, and a bare subcommand is handed to \`node\` — which dies
       # MODULE_NOT_FOUND /app/agent/doctor. \`doctor\` IS the image's CLI (index.ts reads
@@ -221,9 +233,9 @@ mt-agent() {
 #   2. Is the image on this host older than the published tag?  Best effort.
 #
 # Silent whenever it cannot tell. A guess here is worse than nothing.
-mt-agent-image-drift() {
+fh-agent-image-drift() {
   local img
-  img="$(mt-agent-image)"
+  img="$(fh-agent-image)"
   local cid running_id local_id local_digest remote_digest
   # Match on the image NAME as recorded at creation, not \`--filter ancestor=\`: that filter
   # resolves the tag to its CURRENT id, so a container left behind by a pull — exactly the

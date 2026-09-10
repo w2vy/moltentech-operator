@@ -1,0 +1,89 @@
+name: Publish fh-agent
+
+# `ghcr.io/w2vy/fh-agent` is the long-running agent operators run under compose. Until
+# 2026-09-10 it was `w2vy/mt-agent` on Docker Hub and pushed BY HAND, which is why the
+# fixes in #115 sat on master in no image anyone was running. Docker Hub needed a
+# credential this repo deliberately does not hold; ghcr takes the workflow's own
+# GITHUB_TOKEN, so publishing is automatic here the way it already is for fh-toolkit.
+#
+# Tags:
+#   :staging  every merge to master — what a staging onboarding pins
+#   :<sha>    every merge, so a bad publish rolls back without a rebuild
+#   :latest   PRODUCTION. Only ever moved by a deliberate `promote` dispatch, because
+#             `image: ghcr.io/w2vy/fh-agent:latest` is what prod compose files pin and a
+#             trunk build landing there is a deploy nobody asked for.
+on:
+  push:
+    branches: [master]
+    paths:
+      - "agent/**"
+      - "protocol/**"
+      - "arcane-mage/**"
+      - ".github/workflows/publish-fh-agent.yml"
+  workflow_dispatch:
+    inputs:
+      promote:
+        description: "Also move :latest to this build (production)"
+        type: boolean
+        default: false
+
+concurrency:
+  group: publish-fh-agent
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive # arcane-mage is bundled into the image
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        run: |
+          set -euo pipefail
+          v="$(node -p "require('./agent/package.json').version")"
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          tags="ghcr.io/w2vy/fh-agent:staging,ghcr.io/w2vy/fh-agent:${{ github.sha }},ghcr.io/w2vy/fh-agent:$v"
+          if [ "${{ inputs.promote }}" = "true" ]; then
+            tags="$tags,ghcr.io/w2vy/fh-agent:latest"
+          fi
+          echo "tags=$tags" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: agent/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # A published-but-broken agent is the failure this workflow exists to prevent, and
+      # `doctor` is the one command an operator runs before trusting the image. It must
+      # get as far as REFUSING for want of credentials — anything earlier (a bad CMD, a
+      # missing module) means the image cannot run at all. This is the exact break #115
+      # fixed: `doctor` as a bare argument died MODULE_NOT_FOUND before reaching any code.
+      - name: Smoke-test the published image
+        run: |
+          set -euo pipefail
+          img=ghcr.io/w2vy/fh-agent:${{ github.sha }}
+          docker rmi "$img" 2>/dev/null || true
+          docker pull "$img"
+          out="$(docker run --rm "$img" npm run doctor 2>&1 || true)"
+          echo "$out"
+          # `grep -qv` would pass on ANY non-matching line — the assertion has to be
+          # that the string is absent, which is a negated `grep -q`.
+          grep -q "Missing agent auth: set MANIFEST_KEY" <<<"$out"
+          ! grep -q "MODULE_NOT_FOUND" <<<"$out"

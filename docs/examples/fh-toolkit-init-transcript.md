@@ -117,7 +117,7 @@ Wrote config.env, secrets.env, .env.operator, data/inventory.json, flux-app-spec
 
 Already done, from the key in this directory:
   ✓ MANIFEST_KEY   filled in secrets.env and .env.operator
-  ✓ MANIFEST_PUBKEY pinned in .env.operator (`mt-agent doctor` now compares, not skips)
+  ✓ MANIFEST_PUBKEY pinned in .env.operator (`fh-agent doctor` now compares, not skips)
   ✓ SESSION_SECRET generated
   ✓ manifest.json signed — this is the file you paste at /onboard
     (edit config.env later and it goes stale; re-run `fh-toolkit sign`)

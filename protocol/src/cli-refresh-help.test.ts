@@ -70,11 +70,11 @@ test("⭐ `wrapper` prints shell and nothing else — it is redirected into an r
   assert.equal(code, 0);
   assert.match(out, /^# Shell functions/);
   assert.match(out, /^fh-toolkit\(\) \{$/m);
-  assert.match(out, /^mt-agent\(\) \{$/m);
+  assert.match(out, /^fh-agent\(\) \{$/m);
   assert.doesNotMatch(out, /^usage:/m);
 });
 
 test("`wrapper --toolkit` and `--agent` each print one function", () => {
-  assert.doesNotMatch(run(["wrapper", "--toolkit"]).out, /^mt-agent\(\) \{$/m);
+  assert.doesNotMatch(run(["wrapper", "--toolkit"]).out, /^fh-agent\(\) \{$/m);
   assert.doesNotMatch(run(["wrapper", "--agent"]).out, /^fh-toolkit\(\) \{$/m);
 });

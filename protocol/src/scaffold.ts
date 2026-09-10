@@ -45,7 +45,7 @@ export interface HostAnswer {
    * comes up looking fine and reachable by nobody. Emit it explicitly, always. */
   network?: string;
   /** ⚠️ Must resolve to a NON-rotational device. `fh-toolkit` holds no Proxmox
-   * credentials and cannot check that — `mt-agent doctor` does, where the creds are. */
+   * credentials and cannot check that — `fh-agent doctor` does, where the creds are. */
   storageImages: string;
   storageIso: string;
   slots: SlotAnswer[];
@@ -488,7 +488,7 @@ export function renderEnvOperator(
     `MANIFEST_KEY=${proxmox.manifestKey ?? ""}`,
     "",
     "# MANIFEST_PUBKEY — the public half, from manifest-pubkey.txt (`fh-toolkit keygen`).",
-    "# It is NOT a second secret: it is the pin `mt-agent doctor` compares MANIFEST_KEY",
+    "# It is NOT a second secret: it is the pin `fh-agent doctor` compares MANIFEST_KEY",
     "# against. Left empty, that check can only report `skip` — so the one failure it",
     "# exists to catch (the agent loaded a DIFFERENT key from the one MT pinned at first",
     "# ingest) stays invisible until the hub rejects a signature. `keygen` fills this in",
@@ -532,7 +532,7 @@ export type PubkeyFillResult = "filled" | "already-set";
  * anything else in it. Pure string in, string out — the CLI owns the file IO.
  *
  * NEVER overwrites a non-empty value. A pinned pubkey that no longer matches the key
- * in use is a real finding for `mt-agent doctor` to report; quietly rewriting it to
+ * in use is a real finding for `fh-agent doctor` to report; quietly rewriting it to
  * match whatever key was just generated would delete the evidence and turn a rotation
  * into a silent identity change.
  */
@@ -554,7 +554,7 @@ export function fillManifestPubkey(
     [
       "",
       "# MANIFEST_PUBKEY — the public half, from manifest-pubkey.txt (`fh-toolkit keygen`).",
-      "# `mt-agent doctor` compares MANIFEST_KEY against it; empty means that check can",
+      "# `fh-agent doctor` compares MANIFEST_KEY against it; empty means that check can",
       "# only report `skip`.",
       `MANIFEST_PUBKEY=${pubkey}`,
       "",
@@ -727,7 +727,7 @@ export const COALITION_IMAGE = "w2vy/coalition:latest";
  * ⚠️ Compose does not re-pull on its own: `docker compose up -d` runs the image it
  * already has. Getting a newer `latest` takes `docker compose pull` first.
  */
-export const AGENT_IMAGE = "w2vy/mt-agent:latest";
+export const AGENT_IMAGE = "ghcr.io/w2vy/fh-agent:latest";
 
 /**
  * The agent image built from `staging`, which is what a staging onboarding must run.
@@ -737,7 +737,7 @@ export const AGENT_IMAGE = "w2vy/mt-agent:latest";
  * operator retirement, so a staging onboarding on `:latest` ran an agent with no refusal
  * handling at all against a hub that refuses. It looked like a hub bug for an afternoon.
  */
-export const AGENT_IMAGE_STAGING = "w2vy/mt-agent:staging";
+export const AGENT_IMAGE_STAGING = "ghcr.io/w2vy/fh-agent:staging";
 
 /** The staging hub, as `init` offers it. The only thing that selects the staging image. */
 export const STAGING_BASE_URL = "https://staging.moltentech.us";
@@ -823,7 +823,7 @@ export function renderReadme(a: Answers): string {
   L.push("");
   L.push("  3. Nodes build fine and then fail every benchmark.");
   L.push("     Your VM storage is probably a spinning disk. Nothing logs this.");
-  L.push("     Run: mt-agent doctor");
+  L.push("     Run: fh-agent doctor");
   L.push("");
   L.push("  4. Your files stopped agreeing with each other.");
   L.push("     Run: fh-toolkit doctor");
