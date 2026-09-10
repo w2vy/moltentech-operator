@@ -68,3 +68,20 @@ test("one-shot mode still exits non-zero on a bad command", () => {
   assert.equal(run(["verify"]).code, 1);
   assert.equal(run(["version"]).code, 0);
 });
+
+test("⭐ an unknown flag throws, so the session prompts again instead of exiting", async () => {
+  // Verified against a real pty on 2026-09-10 — four bad flags in one session, four
+  // errors, prompt back each time. This is that property as a unit test: the guard must
+  // go through `die`/`CliError` like every other refusal, never `process.exit`.
+  for (const args of [
+    ["doctor", "--bogus"],
+    ["level", "--yes", "--bogus"],
+    ["wrapper", "--bogus"],
+  ]) {
+    await assert.rejects(
+      () => runCommand(args[0]!, args.slice(1), { dir: process.cwd(), interactive: true }),
+      (e: unknown) => e instanceof CliError && /unknown option --bogus/.test((e as Error).message),
+      args.join(" ")
+    );
+  }
+});

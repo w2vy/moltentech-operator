@@ -154,8 +154,8 @@ function dirFlag(args: string[]): string {
  * reports success, in the wrong directory. (Found on 2026-09-10 by passing `--dir` to
  * `keygen`, which took it as a bare argument and wrote to the cwd.)
  */
-function rejectUnknownFlags(cmd: string, args: string[], known: string[]): void {
-  const takesValue = new Set(known.filter((k) => !k.startsWith("--force") && k !== "--stdout"));
+function rejectUnknownFlags(cmd: string, args: string[], takesValue: string[], boolean: string[] = []): void {
+  const known = [...takesValue, ...boolean];
   for (let i = 0; i < args.length; i++) {
     const a = args[i]!;
     if (!a.startsWith("--")) continue;
@@ -163,9 +163,13 @@ function rejectUnknownFlags(cmd: string, args: string[], known: string[]): void 
     if (!known.includes(name)) {
       die(`${cmd}: unknown option ${name}. Accepts: ${known.join(", ")}`);
     }
-    if (!a.includes("=") && takesValue.has(name)) i++; // skip its value
+    // Skip a value-taking flag's value, so a value that itself starts with `--` is not
+    // read as a flag. Booleans must NOT skip: `level --yes --bogus` would swallow the
+    // typo as `--yes`'s value and let it through.
+    if (!a.includes("=") && takesValue.includes(name)) i++;
   }
 }
+
 
 /**
  * Fill `.env.operator`'s MANIFEST_PUBKEY with the key just generated. Returns what
@@ -882,6 +886,7 @@ const BODY_TEMPLATE = {
 export async function runCommand(cmd: string | undefined, args: string[], ctx: Ctx): Promise<number> {
   switch (cmd) {
     case "coalition-keygen": {
+      rejectUnknownFlags("coalition-keygen", args, ["--out"]);
       // Operator-held custody for the Phase D Coalition signing key. The DEFAULT path
       // is not this command: MT auto-issues a Coalition keypair at first ingest and
       // hands the operator the private half once.
@@ -910,7 +915,7 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
       return 0;
     }
     case "keygen": {
-      rejectUnknownFlags("keygen", args, ["--dir", "--out", "--force"]);
+      rejectUnknownFlags("keygen", args, ["--dir", "--out"], ["--force"]);
       const dir = dirFlag(args);
       const keyPath = join(dir, "manifest-key.pem");
       // Your signing key is a ONCE-EVER identity: MT pins its public half at first
@@ -950,7 +955,7 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
       // that flow, the rewritten runbook never mentions it, and BODY_TEMPLATE had
       // drifted (no ownerAddress). `sign --in <body.json>` still serves anyone with
       // a hand-built body.
-      rejectUnknownFlags("init", args, ["--dir", "--out", "--answers", "--force"]);
+      rejectUnknownFlags("init", args, ["--dir", "--out", "--answers"], ["--force"]);
       const dir = dirFlag(args);
       const answersPath = flag(args, "--answers");
       const force = args.includes("--force");
@@ -1147,6 +1152,7 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
       return 0;
     }
     case "doctor": {
+      rejectUnknownFlags("doctor", args, ["--dir"], ["--check-hub", "--check-proxmox", "--check-stripe"]);
       // The runbook's "which value must match where" table, executed. File-level by
       // DEFAULT: no network, no secrets held. Two opt-in flags cross that line on
       // purpose — `--check-stripe` and `--check-proxmox` — because the two failures
@@ -1314,6 +1320,7 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
       return 0;
     }
     case "level": {
+      rejectUnknownFlags("level", args, ["--dir", "--set", "--price", "--stripe-key", "--stripe-webhook"], ["--dry-run", "--yes"]);
       // Two knobs, one command. PROVIDER_LEVEL and the Stripe pair are two halves of a
       // single decision ("do I sell hardware?"), and the only ways to change them before
       // this were `init --force` — which also mints a new SESSION_SECRET, blanks the three
@@ -1500,6 +1507,7 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
       return 0;
     }
     case "sign": {
+      rejectUnknownFlags("sign", args, ["--dir", "--from-config", "--in", "--key", "--out"], ["--stdout"]);
       // Same defaults as `env`, for the same reason: every one of these names a file
       // `init` wrote into the directory you are standing in. The re-sign instruction that
       // `doctor` prints is the command an operator types most often, and it was 90
@@ -1542,6 +1550,7 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
       return 0;
     }
     case "env": {
+      rejectUnknownFlags("env", args, ["--dir", "--from-config", "--manifest", "--out", "--secrets"], ["--stdout"]);
       // ⭐ Defaults, because `init` writes all four of these files under exactly these
       // names into one directory. Requiring three explicit paths meant the one command
       // standing between a finished scaffold and a deployable Flux app was also the
@@ -1687,6 +1696,7 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
       return 0;
     }
     case "verify": {
+      rejectUnknownFlags("verify", args, ["--in"]);
       const inPath = flag(args, "--in") ?? die("--in <manifest.json> required");
       const raw = JSON.parse(readFileSync(inPath, "utf8"));
       // Accept either shape an operator can hold: a bare manifest, or the
@@ -1727,6 +1737,7 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
     // whole rename without noticing: his shell still defined `mt-manifest()` against an
     // image name that no longer publishes, and nothing on either side could say so.
     case "wrapper": {
+      rejectUnknownFlags("wrapper", args, [], ["--toolkit", "--agent", "--version"]);
       const only = args.includes("--agent")
         ? ("agent" as const)
         : args.includes("--toolkit")
