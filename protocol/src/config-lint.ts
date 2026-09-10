@@ -562,7 +562,7 @@ const SUPPLIED_BY: Record<string, string> = {
   SESSION_SECRET: "`fh-toolkit init` — any long random string, e.g. `openssl rand -hex 32`",
   STRIPE_SECRET_KEY: "the Stripe dashboard (Developers → API keys)",
   STRIPE_WEBHOOK_SECRET: "the Stripe dashboard, shown once when you create the endpoint",
-  PROXMOX_TOKEN_ID: "`pveum user token add` — the id, e.g. `fluxhub@pve!agent`",
+  PROXMOX_TOKEN_ID: "`pveum user token add` — the id, e.g. `fh-agent@pve!agent`",
   PROXMOX_TOKEN_SECRET: "`pveum user token add`, printed ONCE when the token is created",
 };
 

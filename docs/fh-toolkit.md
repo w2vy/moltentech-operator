@@ -890,7 +890,7 @@ configuration. Read it before anything else:
 | `OWNER_ADDRESS` | — | enables owner-auth enforcement + the courier |
 | `COALITION_URL` | — | trailing slash stripped; required for the courier |
 | `PROXMOX_URL` | — | an address the **container** can reach: your Proxmox LAN IP, not `127.0.0.1` (which is the container's own loopback). Or run with `--network host` if the agent is on the Proxmox host |
-| `PROXMOX_TOKEN_ID` | — | e.g. `fluxhub@pve!agent` — a **credential, not a label**; renaming it breaks every Proxmox call |
+| `PROXMOX_TOKEN_ID` | — | e.g. `fh-agent@pve!agent` — a **credential, not a label**; renaming it breaks every Proxmox call |
 | `PROXMOX_TOKEN_SECRET` | — | |
 | `PROXMOX_NETWORK` | `vmbr0` | |
 | `PROXMOX_STORAGE_IMAGES` | `local-lvm` | ⚠️ the default is frequently the spinning disk — see `--check-proxmox` |

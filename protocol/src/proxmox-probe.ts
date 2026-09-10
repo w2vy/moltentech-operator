@@ -33,7 +33,7 @@ const insecureAgent = new https.Agent({ rejectUnauthorized: false });
 export interface ProxmoxCreds {
   /** Base URL including the port, e.g. `https://pve30:8006`. */
   url: string;
-  /** e.g. `fluxhub@pve!agent` */
+  /** e.g. `fh-agent@pve!agent` */
   tokenId: string;
   tokenSecret: string;
 }

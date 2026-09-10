@@ -127,9 +127,9 @@ VM.Console,VM.PowerMgmt,\
 Datastore.Allocate,Datastore.AllocateSpace,Datastore.AllocateTemplate,Datastore.Audit,\
 SDN.Audit,SDN.Use,\
 Sys.Audit"
-pveum user add fluxhub@pve
-pveum acl modify / --users fluxhub@pve --roles FluxHubAgent
-pveum user token add fluxhub@pve agent --privsep 0     # prints the secret ONCE
+pveum user add fh-agent@pve
+pveum acl modify / --users fh-agent@pve --roles FluxHubAgent
+pveum user token add fh-agent@pve agent --privsep 0     # prints the secret ONCE
 ```
 
 `--privsep 0` makes the token inherit the user's privileges; with privilege separation
@@ -140,8 +140,12 @@ exactly those names:
 
 | Variable | Value from the commands above |
 |---|---|
-| `PROXMOX_TOKEN_ID` | `fluxhub@pve!agent` — user, `!`, token name |
+| `PROXMOX_TOKEN_ID` | `fh-agent@pve!agent` — user, `!`, token name |
 | `PROXMOX_TOKEN_SECRET` | the UUID printed once by `user token add` |
+
+⚠️ **Already have a token under another name?** Keep it. The id is a **credential, not a
+label** — renaming it breaks every Proxmox call, and the name has no meaning to Flux Hub.
+`fh-agent@pve!agent` is what a fresh setup should create; anything already working stays.
 
 Keep both to hand. `init` **proves them on the spot**, so a mistyped secret or a token
 that cannot allocate is caught here rather than five steps later — and it reuses the
@@ -167,12 +171,12 @@ If root lists `vmbr0` and a provision still says the network is absent, it is th
 
 ⚠️ **If `role add` aborts** (e.g. `invalid privilege '…'` on a PVE build that renamed
 one), the role is not created — but the later `user add` and `token add` still run and
-leave a privilege-less `fluxhub@pve` / `fluxhub@pve!agent` behind. Tear those down before
+leave a privilege-less `fh-agent@pve` / `fh-agent@pve!agent` behind. Tear those down before
 retrying, or the second `user add` errors:
 
 ```sh
-pveum user token remove fluxhub@pve agent
-pveum user delete fluxhub@pve
+pveum user token remove fh-agent@pve agent
+pveum user delete fh-agent@pve
 pveum role delete FluxHubAgent   # harmless "does not exist" if it never got created
 ```
 
@@ -893,7 +897,7 @@ AGENT_INVENTORY_PATH=/data/inventory.json
 # your Proxmox LAN IP (not 127.0.0.1, which is the container's own loopback), or run with
 # `--network host` if the agent runs on the Proxmox host itself.
 PROXMOX_URL=https://<proxmox-lan-ip>:8006
-PROXMOX_TOKEN_ID='fluxhub@pve!agent'
+PROXMOX_TOKEN_ID='fh-agent@pve!agent'
 PROXMOX_TOKEN_SECRET=<secret from Step 0.1>
 PROXMOX_NETWORK=vmbr0
 PROXMOX_STORAGE_IMAGES=<a ROTA=0 storage ID — see Step 0.2>
