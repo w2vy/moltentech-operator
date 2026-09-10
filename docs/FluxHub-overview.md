@@ -63,7 +63,7 @@ chmod 700 . && chmod 600 * && chmod 755 data && chmod 644 data/inventory.json
 | Boundary | What crosses it | What must not |
 |---|---|---|
 | **agent container** ← `./data:/data:ro` | `inventory.json` only | `.env.operator` and `manifest-key.pem` must never be readable inside the container. This is why inventory lives in `data/` and nothing else does. |
-| **Flux app** ← `env.json` | Coalition config + the three issued keys + Stripe | `manifest-key.pem` never leaves this host. The Coalition holds `MANIFEST_KEY`'s *effects*, not your Proxmox creds. |
+| **Flux app** ← `env.json` | Coalition config + `COALITION_SIGNING_KEY` + Stripe | `manifest-key.pem` never leaves this host. The Coalition holds `MANIFEST_KEY`'s *effects*, not your Proxmox creds. |
 | **Flux Hub** ← `manifest.json` | your signed, owner-attested identity | every secret. The manifest is a public document; it is meant to be published at `/.well-known/mt-provider.json`. |
 
 ⭐ **`data/` is mounted as a directory, never as a file.** A single-file bind mount pins
@@ -145,7 +145,7 @@ exactly this (`PRICE_ZEROS`), because the mistake reads as plausible. Selling no
 
 ## `secrets.env` 🔑 — the Coalition's secrets
 
-**Written by** `init` as a skeleton; you fill in three values. **Read by** `env` and
+**Written by** `init` as a skeleton; `/onboard` issues the one value it leaves empty. **Read by** `env` and
 `doctor`. Mode 0600. **Never commit it, and never paste these into `config.env`.**
 
 | Key | Source | If empty |
@@ -157,12 +157,12 @@ exactly this (`PRICE_ZEROS`), because the mistake reads as plausible. Selling no
 | `STRIPE_WEBHOOK_SECRET` | shown once when you create the endpoint | checkout never completes |
 
 **Empty-but-present is a deliberate third state.** `doctor` reports it as `NOT_YET_FILLED`,
-never as an error, so a fresh scaffold does not read as broken. Exactly three values are
-left empty on purpose — the ones `/onboard` mints. Everything else `init` could know, it
-filled in.
+never as an error, so a fresh scaffold does not read as broken. One value is left empty on
+purpose — `COALITION_SIGNING_KEY`, which `/onboard` mints (three if you are selling and
+have not created the Stripe endpoint yet). Everything else `init` could know, it filled in.
 
-⚠️ **`COALITION_SIGNING_KEY` has no consumer yet and is displayed exactly once.** Store it
-now or it is gone. It is not currently checked by anything, so nothing will remind you.
+⚠️ **`COALITION_SIGNING_KEY` is displayed exactly once.** Store it now or it is gone. The
+Coalition refuses to start without it.
 
 ⚠️ **`STRIPE_WEBHOOK_SECRET` is bound to the specific endpoint it came from.** A secret
 copied from a different endpoint fails *silently* — checkout simply never completes.
@@ -377,9 +377,9 @@ else falls back out of `fh-toolkit init` given your answers. Store it the way yo
 store a wallet key.
 
 `COALITION_SIGNING_KEY` from `/onboard` is shown **once** and lives only in `secrets.env`,
-so back that up too — or be ready to have FH reissue it. (Two more values were issued here
-until Phase E, 2026-09-07: `AGENT_KEY` and `COALITION_KEY`. Both are gone — your agent
-signs with `MANIFEST_KEY`, and Flux Hub signs its calls to your Coalition.)
+so back that up too — or be ready to have FH reissue it. It is the only key `/onboard`
+issues: your agent signs with `MANIFEST_KEY`, and Flux Hub signs its calls to your
+Coalition.
 
 ⚠️ **The wallet behind `OWNER_ADDRESS` is not in this directory at all**, and it signs
 every privileged node action forever. Use one you will still control in a year.
