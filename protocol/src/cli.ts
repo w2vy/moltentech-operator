@@ -533,7 +533,7 @@ async function askAnswers(
         console.log("  → skipped. Fill PROXMOX_* in .env.operator, then `fh-toolkit doctor --check-proxmox`.");
         break;
       }
-      proxmoxTokenId = await ask("  PROXMOX_TOKEN_ID", proxmoxTokenId || "fluxhub@pve!agent");
+      proxmoxTokenId = await ask("  PROXMOX_TOKEN_ID", proxmoxTokenId || "fh-agent@pve!agent");
       // The captured secret is deliberately NOT offered back as a default: `ask` echoes
       // defaults in brackets, and a retry loop would then print the token secret to the
       // terminal on every round. Enter re-uses it without showing it.

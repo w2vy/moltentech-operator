@@ -94,11 +94,11 @@ test("a headline is never truncated at an abbreviation", () => {
         rule: "NOT_YET_FILLED",
         severity: "warning",
         file: ".env.operator",
-        message: "PROXMOX_TOKEN_ID is empty — supplied by `pveum user token add` — the id, e.g. `fluxhub@pve!agent`. The agent cannot make a single Proxmox call until it is filled.",
+        message: "PROXMOX_TOKEN_ID is empty — supplied by `pveum user token add` — the id, e.g. `fh-agent@pve!agent`. The agent cannot make a single Proxmox call until it is filled.",
       },
     ])
   );
-  assert.match(text.split("\n")[0]!, /`fluxhub@pve!agent`\.$/);
+  assert.match(text.split("\n")[0]!, /`fh-agent@pve!agent`\.$/);
 });
 
 test("a clean run says so and reports ok", () => {

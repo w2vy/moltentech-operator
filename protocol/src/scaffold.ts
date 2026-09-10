@@ -107,7 +107,7 @@ export interface Answers {
   manualApproval?: boolean;
   /**
    * Proxmox API token, as `pveum user token add` printed it in Step 0.1 — the id
-   * (`fluxhub@pve!agent`) and the secret shown exactly once.
+   * (`fh-agent@pve!agent`) and the secret shown exactly once.
    *
    * Carried through `Answers` rather than asked for only at the prompt so the
    * `--answers` path writes the same complete files the interactive one does. That
