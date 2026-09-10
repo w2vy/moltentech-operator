@@ -9,7 +9,7 @@
  *
  * Every rule here is a pure function over file TEXT — no network, no secrets held,
  * no Proxmox credentials (`fh-toolkit` is deliberately secret-free; the checks that
- * need creds live in `mt-agent doctor` instead). That purity is what makes the whole
+ * need creds live in `fh-agent doctor` instead). That purity is what makes the whole
  * rule set unit-testable from fixture strings.
  *
  * Ordering principle, from the run: rank by what fails SILENTLY. A 422 or a 409

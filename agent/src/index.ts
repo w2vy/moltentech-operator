@@ -16,7 +16,7 @@ import { runPreflight, formatPreflight, checkManifestKey } from "./preflight";
  * listing to MoltenTech; nothing connects in. Holds the local Proxmox creds.
  */
 /**
- * `mt-agent doctor` — the credentialed half of onboarding validation.
+ * `fh-agent doctor` — the credentialed half of onboarding validation.
  *
  * `fh-toolkit doctor` checks that the five config files agree with each other, but it
  * is deliberately secret-free and cannot ask the hypervisor anything. These checks need
@@ -28,7 +28,7 @@ import { runPreflight, formatPreflight, checkManifestKey } from "./preflight";
 async function doctor(): Promise<never> {
   const cfg = loadConfig();
   const hosts = reloadInventory(cfg);
-  console.log(`mt-agent doctor — provider=${cfg.providerSlug} proxmox=${cfg.proxmox.url}\n`);
+  console.log(`fh-agent doctor — provider=${cfg.providerSlug} proxmox=${cfg.proxmox.url}\n`);
 
   const results = await runPreflight(
     cfg,

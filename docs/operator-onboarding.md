@@ -10,7 +10,7 @@ opens an inbound connection to you.
 This one is the ordered path from nothing to live. Two companions carry what a runbook
 should not:
 
-- **[`fh-toolkit.md`](fh-toolkit.md)** — every `fh-toolkit` and `mt-agent` command with
+- **[`fh-toolkit.md`](fh-toolkit.md)** — every `fh-toolkit` and `fh-agent` command with
   its options, defaults and refusals, plus operating the agent day to day. Look here for
   "what does this flag do".
 - **[`FluxHub-overview.md`](FluxHub-overview.md)** — what each file in your operator
@@ -252,7 +252,7 @@ echo '[ -f ~/.fh-toolkit.sh ] && . ~/.fh-toolkit.sh' >> ~/.bashrc
 . ~/.fh-toolkit.sh
 ```
 
-That defines two functions — `fh-toolkit` and `mt-agent` — and
+That defines two functions — `fh-toolkit` and `fh-agent` — and
 [`fh-toolkit.md`](fh-toolkit.md#running-them) prints the body if you want to read it
 before you source it. `fh-toolkit --update-wrapper` reinstalls them later; `fh-toolkit
 doctor` tells you when yours has gone stale, which is the failure this replaced.
@@ -486,7 +486,7 @@ resolved-to-loopback, no route, wrong port, bad token — rather than blaming yo
 
 ⚠️ The deeper agent-side checks (CA trust store, the ISO actually present in the ISO
 storage, `MANIFEST_KEY` matching the pinned pubkey) still run in the agent image as
-`mt-agent doctor` (Step 6).
+`fh-agent doctor` (Step 6).
 
 ⚠️ **`keygen` is a once-ever act.** `manifest-key.pem` *is* your provider identity: FH
 pins its public half as `Provider.manifestPubkey` at onboarding, and re-running `keygen`
@@ -765,7 +765,7 @@ rather than trusting that the import took.
 protocol change cannot complete onboarding: `coalition:0.2.4` was built one day before the
 protocol gained owner-attested `hardware[]`, and the hub 409s an unattested host, so that
 tag can never finish onboarding no matter how carefully you follow this guide. Every image
-here — `coalition`, `mt-agent`, `fh-toolkit` — tracks `latest`, which is what the fleet
+here — `coalition`, `fh-agent`, `fh-toolkit` — tracks `latest`, which is what the fleet
 runs and what `init` writes into `flux-app-spec.json` and `compose.yaml`.
 
 The cost of tracking `latest` is that **"which build is live" is no longer answerable from
@@ -870,7 +870,7 @@ a stale build. Without declared inventory the agent has no record of your node n
 
 ## Step 6 — Run the agent
 
-The agent is the published image **`w2vy/mt-agent`**. It runs on a trusted, always-on
+The agent is the published image **`w2vy/fh-agent`**. It runs on a trusted, always-on
 host **beside your Proxmox** — **not** on Flux. It is outbound-only (no ports) and holds
 your Proxmox token + manifest key, so it must live on infrastructure you control.
 
@@ -882,7 +882,7 @@ PROVIDER_SLUG=your-slug
 # Auth. MANIFEST_KEY signs every agent -> Flux Hub request. REQUIRED, and the only
 # agent credential since Phase E (2026-09-07) removed the AGENT_KEY bearer.
 MANIFEST_KEY=<base64 of manifest-key.pem — see below>
-# The PUBLIC half, from manifest-pubkey.txt. Not a secret: it is the pin `mt-agent
+# The PUBLIC half, from manifest-pubkey.txt. Not a secret: it is the pin `fh-agent
 # doctor` compares MANIFEST_KEY against. Leave it out and that check can only report
 # `skip`, so a wrong key is not caught until FH rejects a signature.
 MANIFEST_PUBKEY=<contents of manifest-pubkey.txt>
@@ -942,19 +942,19 @@ keeps serving stale content) until the container is recreated.
 
 ### Dry run, then run
 
-### ⭐ First, the hypervisor preflight: `mt-agent doctor`
+### ⭐ First, the hypervisor preflight: `fh-agent doctor`
 
 Before any VM is created, run the credentialed checks — read-only, creates nothing:
 
 ```sh
 docker run --rm --env-file .env.operator -v "$PWD/data:/data:ro" \
-  w2vy/mt-agent:latest npm run doctor      # :staging if you onboarded against staging
+  ghcr.io/w2vy/fh-agent:latest npm run doctor      # :staging if you onboarded against staging
 ```
 
 ⚠️ **`npm run doctor`, not a bare `doctor`.** The image sets `CMD` but no `ENTRYPOINT`, so
 it inherits node's: a bare subcommand is handed to `node` and dies
 `MODULE_NOT_FOUND: /app/agent/doctor`. `doctor` is genuinely the image's CLI — it is only
-unreachable as a bare `docker run` argument. The `mt-agent` shell function does this for
+unreachable as a bare `docker run` argument. The `fh-agent` shell function does this for
 you, and picks the tag out of your `compose.yaml`.
 
 It exits non-zero if anything fails, so it works as a gate. It checks that Proxmox is
@@ -980,7 +980,7 @@ Validate connectivity/auth to FH first, **without touching Proxmox**:
 
 ```sh
 docker run --rm --env-file .env.operator -v "$PWD/data:/data:ro" \
-  -e AGENT_DRY_RUN=1 w2vy/mt-agent:latest
+  -e AGENT_DRY_RUN=1 ghcr.io/w2vy/fh-agent:latest
 # expect: provider=… mt=… dryRun=true auth=signature ownerAuth=enforced courier=on
 ```
 
@@ -1008,9 +1008,9 @@ docker compose down           # stop and remove
 The equivalent without compose, if you prefer:
 
 ```sh
-docker run -d --name mt-agent --restart unless-stopped \
-  --env-file .env.operator -v "$PWD/data:/data:ro" w2vy/mt-agent:latest
-# any env edit then needs: docker rm -f mt-agent && the above again
+docker run -d --name fh-agent --restart unless-stopped \
+  --env-file .env.operator -v "$PWD/data:/data:ro" ghcr.io/w2vy/fh-agent:latest
+# any env edit then needs: docker rm -f fh-agent && the above again
 ```
 
 ⚠️ If you see **"self-signed certificate in certificate chain"**, the image is missing

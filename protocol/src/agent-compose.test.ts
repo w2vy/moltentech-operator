@@ -72,13 +72,13 @@ test("⭐ the project name is explicit, not inherited from the directory", () =>
 
 test("the image is the one the doc says", () => {
   assert.match(compose(), new RegExp(`^ {4}image: ${AGENT_IMAGE.replace("/", "\\/")}$`, "m"));
-  assert.match(AGENT_IMAGE, /^w2vy\/mt-agent:latest$/);
+  assert.match(AGENT_IMAGE, /^ghcr\.io\/w2vy\/fh-agent:latest$/);
 
   // Same rule the Coalition image already lives under: an operator following the doc and
   // an operator running `init` must deploy the same code.
   const doc = fileURLToPath(new URL("../../docs/operator-onboarding.md", import.meta.url));
   if (!existsSync(doc)) return;
-  const pins = [...new Set(readFileSync(doc, "utf8").match(/w2vy\/mt-agent:[^\s`)]+/g) ?? [])];
+  const pins = [...new Set(readFileSync(doc, "utf8").match(/ghcr\.io\/w2vy\/fh-agent:[^\s`)]+/g) ?? [])];
   assert.deepEqual(pins, [AGENT_IMAGE], "docs/operator-onboarding.md pins a different agent image");
 });
 
@@ -89,7 +89,7 @@ test("⭐ a staging onboarding pins the staging image, not the production one", 
   // the resulting 403 loop read as a hub bug.
   const staging = renderAgentCompose({ ...ANSWERS, mtBaseUrl: STAGING_BASE_URL });
   assert.match(staging, new RegExp(`^ {4}image: ${AGENT_IMAGE_STAGING.replace("/", "\\/")}$`, "m"));
-  assert.doesNotMatch(staging, /mt-agent:latest/);
+  assert.doesNotMatch(staging, /fh-agent:latest/);
 
   // A trailing slash is the same answer.
   assert.equal(agentImageFor(`${STAGING_BASE_URL}/`), AGENT_IMAGE_STAGING);

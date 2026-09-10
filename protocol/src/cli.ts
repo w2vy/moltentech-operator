@@ -503,7 +503,7 @@ async function askAnswers(
     // prose description of it. The operator is holding the output of Step 0.1 — two values
     // the runbook names as PROXMOX_TOKEN_ID and PROXMOX_TOKEN_SECRET — and matching those
     // names here removes the guess about which half goes where.
-    // ⭐ Proved HERE, not five steps later in `mt-agent doctor`. A mistyped secret, a
+    // ⭐ Proved HERE, not five steps later in `fh-agent doctor`. A mistyped secret, a
     // path-scoped token, a URL the container cannot resolve — all of them used to
     // surface long after the step that caused them, in a different tool.
     //
@@ -941,7 +941,7 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
       console.log(`Wrote ${keyPath} (KEEP SECRET — this signs your manifest).`);
       console.log(`Public key (manifest "pubkey", also saved to manifest-pubkey.txt):\n${publicKeyBase64}`);
       if (backfilled === "filled") {
-        console.log("Also filled MANIFEST_PUBKEY in .env.operator (mt-agent doctor pins against it).");
+        console.log("Also filled MANIFEST_PUBKEY in .env.operator (fh-agent doctor pins against it).");
       } else if (backfilled === "already-set") {
         console.log(
           "note: .env.operator already pins a MANIFEST_PUBKEY — left as-is. If you are ROTATING, " +
@@ -1042,7 +1042,7 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
       const manifestKey = Buffer.from(keyPem, "utf8").toString("base64");
       // Prefer the file keygen wrote; derive from the key itself if it is missing, so a
       // deleted manifest-pubkey.txt cannot leave the pin empty (the failure that made
-      // `mt-agent doctor`'s key check report `skip` on every onboarding so far).
+      // `fh-agent doctor`'s key check report `skip` on every onboarding so far).
       const pubkeyPath = join(dir, "manifest-pubkey.txt");
       let manifestPubkey: string;
       try {
@@ -1123,7 +1123,7 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
       console.log("⭐ README.txt explains every file here and what to run when.\n");
       console.log("Already done, from the key in this directory:");
       console.log("  ✓ MANIFEST_KEY   filled in secrets.env and .env.operator");
-      console.log("  ✓ MANIFEST_PUBKEY pinned in .env.operator (`mt-agent doctor` now compares, not skips)");
+      console.log("  ✓ MANIFEST_PUBKEY pinned in .env.operator (`fh-agent doctor` now compares, not skips)");
       console.log("  ✓ SESSION_SECRET generated");
       console.log("  ✓ manifest.json signed — this is the file you paste at /onboard");
       console.log("    (edit config.env later and it goes stale; re-run `fh-toolkit sign`)\n");
@@ -1823,7 +1823,7 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
       console.log("Handled by the shell function, not by this CLI — a container can neither");
       console.log("replace its own image nor write to your home directory. Left alone the");
       console.log("wrapper re-pulls every 15 minutes, so `version` above is what is RUNNING.\n");
-      console.log("The agent is a separate command; `mt-agent doctor` is its preflight.");
+      console.log("The agent is a separate command; `fh-agent doctor` is its preflight.");
       console.log("Full reference: docs/fh-toolkit.md in the moltentech-operator repo.");
       // `help` asked for this; an unknown subcommand got it as an error message.
       const asked = cmd === undefined || cmd === "help" || cmd === "--help" || cmd === "-h";

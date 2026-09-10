@@ -206,7 +206,7 @@ jobs:
           run init --answers answers.json
           run doctor
 
-          # MANIFEST_PUBKEY is the pin `mt-agent doctor` compares MANIFEST_KEY against.
+          # MANIFEST_PUBKEY is the pin `fh-agent doctor` compares MANIFEST_KEY against.
           # Empty, that check can only report `skip` — which is what it did on every real
           # onboarding, because nothing filled it until the operator did it by hand.
           pubkey="$(tr -d '\n' < "$work/manifest-pubkey.txt")"

@@ -9,7 +9,7 @@ reference. This one is what you want three weeks later, when a node is down and 
 staring at a directory trying to remember which file the agent actually reads.
 
 > The platform is **Flux Hub**. The binaries, images and variables are still `mt-*`
-> (`fh-toolkit`, `mt-agent`, `MT_BASE_URL`, `MT_PUBKEY`) until the rename ships —
+> (`fh-toolkit`, `fh-agent`, `MT_BASE_URL`, `MT_PUBKEY`) until the rename ships —
 > everything named in this document is literal.
 
 ---
@@ -94,7 +94,7 @@ this cannot.
 `doctor --check-hub`.
 
 The base64 public half. Not a secret — publish it freely. Its job is to be the *pin*:
-`mt-agent doctor` compares the key the agent actually loaded against it. Delete it and
+`fh-agent doctor` compares the key the agent actually loaded against it. Delete it and
 `init` re-derives the value from the private key, so the pin cannot silently end up empty.
 
 ---
@@ -172,7 +172,7 @@ copied from a different endpoint fails *silently* — checkout simply never comp
 
 ## `.env.operator` 🔑 — the agent's environment
 
-**Written by** `init`. **Read by** `mt-agent` (via `env_file` in `compose.yaml`) and by
+**Written by** `init`. **Read by** `fh-agent` (via `env_file` in `compose.yaml`) and by
 `doctor`'s `--check-proxmox` / `--check-hub`.
 
 This is the only file holding your **Proxmox token**, and those credentials never leave
@@ -194,7 +194,7 @@ What matters *about the file*:
   Proxmox call the agent makes.
 - ⚠️ **`PROXMOX_STORAGE_IMAGES` defaults to `local-lvm`**, which on a mixed-disk host is
   frequently the spinning one. Nodes then provision fine and fail every benchmark with no
-  visible cause. `doctor --check-proxmox` and `mt-agent doctor` both resolve it to the real
+  visible cause. `doctor --check-proxmox` and `fh-agent doctor` both resolve it to the real
   device and refuse it.
 - ⚠️ **`AGENT_LISTING_JSON` is an array** of `{tier, priceCents, availableSlots}`, and its
   prices must agree with `TIER_PRICES_JSON` in `config.env` or the Coalition and FH quote
@@ -309,7 +309,7 @@ produced nothing but JSON syntax errors.
 
 **Written by** `init`. **Read by** `docker compose`.
 
-Pinned to `w2vy/mt-agent:latest`, `restart: unless-stopped`, `env_file: [.env.operator]`,
+Pinned to `ghcr.io/w2vy/fh-agent:latest`, `restart: unless-stopped`, `env_file: [.env.operator]`,
 `./data:/data:ro`, and an explicit project name `fh-agent-<slug>`.
 
 ⚠️ **The project name is explicit on purpose.** Compose otherwise derives it from the

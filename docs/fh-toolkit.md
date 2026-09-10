@@ -1,7 +1,7 @@
 # Flux Hub Operator Toolkit
 
 Reference for the two commands an operator types: **`fh-toolkit`** (scaffold, sign,
-validate, assemble) and **`mt-agent`** (the long-running agent, plus its preflight).
+validate, assemble) and **`fh-agent`** (the long-running agent, plus its preflight).
 
 This is a *reference*, not a runbook. It answers "what does this flag do, what does this
 command read and write, what happens if I get it wrong". For the ordered from-zero
@@ -10,7 +10,7 @@ your operator directory *is*, see [`FluxHub-overview.md`](FluxHub-overview.md).
 
 > **On the names.** The platform is **Flux Hub**, and the toolkit is **`fh-toolkit`**
 > (renamed from `mt-manifest`: only two of its commands were ever about manifests).
-> The agent is still **`mt-agent`**, and the environment variables are still `MT_*`
+> The agent is still **`fh-agent`**, and the environment variables are still `MT_*`
 > (`MT_BASE_URL`, `MT_PUBKEY`) — that is deliberate, not an oversight. They point at an
 > unchanged endpoint and are read across three repos, so renaming them would buy nothing
 > and cost a coordinated migration. **Every command in this document is literal** — type
@@ -20,15 +20,15 @@ your operator directory *is*, see [`FluxHub-overview.md`](FluxHub-overview.md).
 
 ## The two tools at a glance
 
-| | `fh-toolkit` | `mt-agent` |
+| | `fh-toolkit` | `fh-agent` |
 |---|---|---|
-| Image | `ghcr.io/w2vy/fh-toolkit:latest` | `w2vy/mt-agent:latest` |
+| Image | `ghcr.io/w2vy/fh-toolkit:latest` | `ghcr.io/w2vy/fh-agent:latest` |
 | Lifetime | one-shot, run by hand | long-running daemon |
 | Runs where | your agent host, in your operator directory | same host, via `compose.yaml` |
 | Holds secrets | no — your key is generated into the mounted directory, never baked in | yes — Proxmox token, manifest key |
 | Network | offline by default; only the `--check-*` flags reach out | outbound only, always |
 
-`fh-toolkit` produces the files. `mt-agent` consumes two of them (`.env.operator`,
+`fh-toolkit` produces the files. `fh-agent` consumes two of them (`.env.operator`,
 `data/inventory.json`) and does the work.
 
 ---
@@ -55,7 +55,7 @@ printing the invocation it wants, and the file is plain text you can read first.
 ⚠️ It replaces `~/.fh-toolkit.sh` wholesale, so put anything of your own in your rc file
 rather than in it. The header says as much.
 
-It defines **two** functions, `fh-toolkit` and `mt-agent`. `fh-toolkit wrapper` prints
+It defines **two** functions, `fh-toolkit` and `fh-agent`. `fh-toolkit wrapper` prints
 them without installing anything (`--toolkit` or `--agent` for one), which is how the
 block below stays honest — a test asserts these are the same bytes the image emits:
 
@@ -111,7 +111,7 @@ fh-toolkit() {
   # FH_WRAPPER lets the container tell a current wrapper from a stale one; `doctor`
   # reports the mismatch. /etc/hosts read-only so hostnames resolve inside the container
   # as they do at your prompt — see operator-onboarding.md Step 0.5 for the loopback edge.
-  docker run --rm -i $tty -e FH_WRAPPER=2 -v "$PWD:/work" \
+  docker run --rm -i $tty -e FH_WRAPPER=3 -v "$PWD:/work" \
     -v /etc/hosts:/etc/hosts:ro -u "$(id -u):$(id -g)" "$img" "$@"
 }
 ```
@@ -136,7 +136,7 @@ Five things in that wrapper are load-bearing:
 - **`-v "$PWD:/work"`** — the container's `/work` *is* your operator directory. Every
   path default below (`.`) resolves there, which is why the commands take no arguments
   when you run them in the right place.
-- **`-e FH_WRAPPER=2`** — how the container tells a current wrapper from a stale one, or
+- **`-e FH_WRAPPER=3`** — how the container tells a current wrapper from a stale one, or
   from none at all. It exists because on 2026-09-06 the tool was renamed, published, and
   changed nothing for its only operator: his shell still defined `mt-manifest()` against
   an image name that no longer publishes, and *neither side could say so*. `fh-toolkit
@@ -163,7 +163,7 @@ Five things in that wrapper are load-bearing:
   and is not in the CLI you just ran — paste it into any bug report. A build with no
   image metadata reports `source checkout` instead of guessing.
 
-### `mt-agent` — compose, written for you
+### `fh-agent` — compose, written for you
 
 `fh-toolkit init` writes `compose.yaml` (pinned image, `./data` mounted read-only, its
 own project name, no published ports):
@@ -194,40 +194,40 @@ is what replaces a version pin. For a run you need to reproduce byte-for-byte, d
 digest (`w2vy/coalition@sha256:…`) instead of a tag.
 
 One-shot invocations (`doctor`, dry runs) have a wrapper too — the same
-`~/.fh-toolkit.sh` defines an `mt-agent` function:
+`~/.fh-toolkit.sh` defines an `fh-agent` function:
 
 ```sh
-mt-agent doctor      # the credentialed preflight
-mt-agent dry-run     # Flux Hub connectivity and auth, without touching Proxmox
+fh-agent doctor      # the credentialed preflight
+fh-agent dry-run     # Flux Hub connectivity and auth, without touching Proxmox
 ```
 
 or go direct, which is all the function does:
 
 ```sh
 docker run --rm --env-file .env.operator -v "$PWD/data:/data:ro" \
-  w2vy/mt-agent:latest npm run doctor      # :staging if you onboarded against staging
+  ghcr.io/w2vy/fh-agent:latest npm run doctor      # :staging if you onboarded against staging
 ```
 
 ⚠️ **`npm run doctor`, not a bare `doctor`.** The image sets `CMD` but no `ENTRYPOINT`, so
 it inherits node's: a bare subcommand is handed to `node` and dies
 `MODULE_NOT_FOUND: /app/agent/doctor`. `doctor` is genuinely the image's CLI — it is only
-unreachable as a bare `docker run` argument. The `mt-agent` shell function does this for
+unreachable as a bare `docker run` argument. The `fh-agent` shell function does this for
 you, and picks the tag out of your `compose.yaml`.
 
-⚠️ **Bare `mt-agent` is the one place a wrapper disagrees with the tool it wraps.** The
-image's own CLI reads `mt-agent [doctor]`, where no argument means *run the main loop in
+⚠️ **Bare `fh-agent` is the one place a wrapper disagrees with the tool it wraps.** The
+image's own CLI reads `fh-agent [doctor]`, where no argument means *run the main loop in
 the foreground*. Through the function that is a footgun — compose is already running one,
 and a second agent for one provider is a real failure mode — so the function refuses and
 points you back at compose. Run the loop with `docker compose up -d`, never through this.
 
 ⚠️ **The function never pulls the agent.** `fh-toolkit` refreshes itself because it is the
-thing you are invoking; pulling the *agent* would mean `mt-agent doctor` validated a build
-your running loop is not on — passing here and failing in production. Instead `mt-agent
+thing you are invoking; pulling the *agent* would mean `fh-agent doctor` validated a build
+your running loop is not on — passing here and failing in production. Instead `fh-agent
 doctor` compares what is **running** against what is **on the host**, and what is on the
 host against what is **published**, and tells you:
 
 ```
-note: a newer w2vy/mt-agent:latest is ON THIS HOST than the one your agent is running.
+note: a newer ghcr.io/w2vy/fh-agent:latest is ON THIS HOST than the one your agent is running.
   take it with:  docker compose up -d --force-recreate
 ```
 
@@ -384,7 +384,7 @@ refuses to run rather than writing files with three holes in them.
 | `.env.operator` | 0600 | the agent's environment (Proxmox creds land here) |
 | `data/inventory.json` | **0644** | your declared hosts and slots — published content, and the only file read from inside the container |
 | `flux-app-spec.json` | 0600 | the Flux app definition for the Coalition |
-| `compose.yaml` | 0600 | pinned `mt-agent` service, ready to `up -d` |
+| `compose.yaml` | 0600 | pinned `fh-agent` service, ready to `up -d` |
 | `README.txt` | 0600 | your operating card: how to start, stop and watch the agent |
 | `manifest.json` | 0600 | **signed** — this is what you paste at `/onboard` |
 
@@ -754,10 +754,10 @@ one is present. What you submit at `/onboard` is the **bare** `manifest.json`.
 
 ---
 
-# `mt-agent`
+# `fh-agent`
 
 ```
-mt-agent [doctor]
+fh-agent [doctor]
 ```
 
 No flags: everything is configured through `.env.operator`. With no argument it runs the
@@ -767,7 +767,7 @@ nothing connects in. It holds the local Proxmox credentials, which never leave y
 ⚠️ **One agent controls one Proxmox system.** To run more than one host from a single
 agent, enable Proxmox clustering; the agent detects cluster mode automatically.
 
-## `mt-agent doctor`
+## `fh-agent doctor`
 
 The **credentialed** half of onboarding validation. `fh-toolkit doctor` proves the files
 agree with each other but is deliberately secret-free and cannot ask the hypervisor
@@ -777,13 +777,13 @@ before the first provision rather than after a wasted benchmark cycle.
 
 ```sh
 docker run --rm --env-file .env.operator -v "$PWD/data:/data:ro" \
-  w2vy/mt-agent:latest npm run doctor      # :staging if you onboarded against staging
+  ghcr.io/w2vy/fh-agent:latest npm run doctor      # :staging if you onboarded against staging
 ```
 
 ⚠️ **`npm run doctor`, not a bare `doctor`.** The image sets `CMD` but no `ENTRYPOINT`, so
 it inherits node's: a bare subcommand is handed to `node` and dies
 `MODULE_NOT_FOUND: /app/agent/doctor`. `doctor` is genuinely the image's CLI — it is only
-unreachable as a bare `docker run` argument. The `mt-agent` shell function does this for
+unreachable as a bare `docker run` argument. The `fh-agent` shell function does this for
 you, and picks the tag out of your `compose.yaml`.
 
 It checks that Proxmox is reachable and the token accepted; that the CA trust store is
@@ -807,7 +807,7 @@ Validates connectivity and auth to Flux Hub **without touching Proxmox**:
 
 ```sh
 docker run --rm --env-file .env.operator -v "$PWD/data:/data:ro" \
-  -e AGENT_DRY_RUN=1 w2vy/mt-agent:latest
+  -e AGENT_DRY_RUN=1 ghcr.io/w2vy/fh-agent:latest
 # provider=… mt=… auth=signature ownerAuth=enforced courier=on dryRun=true poll=10000ms
 ```
 
@@ -871,7 +871,7 @@ configuration. Read it before anything else:
 |---|---|
 | a corrected key still 401s | the container was `restart`ed, not `--force-recreate`d |
 | deletes and reprovisions never complete | `courier=off` — needs `MANIFEST_KEY` **and** `COALITION_URL` **and** `OWNER_ADDRESS` |
-| nodes provision fine, then fail every benchmark | VM storage is on a spinning disk — `mt-agent doctor` |
+| nodes provision fine, then fail every benchmark | VM storage is on a spinning disk — `fh-agent doctor` |
 | `self-signed certificate in certificate chain` | the image is missing its CA store; not your network, not Proxmox |
 | inventory edits have no effect | `data/` was mounted as a file, not a directory |
 | your listing vanished from Flux Hub | agent or Coalition unreachable; FH hides it and restores it on its own |
@@ -928,7 +928,7 @@ store. It is not a middlebox on your network and not a Proxmox certificate probl
 | I changed a price | `env`, then re-import — **no re-sign** |
 | I added a Proxmox host | edit `HOSTS` in `config.env` → `sign` → **re-paste at `/onboard`** → `env` → re-import |
 | Ready to deploy the Coalition | `env` → import `env.json` into the Flux app (**enterprise**) |
-| Ready to start the agent | `mt-agent doctor`, then `docker compose up -d` |
+| Ready to start the agent | `fh-agent doctor`, then `docker compose up -d` |
 | Checkout is failing and nothing looks wrong | `doctor --check-hub --check-stripe` |
 | I changed `.env.operator` | `docker compose up -d --force-recreate` |
 | Someone handed me a manifest | `verify --in <file>` |

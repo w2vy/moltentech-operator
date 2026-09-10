@@ -5,7 +5,7 @@
  * ## Why this is in `protocol`
  *
  * The token is created in Step 0.1 of onboarding and, until now, first exercised in
- * Step 6 by `mt-agent doctor` — five steps and a Docker image later. An operator who
+ * Step 6 by `fh-agent doctor` — five steps and a Docker image later. An operator who
  * mistyped the secret, or scoped the token to a path (which cannot work: VM.Allocate is
  * checked on /vms or /pool, and the tooling passes neither), found out long after the
  * moment that produced it.
