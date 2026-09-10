@@ -404,6 +404,19 @@ export const PendingAuthItem = z.object({
   vmName: z.string().min(1),
   nodeName: z.string().min(1),
   rentalCode: z.string().nullable(),
+  /**
+   * WHICH shape of the action this is, when the action alone is ambiguous.
+   *
+   * `delete` has three meanings and the console badged all of them identically red: the end of
+   * a cancelled rental, a move's source teardown, and — since prudent-bouncing-knuth — a
+   * REJECT, where the VM is destroyed but the rental survives and the customer re-enters their
+   * configuration onto the same slot. An operator asked to sign a bare "delete" for that has
+   * been told the opposite of what is about to happen.
+   *
+   * Optional, so an older hub that does not send it still validates; the console falls back to
+   * badging on `action`.
+   */
+  kind: z.enum(["cancel_delete", "move_delete", "reprovision", "reject_delete"]).optional(),
 });
 export type PendingAuthItem = z.infer<typeof PendingAuthItem>;
 
