@@ -128,6 +128,46 @@ function flag(args: string[], name: string): string | undefined {
 }
 
 /**
+ * The directory a from-zero command works in.
+ *
+ * ⚠️ `--out` means two different things across this CLI: on `sign` and `env` it is an
+ * output FILE, and on `keygen`/`init` it was the only spelling of the directory. So an
+ * operator who learned `--dir` from `doctor` got it SILENTLY IGNORED by `keygen`, which
+ * then wrote a permanent identity key into whatever directory they happened to be
+ * standing in — the one file in the scaffold that cannot be regenerated. Both spellings
+ * are accepted here, and disagreeing spellings are refused rather than one winning.
+ */
+function dirFlag(args: string[]): string {
+  const dir = flag(args, "--dir");
+  const out = flag(args, "--out");
+  if (dir !== undefined && out !== undefined && dir !== out) {
+    die(`--dir ${dir} and --out ${out} disagree. Pass one: they name the same directory here.`);
+  }
+  return dir ?? out ?? ".";
+}
+
+/**
+ * Refuse a flag this command does not know.
+ *
+ * Applied to the from-zero commands only. Everywhere else an ignored flag costs a re-run;
+ * here it decides where your identity key lands, and the failure is silent — the command
+ * reports success, in the wrong directory. (Found on 2026-09-10 by passing `--dir` to
+ * `keygen`, which took it as a bare argument and wrote to the cwd.)
+ */
+function rejectUnknownFlags(cmd: string, args: string[], known: string[]): void {
+  const takesValue = new Set(known.filter((k) => !k.startsWith("--force") && k !== "--stdout"));
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i]!;
+    if (!a.startsWith("--")) continue;
+    const name = a.includes("=") ? a.slice(0, a.indexOf("=")) : a;
+    if (!known.includes(name)) {
+      die(`${cmd}: unknown option ${name}. Accepts: ${known.join(", ")}`);
+    }
+    if (!a.includes("=") && takesValue.has(name)) i++; // skip its value
+  }
+}
+
+/**
  * Fill `.env.operator`'s MANIFEST_PUBKEY with the key just generated. Returns what
  * happened so `keygen` can report it — including "no-file", which is the normal case
  * for an operator who runs keygen before init.
@@ -870,7 +910,8 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
       return 0;
     }
     case "keygen": {
-      const dir = flag(args, "--out") ?? ".";
+      rejectUnknownFlags("keygen", args, ["--dir", "--out", "--force"]);
+      const dir = dirFlag(args);
       const keyPath = join(dir, "manifest-key.pem");
       // Your signing key is a ONCE-EVER identity: MT pins its public half at first
       // ingest, so silently overwriting it orphans the operator with no error
@@ -909,7 +950,8 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
       // that flow, the rewritten runbook never mentions it, and BODY_TEMPLATE had
       // drifted (no ownerAddress). `sign --in <body.json>` still serves anyone with
       // a hand-built body.
-      const dir = flag(args, "--out") ?? ".";
+      rejectUnknownFlags("init", args, ["--dir", "--out", "--answers", "--force"]);
+      const dir = dirFlag(args);
       const answersPath = flag(args, "--answers");
       const force = args.includes("--force");
 

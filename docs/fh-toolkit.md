@@ -334,7 +334,7 @@ wrapper predates the guarded `-t` — re-paste it from the top of this document.
 ## `keygen`
 
 ```
-fh-toolkit keygen [--out <dir>] [--force]
+fh-toolkit keygen [--dir <dir>] [--force]
 ```
 
 Generates an ed25519 keypair. Writes `manifest-key.pem` (mode 0600 — **KEEP SECRET**;
@@ -352,15 +352,20 @@ silently repointing it is how a rotation loses the old key.
 
 | Option | Default | Meaning |
 |---|---|---|
-| `--out <dir>` | `.` | where to write the key and pubkey |
+| `--dir <dir>` | `.` | where to write the key and pubkey (`--out` is accepted as a synonym) |
 | `--force` | off | overwrite an existing key — rotation only |
+
+⚠️ **`--out` means a FILE on `sign` and `env`, and a DIRECTORY here.** `keygen` and `init`
+accept `--dir` for that reason, and both refuse an option they do not know — until
+2026-09-10 `keygen --dir somewhere` was taken as a bare argument and the key landed in the
+current directory, reported as a success.
 
 ---
 
 ## `init`
 
 ```
-fh-toolkit init [--out <dir>] [--answers <answers.json>] [--force]
+fh-toolkit init [--dir <dir>] [--answers <answers.json>] [--force]
 ```
 
 The installation interview. Roughly eight questions, then it writes and **signs** the
