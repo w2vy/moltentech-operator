@@ -241,8 +241,20 @@ export function handleAgentAuthorizations(cfg: CoalitionConfig, rawBody: Buffer,
 }
 
 // ── operator (browser) handlers ──
-/** Action → coloured pill (delete=red, reprovision=amber, move=cyan). */
-function actionBadge(action: string): string {
+/**
+ * Action → coloured pill (delete=red, reprovision=amber, move=cyan).
+ *
+ * 🔴 `delete` has three meanings and this badged all of them the same red. Two of them end a
+ * rental; the third — a REJECT — destroys the VM and KEEPS it, because the customer's
+ * configuration was wrong and they are about to enter it again on the same slot. An operator
+ * asked to sign a bare "delete" for that has been told the opposite of what happens.
+ *
+ * `kind` is optional on the wire, so a hub that does not send it falls back to the action.
+ */
+function actionBadge(action: string, kind?: string): string {
+  if (kind === "reject_delete") {
+    return `<span class="badge badge-reprovision" title="The VM is destroyed and the rental stays with your customer — they re-enter their node configuration onto this same slot.">reject config</span>`;
+  }
   const cls = action === "delete" ? "badge-delete" : action === "reprovision" ? "badge-reprovision" : "badge-move";
   return `<span class="badge ${cls}">${escapeHtmlAttribute(action)}</span>`;
 }
@@ -353,7 +365,7 @@ export function handleConsoleIndex(cfg: CoalitionConfig): ConsoleResult {
             : it.rentalCode
               ? `<code>${escapeHtmlAttribute(it.rentalCode)}</code>`
               : `<span class="muted">—</span>`;
-          return `<tr><td>${actionBadge(it.action)} <span class="mono">${vm}</span></td><td>${code}</td><td><a class="btn btn-primary" href="/console/sign?slotId=${encodeURIComponent(it.slotId)}">Review &amp; sign</a></td></tr>`;
+          return `<tr><td>${actionBadge(it.action, it.kind)} <span class="mono">${vm}</span></td><td>${code}</td><td><a class="btn btn-primary" href="/console/sign?slotId=${encodeURIComponent(it.slotId)}">Review &amp; sign</a></td></tr>`;
         })
         .join("")
     : `<tr><td colspan="3" class="muted">No actions awaiting your signature.</td></tr>`;
@@ -510,7 +522,7 @@ function verifyAndQueue(
   slotId: string,
   claimToken: string,
   signature: string
-): { ok: true; claim: OwnerAuthClaim } | { ok: false; status: number; msg: string } {
+): { ok: true; claim: OwnerAuthClaim; kind?: string } | { ok: false; status: number; msg: string } {
   const owner = ownerZelid(cfg);
   if (!owner) return { ok: false, status: 500, msg: "Console owner address not configured (set OWNER_ADDRESS)." };
   const claim = decodeClaim(claimToken);
@@ -527,9 +539,12 @@ function verifyAndQueue(
   if (!authParsed.success) return { ok: false, status: 400, msg: "Malformed authorization." };
 
   authorizations.push({ slotId, ownerAuth: authParsed.data });
+  // Read the kind BEFORE the delete: the confirmation page badges it, and by then the entry
+  // is gone. A bare "delete" there would tell the operator the opposite of what a reject does.
+  const kind = pending.get(slotId)?.kind;
   pending.delete(slotId);
   markAuthorized(claim.nonce); // let the sign page's poll report success
-  return { ok: true, claim };
+  return { ok: true, claim, kind };
 }
 
 /** GET /console/sign-status?claim=… — has this exact claim been queued yet? */
@@ -555,7 +570,7 @@ ${bodyHtml}<p style="margin-top:12px"><a href="/console">&larr; Back to console<
     200,
     "Authorized",
     `<div class="card done" style="display:block"><div class="big">✓</div><h1>Authorization queued</h1>
-<p class="muted">${actionBadge(r.claim.action)} <span class="mono">${escapeHtmlAttribute(`${r.claim.vmName}@${r.claim.nodeName}`)}</span> will be executed by your agent shortly.</p></div>`
+<p class="muted">${actionBadge(r.claim.action, r.kind)} <span class="mono">${escapeHtmlAttribute(`${r.claim.vmName}@${r.claim.nodeName}`)}</span> will be executed by your agent shortly.</p></div>`
   );
 }
 
