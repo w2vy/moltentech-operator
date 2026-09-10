@@ -156,7 +156,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AgentConfig {
       storageImages: env.PROXMOX_STORAGE_IMAGES ?? "local-lvm",
       storageIso: env.PROXMOX_STORAGE_ISO ?? "local",
       storageImport: env.PROXMOX_STORAGE_IMPORT ?? "local",
-      arcaneIso: env.ARCANE_ISO ?? "FluxLive.iso",
+      // No default. `FluxLive.iso` was one until 2026-09-10, and it names a file that has
+      // never existed on any mirror — published builds are dated
+      // (`FluxLive-1775071308.iso`, per https://images.runonflux.io/arcane/api/latest_release).
+      // A plausible wrong name fails preflight with "not on local" and reads like a
+      // storage problem; empty lets preflight say the one true thing, which is that
+      // nobody has set it.
+      arcaneIso: env.ARCANE_ISO ?? "",
       sshPubkey: env.OPERATOR_SSH_PUBKEY ?? "",
       consoleHash: env.CONSOLE_PASSWORD_HASH ?? "!",
     },

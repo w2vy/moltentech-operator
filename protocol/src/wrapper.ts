@@ -16,7 +16,7 @@
  * the `--update-wrapper` path it is the SHELL's job, because the CLI runs inside the
  * container and cannot see `~/.fh-toolkit.sh`.
  */
-import { AGENT_IMAGE } from "./scaffold";
+import { AGENT_IMAGE, AGENT_IMAGE_STAGING } from "./scaffold";
 import { BuildInfo } from "./build-info";
 
 /** The image this CLI ships as. */
@@ -29,7 +29,7 @@ export const TOOLKIT_IMAGE = "ghcr.io/w2vy/fh-toolkit:latest";
  * from a stale one from one predating the handshake entirely (`undefined`). That is the
  * whole point of the exercise — a stale wrapper used to be undetectable from either side.
  */
-export const WRAPPER_VERSION = 1;
+export const WRAPPER_VERSION = 2;
 
 /** Where `--update-wrapper` installs, unless the operator overrides it. */
 export const WRAPPER_RC = "${FH_TOOLKIT_RC:-$HOME/.fh-toolkit.sh}";
@@ -150,8 +150,24 @@ export function toolkitFunction(): string {
  * loop is not on — passed here, fails in prod. Instead it compares digests and REPORTS.
  */
 export function agentFunction(): string {
-  return `mt-agent() {
-  local img=${AGENT_IMAGE}
+  return `# Which agent image this directory runs.
+#
+# NOT \`${AGENT_IMAGE}\` unconditionally, which is what this wrapper assumed until
+# 2026-09-10: \`init\` pins the image that matches the hub you chose, so on a staging
+# onboarding compose runs \`${AGENT_IMAGE_STAGING}\` while every \`mt-agent\` subcommand
+# ran the PRODUCTION image — a doctor that passes against a build your loop is not on.
+# compose.yaml is the file compose itself reads, so it is the one to believe.
+mt-agent-image() {
+  local pinned=""
+  if [ -f compose.yaml ]; then
+    pinned="$(awk '$1 == "image:" { print $2; exit }' compose.yaml)"
+  fi
+  echo "\${pinned:-${AGENT_IMAGE}}"
+}
+
+mt-agent() {
+  local img
+  img="$(mt-agent-image)"
   # The bare case is answered BEFORE the directory guard: someone who types \`mt-agent\` in
   # the wrong directory needs to hear what the command is for, not where they are standing.
   if [ $# -eq 0 ]; then
@@ -176,7 +192,11 @@ export function agentFunction(): string {
     doctor)
       shift
       mt-agent-image-drift
-      docker run --rm --env-file .env.operator -v "$PWD/data:/data:ro" "$img" doctor "$@"
+      # \`npm run doctor\`, not a bare \`doctor\`: the image sets CMD but no ENTRYPOINT, so it
+      # inherits node's, and a bare subcommand is handed to \`node\` — which dies
+      # MODULE_NOT_FOUND /app/agent/doctor. \`doctor\` IS the image's CLI (index.ts reads
+      # argv[2]); it is only unreachable as a bare docker argument.
+      docker run --rm --env-file .env.operator -v "$PWD/data:/data:ro" "$img" npm run doctor "$@"
       ;;
     dry-run)
       shift
@@ -202,7 +222,8 @@ export function agentFunction(): string {
 #
 # Silent whenever it cannot tell. A guess here is worse than nothing.
 mt-agent-image-drift() {
-  local img=${AGENT_IMAGE}
+  local img
+  img="$(mt-agent-image)"
   local cid running_id local_id local_digest remote_digest
   # Match on the image NAME as recorded at creation, not \`--filter ancestor=\`: that filter
   # resolves the tag to its CURRENT id, so a container left behind by a pull — exactly the

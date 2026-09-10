@@ -2,7 +2,16 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { generateAll, renderAgentCompose, AGENT_IMAGE, GENERATED_PATHS, type Answers } from "./scaffold";
+import {
+  generateAll,
+  renderAgentCompose,
+  AGENT_IMAGE,
+  AGENT_IMAGE_STAGING,
+  STAGING_BASE_URL,
+  agentImageFor,
+  GENERATED_PATHS,
+  type Answers,
+} from "./scaffold";
 
 /**
  * `compose.yaml` for the agent.
@@ -71,6 +80,23 @@ test("the image is the one the doc says", () => {
   if (!existsSync(doc)) return;
   const pins = [...new Set(readFileSync(doc, "utf8").match(/w2vy\/mt-agent:[^\s`)]+/g) ?? [])];
   assert.deepEqual(pins, [AGENT_IMAGE], "docs/operator-onboarding.md pins a different agent image");
+});
+
+test("⭐ a staging onboarding pins the staging image, not the production one", () => {
+  // The defect this replaces: compose pinned `:latest` whatever `init` had just been told,
+  // so a staging onboarding ran the PRODUCTION agent against the staging hub. On
+  // 2026-09-10 that was a build with no operator-retirement refusal handling at all, and
+  // the resulting 403 loop read as a hub bug.
+  const staging = renderAgentCompose({ ...ANSWERS, mtBaseUrl: STAGING_BASE_URL });
+  assert.match(staging, new RegExp(`^ {4}image: ${AGENT_IMAGE_STAGING.replace("/", "\\/")}$`, "m"));
+  assert.doesNotMatch(staging, /mt-agent:latest/);
+
+  // A trailing slash is the same answer.
+  assert.equal(agentImageFor(`${STAGING_BASE_URL}/`), AGENT_IMAGE_STAGING);
+  // Anything that is not the staging hub is production — including a typo, which is the
+  // safe direction: you notice a prod image refusing a staging hub immediately.
+  assert.equal(agentImageFor("https://fluxhub.moltentech.us"), AGENT_IMAGE);
+  assert.equal(agentImageFor("https://staging.example.com"), AGENT_IMAGE);
 });
 
 test("⭐ the file says --force-recreate, because `restart` does not re-read env", () => {

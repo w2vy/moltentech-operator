@@ -47,6 +47,16 @@ function yamlStr(v: string | number): string {
 export function buildProvisionYaml(job: Job, cfg: AgentConfig, vmIdOverride?: number): string {
   const { slot, nodeConfig } = job;
   if (!nodeConfig) throw new Error(`Job ${job.jobId} has no nodeConfig (required to provision)`);
+  // Fail here, with the fix in the message, rather than emitting `iso_name: ""` and
+  // letting arcane-mage fail on empty boot media halfway through creating a VM.
+  if (!cfg.host.arcaneIso) {
+    throw new Error(
+      `Job ${job.jobId}: ARCANE_ISO is not set. Set it to the exact ISO filename on this ` +
+        "host (dated, e.g. FluxLive-1775071308.iso — see " +
+        "https://images.runonflux.io/arcane/api/latest_release), or declare inventory so " +
+        "ISO auto-refresh keeps it current."
+    );
+  }
   const h = cfg.host;
   const L: string[] = [];
   // D3-B: a rotated id, used only when MT sent no pin. `slot.vmId` still wins — that

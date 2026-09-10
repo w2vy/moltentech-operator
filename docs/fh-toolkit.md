@@ -111,7 +111,7 @@ fh-toolkit() {
   # FH_WRAPPER lets the container tell a current wrapper from a stale one; `doctor`
   # reports the mismatch. /etc/hosts read-only so hostnames resolve inside the container
   # as they do at your prompt — see operator-onboarding.md Step 0.5 for the loopback edge.
-  docker run --rm -i $tty -e FH_WRAPPER=1 -v "$PWD:/work" \
+  docker run --rm -i $tty -e FH_WRAPPER=2 -v "$PWD:/work" \
     -v /etc/hosts:/etc/hosts:ro -u "$(id -u):$(id -g)" "$img" "$@"
 }
 ```
@@ -136,7 +136,7 @@ Five things in that wrapper are load-bearing:
 - **`-v "$PWD:/work"`** — the container's `/work` *is* your operator directory. Every
   path default below (`.`) resolves there, which is why the commands take no arguments
   when you run them in the right place.
-- **`-e FH_WRAPPER=1`** — how the container tells a current wrapper from a stale one, or
+- **`-e FH_WRAPPER=2`** — how the container tells a current wrapper from a stale one, or
   from none at all. It exists because on 2026-09-06 the tool was renamed, published, and
   changed nothing for its only operator: his shell still defined `mt-manifest()` against
   an image name that no longer publishes, and *neither side could say so*. `fh-toolkit
@@ -205,8 +205,14 @@ or go direct, which is all the function does:
 
 ```sh
 docker run --rm --env-file .env.operator -v "$PWD/data:/data:ro" \
-  w2vy/mt-agent:latest doctor
+  w2vy/mt-agent:latest npm run doctor      # :staging if you onboarded against staging
 ```
+
+⚠️ **`npm run doctor`, not a bare `doctor`.** The image sets `CMD` but no `ENTRYPOINT`, so
+it inherits node's: a bare subcommand is handed to `node` and dies
+`MODULE_NOT_FOUND: /app/agent/doctor`. `doctor` is genuinely the image's CLI — it is only
+unreachable as a bare `docker run` argument. The `mt-agent` shell function does this for
+you, and picks the tag out of your `compose.yaml`.
 
 ⚠️ **Bare `mt-agent` is the one place a wrapper disagrees with the tool it wraps.** The
 image's own CLI reads `mt-agent [doctor]`, where no argument means *run the main loop in
@@ -328,7 +334,7 @@ wrapper predates the guarded `-t` — re-paste it from the top of this document.
 ## `keygen`
 
 ```
-fh-toolkit keygen [--out <dir>] [--force]
+fh-toolkit keygen [--dir <dir>] [--force]
 ```
 
 Generates an ed25519 keypair. Writes `manifest-key.pem` (mode 0600 — **KEEP SECRET**;
@@ -346,15 +352,20 @@ silently repointing it is how a rotation loses the old key.
 
 | Option | Default | Meaning |
 |---|---|---|
-| `--out <dir>` | `.` | where to write the key and pubkey |
+| `--dir <dir>` | `.` | where to write the key and pubkey (`--out` is accepted as a synonym) |
 | `--force` | off | overwrite an existing key — rotation only |
+
+⚠️ **`--out` means a FILE on `sign` and `env`, and a DIRECTORY here.** `keygen` and `init`
+accept `--dir` for that reason, and both refuse an option they do not know — until
+2026-09-10 `keygen --dir somewhere` was taken as a bare argument and the key landed in the
+current directory, reported as a success.
 
 ---
 
 ## `init`
 
 ```
-fh-toolkit init [--out <dir>] [--answers <answers.json>] [--force]
+fh-toolkit init [--dir <dir>] [--answers <answers.json>] [--force]
 ```
 
 The installation interview. Roughly eight questions, then it writes and **signs** the
@@ -766,8 +777,14 @@ before the first provision rather than after a wasted benchmark cycle.
 
 ```sh
 docker run --rm --env-file .env.operator -v "$PWD/data:/data:ro" \
-  w2vy/mt-agent:latest doctor
+  w2vy/mt-agent:latest npm run doctor      # :staging if you onboarded against staging
 ```
+
+⚠️ **`npm run doctor`, not a bare `doctor`.** The image sets `CMD` but no `ENTRYPOINT`, so
+it inherits node's: a bare subcommand is handed to `node` and dies
+`MODULE_NOT_FOUND: /app/agent/doctor`. `doctor` is genuinely the image's CLI — it is only
+unreachable as a bare `docker run` argument. The `mt-agent` shell function does this for
+you, and picks the tag out of your `compose.yaml`.
 
 It checks that Proxmox is reachable and the token accepted; that the CA trust store is
 present; per declared host, that `storageImages` exists **and is not rotational** and that

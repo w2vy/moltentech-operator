@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, writeFileSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -224,4 +224,89 @@ test("the closing steps no longer tell you to run keygen — you just did", () =
   assert.doesNotMatch(stdout, /1\. fh-toolkit keygen/);
   assert.match(stdout, /MANIFEST_KEY {3}filled/);
   assert.match(stdout, /1\. open .*\/onboard/);
+});
+
+/**
+ * ⭐ Piped answers are refused, not half-consumed.
+ *
+ * Reproduced on the 2026-09-10 cold run, through a pipe AND through a real pty: `init`
+ * printed its first question, took the first answer, and exited **0** having written
+ * nothing at all. Node's readline resolves the first `question()`, then stdin hits EOF
+ * and every later promise simply never settles — no handler, no error, no files, and a
+ * success exit code. A wizard that reports success and produces nothing is the worst
+ * shape this failure could take, so the guard is at the prompt, not in the docs.
+ */
+test("⭐ `init` refuses a non-terminal stdin instead of exiting 0 with nothing written", () => {
+  const dir = mkdtempSync(join(tmpdir(), "fh-init-stdin-"));
+  try {
+    // `init` needs the signing key before it asks anything, so the refusal under test is
+    // the one at the prompts rather than the missing-key guard in front of them.
+    // Both run FROM the directory, the way an operator does — the mount is the cwd.
+    execFileSync("npx", ["tsx", CLI, "keygen"], { encoding: "utf8", cwd: dir });
+    let status = 0;
+    let stderr = "";
+    try {
+      execFileSync("npx", ["tsx", CLI, "init"], {
+        input: "answer-one\nanswer-two\nanswer-three\n",
+        encoding: "utf8",
+        cwd: dir,
+        env: { ...process.env, FH_WRAPPER: "none" },
+      });
+    } catch (e) {
+      const err = e as { status?: number; stderr?: string };
+      status = err.status ?? 0;
+      stderr = err.stderr ?? "";
+    }
+    assert.notEqual(status, 0, "a refusal has to be visible to a script");
+    assert.match(stderr, /stdin is not a terminal/);
+    // The message must carry the way out, or the operator is stuck where the tool is.
+    assert.match(stderr, /--answers/);
+    assert.deepEqual(
+      readdirSync(dir).filter((f) => !f.startsWith("manifest-")).sort(),
+      [],
+      "nothing may be written on the refused path"
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+/**
+ * ⭐ `keygen` writes where you told it, or says it does not understand you.
+ *
+ * `--out` names a FILE on `sign` and `env` and a DIRECTORY on `keygen`/`init`, so an
+ * operator who learned `--dir` from `doctor` used it here — and it was taken as a bare
+ * argument and ignored. The key, the one file in the scaffold that cannot be regenerated,
+ * landed in whatever directory they were standing in, and the command reported success.
+ */
+test("⭐ `keygen --dir` writes there, and an unknown option is refused", () => {
+  const dir = mkdtempSync(join(tmpdir(), "fh-keygen-dir-"));
+  const cwd = mkdtempSync(join(tmpdir(), "fh-keygen-cwd-"));
+  try {
+    execFileSync("npx", ["tsx", CLI, "keygen", "--dir", dir], { encoding: "utf8", cwd });
+    assert.deepEqual(readdirSync(dir).sort(), ["manifest-key.pem", "manifest-pubkey.txt"]);
+    assert.deepEqual(readdirSync(cwd), [], "nothing may be written to the cwd");
+
+    // --out still works: it is what the docs and CI have always passed.
+    const alias = mkdtempSync(join(tmpdir(), "fh-keygen-out-"));
+    execFileSync("npx", ["tsx", CLI, "keygen", "--out", alias], { encoding: "utf8", cwd });
+    assert.ok(readdirSync(alias).includes("manifest-key.pem"));
+    rmSync(alias, { recursive: true, force: true });
+
+    // Two spellings that disagree are refused rather than one quietly winning.
+    assert.throws(
+      () => execFileSync("npx", ["tsx", CLI, "keygen", "--dir", dir, "--out", cwd], { encoding: "utf8", cwd }),
+      (e: { stderr?: string }) => /disagree/.test(String(e.stderr))
+    );
+
+    // And a flag it does not know stops it, instead of being read as a directory.
+    assert.throws(
+      () => execFileSync("npx", ["tsx", CLI, "keygen", "--outdir", cwd], { encoding: "utf8", cwd }),
+      (e: { stderr?: string }) => /unknown option --outdir/.test(String(e.stderr))
+    );
+    assert.deepEqual(readdirSync(cwd), [], "a refused run writes nothing");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(cwd, { recursive: true, force: true });
+  }
 });

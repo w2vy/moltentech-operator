@@ -948,8 +948,14 @@ Before any VM is created, run the credentialed checks — read-only, creates not
 
 ```sh
 docker run --rm --env-file .env.operator -v "$PWD/data:/data:ro" \
-  w2vy/mt-agent:latest doctor
+  w2vy/mt-agent:latest npm run doctor      # :staging if you onboarded against staging
 ```
+
+⚠️ **`npm run doctor`, not a bare `doctor`.** The image sets `CMD` but no `ENTRYPOINT`, so
+it inherits node's: a bare subcommand is handed to `node` and dies
+`MODULE_NOT_FOUND: /app/agent/doctor`. `doctor` is genuinely the image's CLI — it is only
+unreachable as a bare `docker run` argument. The `mt-agent` shell function does this for
+you, and picks the tag out of your `compose.yaml`.
 
 It exits non-zero if anything fails, so it works as a gate. It checks that Proxmox is
 reachable and your token is accepted, that the CA trust store is present, that each
