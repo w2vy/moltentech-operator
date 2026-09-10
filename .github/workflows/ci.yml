@@ -30,6 +30,42 @@ jobs:
             detect --source /repo --config /repo/.gitleaks.toml \
             --no-banner --redact --verbose
 
+  agent-version:
+    name: agent version bumped
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    # `publish-fh-agent.yml` tags every build with agent/package.json's version. Without
+    # this, a merge that changes the image but not the version REPOINTS an existing tag:
+    # on 2026-09-10 `:0.10.0` came to name two different builds within the hour, which
+    # makes "which build is that operator running?" unanswerable from the tag alone.
+    # Enforced HERE rather than in the publish workflow, because after the merge the only
+    # remedies are a second commit or a moved tag — and one of those has already happened.
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Require a version bump when the image changes
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          # Only the paths that go INTO the image. A docs-only PR publishes nothing.
+          changed="$(git diff --name-only "$BASE" "$HEAD" -- agent protocol arcane-mage)"
+          if [ -z "$changed" ]; then
+            echo "no image sources touched — no bump needed"
+            exit 0
+          fi
+          before="$(git show "$BASE:agent/package.json" | node -p "JSON.parse(require('fs').readFileSync(0,'utf8')).version")"
+          after="$(node -p "require('./agent/package.json').version")"
+          echo "agent version: $before -> $after"
+          if [ "$before" = "$after" ]; then
+            echo "::error file=agent/package.json::This PR changes the agent image but leaves version at $after. Every publish gets its own version, or the tag stops naming one build. Bump agent/package.json."
+            echo "changed:"; echo "$changed" | sed 's/^/  /'
+            exit 1
+          fi
+
   package:
     name: ${{ matrix.package }}
     runs-on: ubuntu-latest
