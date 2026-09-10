@@ -382,8 +382,7 @@ payment method at all. Stripe is what lets strangers buy from you.
   you are selling — your Stripe keys.
 - So an empty value in the generated `secrets.env` means **another system has to issue
   it**, not that a question was skipped. On a self-hoster's first run exactly one is
-  empty: `COALITION_SIGNING_KEY`, minted by `/onboard`. (It was three until Phase E,
-  2026-09-07, when the `AGENT_KEY`/`COALITION_KEY` bearers were removed everywhere.)
+  empty: `COALITION_SIGNING_KEY`, minted by `/onboard`.
   Each comment stays on its own line, because a comment after `=` becomes part of the
   value — which is why the file is generated rather than described.
 
@@ -414,8 +413,8 @@ network.
 
 Empty values in a fresh `secrets.env` are reported as **not yet filled**, naming the
 step that issues each one — that is expected on first run, not an error. After `init`
-there should be exactly three of them (five if you are selling and have not created the
-Stripe endpoint yet); anything else is worth looking at.
+there should be exactly one (three if you are selling and have not created the Stripe
+endpoint yet); anything else is worth looking at.
 
 Three opt-in flags cross the file boundary deliberately, because the costliest failures
 are invisible to any amount of file comparison. All three are read-only:
@@ -591,22 +590,17 @@ Open **`{MT_BASE_URL}/onboard`** in a browser on a machine with your wallet. You
 2. **Sign with your wallet.** SSP signs in-browser; "Sign with Zelcore" opens a deep
    link and posts the signature back automatically. The page holds your manifest the
    whole time — FH never stores an unverified manifest server-side.
-3. **You are handed one key, shown once.** Copy it immediately (the page's copy button
-   is still labelled "Copy all three (`secrets.env`)" — it copies the one key below):
+3. **You are handed one key, shown once.** Copy it immediately:
 
    | Key | Direction | Where it goes |
    |---|---|---|
    | `COALITION_SIGNING_KEY` | signs your Coalition's outbound reports to FH | Coalition env (Step 4) — **REQUIRED**, it will not start without it |
 
-   (`AGENT_KEY` and `COALITION_KEY` were issued here until Phase E, 2026-09-07. Both are
-   gone: your agent signs with `MANIFEST_KEY`, and Flux Hub signs its calls to you.)
-
-⚠️ **`COALITION_SIGNING_KEY` has no consumer today.** It is issued ahead of the Phase D
-verifier so nobody onboarded in the meantime has to be re-opened. FH keeps only the
-public half, which means **the copy you were just shown is the only one that exists** —
-if you lose it, the only recovery is an admin key re-issue that rotates all three, and
-that means a fresh `env.json` import plus an agent restart. Put it somewhere durable
-alongside `manifest-key.pem` and forget about it until Phase D ships.
+⚠️ **`COALITION_SIGNING_KEY` is required** — your Coalition refuses to start without it —
+and FH keeps only the public half, which means **the copy you were just shown is the only
+one that exists**. If you lose it, the only recovery is an admin key re-issue, and that
+means a fresh `env.json` import plus a Coalition redeploy. Put it somewhere durable
+alongside `manifest-key.pem`.
 
 Your provider now exists at FH in status `pending`. Step 7 activates it.
 

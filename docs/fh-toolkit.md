@@ -369,7 +369,7 @@ refuses to run rather than writing files with three holes in them.
 | File | Mode | What it is |
 |---|---|---|
 | `config.env` | 0600 | non-secret configuration; the source the manifest is rendered from |
-| `secrets.env` | 0600 | secret skeleton — `/onboard` fills in the three issued keys |
+| `secrets.env` | 0600 | secret skeleton — `/onboard` fills in `COALITION_SIGNING_KEY` |
 | `.env.operator` | 0600 | the agent's environment (Proxmox creds land here) |
 | `data/inventory.json` | **0644** | your declared hosts and slots — published content, and the only file read from inside the container |
 | `flux-app-spec.json` | 0600 | the Flux app definition for the Coalition |
@@ -504,7 +504,7 @@ when you create the endpoint against your Coalition URL, which is a real wait, a
 `doctor` keeps naming it until you fill it in.
 
 ⚠️ **It edits `config.env` and `secrets.env`. Nothing else.** Not `manifest.json`, not
-`SESSION_SECRET`, not the three `/onboard`-issued keys, not `data/inventory.json`. That
+`SESSION_SECRET`, not the `/onboard`-issued key, not `data/inventory.json`. That
 is the whole reason it exists: `init --force` is the other way to change these two fields,
 and it rewrites all of the above. Previous versions are kept as `config.env.bak` and
 `secrets.env.bak`, mode 0600.
@@ -879,7 +879,7 @@ configuration. Read it before anything else:
 | `PROXMOX_STORAGE_IMAGES` | `local-lvm` | ⚠️ the default is frequently the spinning disk — see `--check-proxmox` |
 | `PROXMOX_STORAGE_ISO` | `local` | must be readable by every host |
 | `PROXMOX_STORAGE_IMPORT` | `local` | |
-| `ARCANE_ISO` | `FluxLive.iso` | |
+| `ARCANE_ISO` | `FluxLive.iso` | ⚠️ the default matches **no real file** — published builds are dated, e.g. `FluxLive-1775071308.iso`. Set the exact filename in `PROXMOX_STORAGE_ISO`, or declare inventory and let ISO auto-refresh fill it in. `doctor --check-proxmox` FAILs while it is wrong |
 | `OPERATOR_SSH_PUBKEY` | `""` | |
 | `CONSOLE_PASSWORD_HASH` | `!` | |
 | `AGENT_INVENTORY_PATH` | — | normally `/data/inventory.json`; `AGENT_INVENTORY_JSON` is the inline alternative |
@@ -905,7 +905,7 @@ store. It is not a middlebox on your network and not a Proxmox certificate probl
 | Situation | Run |
 |---|---|
 | First time, from nothing | `keygen` → `init` → paste `manifest.json` at `/onboard` |
-| `/onboard` gave me three keys | put them in `secrets.env`, then `doctor` |
+| `/onboard` gave me a key | put it in `secrets.env`, then `doctor` |
 | Everything is filled in — is it right? | `doctor`, then `doctor --check-proxmox --check-stripe` |
 | I edited `config.env` | `sign`, then `env`, then re-import to Flux |
 | I changed a price | `env`, then re-import — **no re-sign** |

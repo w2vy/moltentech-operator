@@ -44,7 +44,7 @@ touching Proxmox — useful to validate connectivity/auth against Flux Hub.
 | `AGENT_INVENTORY_PATH` / `AGENT_INVENTORY_JSON` | to declare hardware | the hosts + slots you declare to FH (path is re-read each heartbeat, so edits apply without a restart). FH materializes ProxmoxHost/Slot rows from this — it is the source of truth for what hardware exists, and FH rejects any host not in your owner-signed manifest. |
 | `PROXMOX_URL` / `PROXMOX_TOKEN_ID` / `PROXMOX_TOKEN_SECRET` | for real provisioning | local only; never sent to FH |
 | `PROXMOX_NETWORK` / `PROXMOX_STORAGE_IMAGES` / `PROXMOX_STORAGE_ISO` / `PROXMOX_STORAGE_IMPORT` | optional | per-host defaults stamped into the provision YAML (`vmbr0` / `local-lvm` / `local` / `local`) |
-| `ARCANE_ISO` | optional | ArcaneOS ISO filename to stage (default `FluxLive.iso`) |
+| `ARCANE_ISO` | optional | exact ArcaneOS ISO filename to stage, e.g. `FluxLive-1775071308.iso`. The `FluxLive.iso` default matches no published build — set it, or declare inventory and let ISO auto-refresh set it |
 | `OPERATOR_SSH_PUBKEY` / `CONSOLE_PASSWORD_HASH` | optional | stamped into provisioned nodes |
 | `AGENT_LISTING_JSON` | optional | price + slots offered per tier (heartbeat). This is SELLING intent — how much hardware you HAVE comes from the inventory above. |
 | `AGENT_POLL_INTERVAL_MS` / `AGENT_LISTING_INTERVAL_MS` / `AGENT_HEALTH_INTERVAL_MS` / `AGENT_REFRESH_ISO_INTERVAL_MS` | optional | default 10s / 60s / 60s / 6h |
