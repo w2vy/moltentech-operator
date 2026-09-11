@@ -292,10 +292,14 @@ async function withPrompts<T>(
   rl.on("close", onClose);
   const ask: Ask = async (q, def) => {
     if (closed) die("stdin closed before the questions were finished — nothing was written.");
+    // The `close` half of the race loses on every answered question, and a `once` that
+    // never fires is never removed — eleven questions in, Node printed
+    // MaxListenersExceededWarning into the middle of a live `init` (2026-09-10). Detach it.
+    let onClosed: (() => void) | undefined;
     const answer = await Promise.race([
       rl.question(def ? `${q} [${def}]: ` : `${q}: `),
-      new Promise<null>((resolve) => rl.once("close", () => resolve(null))),
-    ]);
+      new Promise<null>((resolve) => rl.once("close", (onClosed = () => resolve(null)))),
+    ]).finally(() => onClosed && rl.off("close", onClosed));
     if (answer === null) die("stdin closed before the questions were finished — nothing was written.");
     const a = answer.trim();
     return a || def || "";
