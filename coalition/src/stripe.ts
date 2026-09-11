@@ -42,7 +42,7 @@ export async function ensurePrice(
   const found = await stripe.prices.search({ query: `lookup_key:'${lookupKey}'` });
   if (found.data[0]) return found.data[0].id;
 
-  const product = await stripe.products.create({ name: `MoltenTech ${tier.toUpperCase()} (${slug})` });
+  const product = await stripe.products.create({ name: `Flux Hub ${tier.toUpperCase()} (${slug})` });
   const price = await stripe.prices.create({
     product: product.id,
     unit_amount: priceCents,

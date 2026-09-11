@@ -129,7 +129,7 @@ export function buildSignLauncherHtml(opts: {
   intro?: string;
 }): string {
   const safeZelcoreLink = escapeHtmlAttribute(opts.zelcoreLink);
-  const title = escapeHtmlAttribute(opts.title ?? "MoltenTech — Owner Authorization");
+  const title = escapeHtmlAttribute(opts.title ?? "Flux Hub — Owner Authorization");
   const intro = escapeHtmlAttribute(
     opts.intro ??
       "Review the action below and sign it with your Flux owner wallet."
@@ -147,7 +147,7 @@ export function buildSignLauncherHtml(opts: {
   </head>
   <body>
     <div class="wrap">
-    <header class="mt"><span class="mark">MoltenTech</span><span class="slug">owner authorization</span></header>
+    <header class="mt"><span class="mark">Flux Hub</span><span class="slug">owner authorization</span></header>
     <h1>${title}</h1>
     <p class="muted">${intro}</p>
 

@@ -82,9 +82,9 @@ export function classifyEndpoints(
       severity: "error",
       file: "secrets.env",
       message:
-        "STRIPE_SECRET_KEY opens an account that has MoltenTech's own payment webhook " +
-        "registered in it — this is MT's platform account, not yours. Sales you mint " +
-        "land in MT's books. Create a restricted key in YOUR OWN Stripe account.",
+        "STRIPE_SECRET_KEY opens an account that has Flux Hub's own payment webhook " +
+        "registered in it — this is the platform's account, not yours. Sales you mint " +
+        "land in its books. Create a restricted key in YOUR OWN Stripe account.",
     });
   }
 
