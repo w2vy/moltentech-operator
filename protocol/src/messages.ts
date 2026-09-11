@@ -215,7 +215,7 @@ export type OwnerAuth = z.infer<typeof OwnerAuth>;
  */
 export function ownerAuthMessage(c: OwnerAuthClaim): string {
   return [
-    "MoltenTech owner authorization",
+    "Flux Hub owner authorization",
     `action: ${c.action}`,
     `provider: ${c.providerSlug}`,
     `vm: ${c.vmName}@${c.nodeName}`,

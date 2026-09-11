@@ -30,7 +30,7 @@ test("🔴 the manifest owner-authorization message keeps its exact wire text", 
     publishedAt: "2026-08-22T00:00:00.000Z",
     signature: "SIG",
   } as never);
-  assert.equal(message.split("\n")[0], "MoltenTech provider manifest authorization");
+  assert.equal(message.split("\n")[0], "Flux Hub provider manifest authorization");
 });
 
 test("🔴 the owner-auth job message keeps its exact wire text", () => {
@@ -42,5 +42,5 @@ test("🔴 the owner-auth job message keeps its exact wire text", () => {
     nonce: "n",
   } as never).split("\n")[0];
   // Pinned as whatever it is today — the point is that it cannot CHANGE, not what it says.
-  assert.equal(first, "MoltenTech owner authorization");
+  assert.equal(first, "Flux Hub owner authorization");
 });

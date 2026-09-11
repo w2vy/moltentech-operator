@@ -100,7 +100,7 @@ function getChallenge(id: string): Challenge | null {
 }
 /** The human-readable console-login message the owner signs (bound to a fresh nonce). */
 function loginMessage(slug: string, nonce: string, issuedAt: string): string {
-  return ["MoltenTech operator console login", `provider: ${slug}`, `nonce: ${nonce}`, `issued: ${issuedAt}`].join("\n");
+  return ["Flux Hub operator console login", `provider: ${slug}`, `nonce: ${nonce}`, `issued: ${issuedAt}`].join("\n");
 }
 
 // ── manifest-derived values (pubkey for agent auth; coalitionUrl for the Zelcore callback base) ──
@@ -298,7 +298,7 @@ function maturingNodesSection(): string {
     .join("");
   return `
 <h1 style="margin-top:26px">Nodes maturing (collateral / benchmark guard)</h1>
-<p class="muted">MoltenTech withholds the customer's "Start your node" prompt until benchmarks pass and the collateral clears ${COLLATERAL_MIN_CONFIRMATIONS} confirmations — Starting earlier is rejected by Flux with a DoS cooldown. This is informational only.</p>
+<p class="muted">Flux Hub withholds the customer's "Start your node" prompt until benchmarks pass and the collateral clears ${COLLATERAL_MIN_CONFIRMATIONS} confirmations — Starting earlier is rejected by Flux with a DoS cooldown. This is informational only.</p>
 <div class="card" style="padding:0;overflow:hidden">
 <table><thead><tr><th>Node</th><th>Benchmark</th><th>Collateral</th><th>Started</th></tr></thead><tbody>${rows}</tbody></table>
 </div>`;
@@ -391,11 +391,11 @@ Actions below stay available either way — each one is authorized by its own wa
     200,
     `<!doctype html><html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
 <meta http-equiv="refresh" content="15"/>
-<title>MoltenTech Operator Console — ${slug}</title>
+<title>Flux Hub Operator Console — ${slug}</title>
 ${CONSOLE_HEAD_ICONS}
 <style>${CONSOLE_THEME_CSS}</style></head><body>
 <div class="wrap">
-<header class="mt"><span class="mark">MoltenTech</span><span class="slug">operator console · ${slug}</span></header>
+<header class="mt"><span class="mark">Flux Hub</span><span class="slug">operator console · ${slug}</span></header>
 <h1>Actions awaiting your signature${count}</h1>
 <p class="muted">Each privileged action is authorized by signing it in your Flux owner wallet.</p>
 <div class="card" style="padding:0;overflow:hidden"><div style="overflow-x:auto">
@@ -562,7 +562,7 @@ export function handleConsoleAuthorize(cfg: CoalitionConfig, form: URLSearchPara
       status,
       `<!doctype html><html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>${title}</title>${CONSOLE_HEAD_ICONS}<style>${CONSOLE_THEME_CSS}</style></head><body><div class="wrap">
-<header class="mt"><span class="mark">MoltenTech</span><span class="slug">operator console</span></header>
+<header class="mt"><span class="mark">Flux Hub</span><span class="slug">operator console</span></header>
 ${bodyHtml}<p style="margin-top:12px"><a href="/console">&larr; Back to console</a></p></div></body></html>`
     );
   if (!r.ok) return page(r.status, "Not authorized", `<div class="card"><h1>Could not queue</h1><p class="muted">${escapeHtmlAttribute(r.msg)}</p></div>`);

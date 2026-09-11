@@ -140,7 +140,7 @@ export type SignedProviderManifest = z.infer<typeof SignedProviderManifest>;
 export function manifestOwnerMessage(m: ProviderManifest): string {
   if (!m.ownerAddress) throw new Error("manifest has no ownerAddress to authorize");
   return [
-    "MoltenTech provider manifest authorization",
+    "Flux Hub provider manifest authorization",
     `provider: ${m.provider.slug}`,
     `pubkey: ${m.pubkey}`,
     `owner: ${m.ownerAddress}`,
