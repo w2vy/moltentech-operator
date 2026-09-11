@@ -122,7 +122,7 @@ Next, in order:
   5. deploy Flux app "coalition-romeo-sierra" as an ENTERPRISE app, import env.json
      → https://coalition-romeo-sierra.app.runonflux.io
      ⚠️  enterprise, not standard: a standard Flux app's environment is
-         WORLD-READABLE, and yours holds your Stripe key.
+         WORLD-READABLE, and yours holds your signing keys.
 
 fh-toolkit> exit
 bye
@@ -137,9 +137,8 @@ A few lines are worth stopping on.
   container, so a hostname has to resolve *there*, and on most machines it will not. A
   failed probe re-asks rather than warning and carrying on.
 - **`Stripe — skipped` is not a question you missed.** A Supporter sells nothing, so the run
-  never asks, and `env.json` comes out with 11 variables instead of 12. (Step 5's warning
-  about "your Stripe key" is the same text an Operator sees — a Supporter's `env.json`
-  holds no Stripe key, but it still holds every other secret, so *enterprise* still applies.)
+  never asks, and `env.json` comes out with 11 variables instead of 12. It still holds
+  your signing keys, so *enterprise* still applies — step 5 says so.
 - **`/onboard` issues one key**, `COALITION_SIGNING_KEY`, and you paste it into
   `secrets.env` before `fh-toolkit doctor`. Your agent signs with `MANIFEST_KEY`, which
   `init` already filled in.

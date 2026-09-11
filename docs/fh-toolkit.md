@@ -719,7 +719,7 @@ it builds without them and says so — but if you set them anyway they are passe
 rather than dropped, since dropping a key you deliberately set is its own silent failure.
 
 ⚠️ Deploy the Flux app as an **enterprise** app. A standard Flux app's environment is
-**world-readable**, and this blob holds your Stripe key.
+**world-readable**, and this blob holds your signing keys (and, for an Operator, your Stripe key).
 
 ---
 

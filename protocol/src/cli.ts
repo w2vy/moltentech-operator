@@ -1152,7 +1152,11 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
       console.log(`  5. deploy Flux app "${answers.fluxAppName}" as an ENTERPRISE app, import env.json`);
       console.log(`     → ${coalitionUrlFor(answers.fluxAppName)}`);
       console.log("     ⚠️  enterprise, not standard: a standard Flux app's environment is");
-      console.log("         WORLD-READABLE, and yours holds your Stripe key.");
+      console.log(
+        answers.selling
+          ? "         WORLD-READABLE, and yours holds your Stripe key."
+          : "         WORLD-READABLE, and yours holds your signing keys."
+      );
       return 0;
     }
     case "doctor": {
