@@ -241,6 +241,13 @@ not configuration — nothing reads it.
 user@host:~/fh-agent$
 ```
 
+> ⚠️ Recorded on build `341c44f`, which wrote only `config.env` and `secrets.env`. The
+> current build also rewrites the `AGENT_LISTING_JSON` line of `.env.operator` — shown as a
+> third `.env.operator …` line in the diff — and adds a step telling you to recreate the
+> agent (`docker compose up -d --force-recreate`). It does that because this very run
+> finished with the agent still asserting `[]` and no card on `/providers` until that line
+> was edited by hand; `doctor` now reports that state as `TIER_PRICED_BUT_NOT_LISTED`.
+
 Two things the output is careful about. **It touched two files and named every change**
 before asking — `manifest.json`, your issued keys, `SESSION_SECRET` and
 `data/inventory.json` are all untouched, which is the reason this command exists instead
