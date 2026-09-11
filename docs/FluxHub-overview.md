@@ -283,7 +283,7 @@ before it will build this, so a placeholder or tampered manifest is refused rath
 deployed.
 
 ⚠️ **Deploy the Flux app as an ENTERPRISE app.** A standard Flux app's environment is
-**world-readable**, and this blob holds your Stripe key.
+**world-readable**, and this blob holds your signing keys (and, for an Operator, your Stripe key).
 
 ⚠️ **A secret-only change can leave the app spec byte-identical**, in which case the
 re-import is a silent no-op. Verify downstream — `/health`, a real checkout, or
