@@ -622,6 +622,9 @@ you need no Stripe account, no API key and no webhook. If you later upgrade to O
 **come back here** — the upgrade instructions under *Ongoing operations* send you to
 `fh-toolkit level --set operator`, which asks for a Stripe key it assumes you already have.
 
+📷 **Click-by-click with screenshots:** [`stripe-setup.md`](stripe-setup.md) walks the
+whole of this step in the Stripe dashboard. The summary below is the same procedure.
+
 1. Create a **restricted API key** (Stripe Dashboard → Developers → API keys →
    **Create restricted key**). This must be a *restricted* key (`rk_…`), **not** a
    standard secret key (`sk_…`) — a standard key can move money and read your whole
