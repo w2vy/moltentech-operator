@@ -33,8 +33,7 @@ title rather than filling in the container form.
 
 Open `flux-app-spec.json` from your agent directory and paste its contents into the
 Import box, then click **Import**. Review it first: the `description` lines are what
-FluxOS shows for the app, `repotag` must be `w2vy/coalition:latest`, and
-`environmentParameters` is `[]` — the environment is added in step 7, not here.
+FluxOS shows for the app and `repotag` must be `w2vy/coalition:latest`.
 
 ![Import compose / spec dialog with the spec pasted](images/flux-app/02-ImportSpec.png)
 
@@ -53,11 +52,11 @@ until you redeploy. Longer terms are also discounted.
 ## 4. Open the component
 
 The environment belongs to the component, not the app. Switch to the **Components**
-tab and click the **coalition** component to open it.
+tab — there is one component, **coalition**, and it is already open.
 
 ![Component list with the coalition component](images/flux-app/04-UpdateComponent.png)
 
-## 5. Scroll to Environment
+## 5. Environment Variables
 
 Inside the component scroll down to **Environment** and click **Environment Variables**.
 
