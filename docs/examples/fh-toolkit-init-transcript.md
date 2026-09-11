@@ -151,7 +151,8 @@ Nothing about the hardware stock-take, the manifest key, or the Flux app changes
 
 These are the only places the transcript above differs — the same run, answered as an
 Operator. It is also, line for line, what `fh-toolkit level --set operator` asks when you
-upgrade later: the two share one implementation, so they cannot drift apart.
+upgrade later: the two share one implementation, so they cannot drift apart — the
+[upgrade transcript](#upgrading-later-fh-toolkit-level---set-operator) below shows it.
 
 ```console
   choose 1 or 2 [2]: 2
@@ -190,3 +191,62 @@ is offered — the answer was always "all of them" — and you hold some back af
 editing `AGENT_LISTING_JSON` in `config.env`. On an Operator's first run `secrets.env`
 has three empty values rather than one: the key `/onboard` mints, plus the Stripe pair
 if the webhook endpoint does not exist yet.
+
+## Upgrading later: `fh-toolkit level --set operator`
+
+The same Supporter, some weeks on, deciding to sell. Captured 2026-09-10 on the same
+build. `level` with no flags first says where you stand; `--set operator` asks exactly the
+Operator questions from the block above and then shows the diff before writing anything.
+
+```console
+user@host:~/fh-agent$ fh-toolkit level
+PROVIDER_LEVEL  supporter   (config.env)
+signed manifest supporter   (manifest.json — in sync)
+tiers for sale  none
+Stripe          not configured — a Supporter needs no Stripe account
+
+To sell hardware:  fh-toolkit level --set operator
+user@host:~/fh-agent$ fh-toolkit level --set operator
+Upgrading to Operator — the same questions `init` asks a seller.
+
+Which tiers will you offer? (cumulus/nimbus/stratus, comma-separated) [cumulus]:
+  monthly price for cumulus in DOLLARS (floor $7.00) [7.00]: 7.00
+
+Stripe — you are merchant of record; Flux Hub never holds these.
+  STRIPE_SECRET_KEY (rk_… / sk_…), blank to fill in later: rk_test_51UBY6……………………………………………………………………KD3b
+  STRIPE_WEBHOOK_SECRET (whsec_…), blank if the endpoint does not exist yet: whsec_Wh2h……………………c6u6
+level: supporter → operator
+
+  config.env    PROVIDER_LEVEL: supporter → operator
+  config.env    TIER_PRICES_JSON: {} → {"cumulus":700}
+  secrets.env   STRIPE_SECRET_KEY: set
+  secrets.env   STRIPE_WEBHOOK_SECRET: set
+
+Apply these changes? [y/N]: y
+
+Wrote config.env, secrets.env (previous versions kept as *.bak)
+
+PROVIDER_LEVEL is in your SIGNED manifest, so Flux Hub needs a re-ingest:
+  1. fh-toolkit sign
+  2. paste manifest.json at https://fluxhub.moltentech.us/onboard and sign with your owner wallet
+     — the hub re-ingests there; nothing this command wrote reaches it until you do
+
+Stripe (you are merchant of record; Flux Hub never holds these):
+  3. register a webhook endpoint at <your coalition>/webhook, then:
+     fh-toolkit doctor --check-stripe    ← catches a key from the wrong account
+  4. fh-toolkit env, re-import env.json into the Flux app, redeploy
+
+Note: README.txt still describes your old level. It is generated documentation,
+not configuration — nothing reads it.
+user@host:~/fh-agent$
+```
+
+Two things the output is careful about. **It touched two files and named every change**
+before asking — `manifest.json`, your issued keys, `SESSION_SECRET` and
+`data/inventory.json` are all untouched, which is the reason this command exists instead
+of `init --force`. And **nothing has reached Flux Hub yet**: `PROVIDER_LEVEL` is inside
+the signed manifest, so the hub learns about it only when you `sign` and re-paste at
+`/onboard`. Until then `fh-toolkit doctor` reports `MANIFEST_STALE` and the hub still has
+you as a Supporter. The Stripe key it asked for is one you create yourself under
+onboarding Step 3, with that step's exact permission list — the upgrade does not create
+one for you.
