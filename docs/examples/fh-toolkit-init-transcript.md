@@ -1,20 +1,8 @@
 # `fh-toolkit init` — a full run
 
-> ⚠️ **Recorded before Phase E (2026-09-07), and NOT re-recorded.** The run below is left
-> byte-for-byte as the tool actually printed it, because doctoring a transcript to show
-> output a tool never produced is worse than a stale one. Two lines have since changed:
->
-> - `→ issues AGENT_KEY, COALITION_KEY, COALITION_SIGNING_KEY for secrets.env` now reads
->   `→ issues COALITION_SIGNING_KEY for secrets.env`;
-> - `secrets.env` no longer contains `AGENT_KEY=` or `COALITION_KEY=` lines at all.
->
-> Both bearers were removed from every code path: your agent signs with `MANIFEST_KEY`,
-> and Flux Hub signs its calls to your Coalition. Everything else in the run is current.
-> Re-recording this is tracked separately — it needs a live interactive session.
-
 A **redacted transcript** of one real onboarding, from `keygen` to a signed
-`manifest.json` and the Flux env blob. It is here so you can see the shape of the run
-before you start one: what gets asked, in what order, and what `init` writes at the end.
+`manifest.json`. It is here so you can see the shape of the run before you start one:
+what gets asked, in what order, and what `init` writes at the end.
 
 The run below is a **Supporter** — your own nodes plus Foundation nodes on your idle
 capacity, nothing listed for sale, no Stripe account. That is the recommended first
@@ -26,26 +14,35 @@ prices and Stripe.
 **Redacted.** Every secret in this transcript was replaced with a same-format random
 value — the manifest pubkey, the Proxmox token secret and the owner wallet address. The
 public IP is in the `203.0.113.0/24` documentation range, the shell prompt is
-`user@host`, and the cluster is a single Proxmox host. **Nothing here is a working
+`user@host`, and cluster-only storage names were trimmed. **Nothing here is a working
 value** — do not copy one out.
 
-**Captured against** `@moltentech/protocol` 0.1.0 — `protocol/` at `e9d9da6`, 2026-09-02,
-when the tool was still called `mt-manifest`. ⚠️ **The command names below were updated in
-place for the rename; the run itself has not been re-captured.** `init`'s prompts are
-unchanged by that rename, so the questions and their order still match — but if anything
-on screen differs from what is below, your `fh-toolkit` is the authority and this
-transcript is stale.
+**Captured against** `fh-toolkit` 0.3.0, build `341c44f`, 2026-09-11 — the
+current tool, after the Phase E key cleanup (`/onboard` issues ONE key,
+`COALITION_SIGNING_KEY`). If anything on screen differs from what is below, your
+`fh-toolkit` is the authority and this transcript is stale.
 
 ## A Supporter run, start to finish
 
+`fh-toolkit` with no arguments opens a small shell in the directory you ran it from; the
+commands below are typed at its `fh-toolkit>` prompt. `fh-toolkit keygen` / `fh-toolkit init`
+from your own shell do the same thing one command at a time.
+
 ```console
-user@host:/tmp$ mkdir fh-agent
-user@host:/tmp$ cd fh-agent/
-user@host:/tmp/fh-agent$ fh-toolkit keygen
+user@host:~$ mkdir fh-agent && cd fh-agent
+user@host:~/fh-agent$ fh-toolkit
+fh-toolkit 0.3.0
+  build   341c44f0d0cc51b83904a21d98caacfd52895077
+  built   2026-09-11T00:53:31Z
+directory: /work
+`help` lists the commands. `exit` or Ctrl-D leaves.
+
+fh-toolkit> keygen
 Wrote manifest-key.pem (KEEP SECRET — this signs your manifest).
 Public key (manifest "pubkey", also saved to manifest-pubkey.txt):
-bwHAjXTT7OMZBjnFe182ownZgyPdklFKBQDNk9tfxGE=
-user@host:/tmp/fh-agent$ fh-toolkit init
+Qm7cTf0aVYX1kPz9hL3sN8wRdU2eGxJ6yBtMoK4iA5c=
+
+fh-toolkit> init
 fh-toolkit init — this writes every onboarding file from your answers.
 
 Which are you?
@@ -60,56 +57,48 @@ Provider slug (lowercase, PERMANENT once ingested): romeo-sierra
 Display name [romeo-sierra]: RS Home Lab
 Location (shown on your marketplace card): Trinity FL
 Contact email: nodes@example.com
-Owner wallet address (ZelID 1… or Flux t1…): 1HLy2EVVJbDNNXoVxKGgY3HdN422m6hCfe
-Confirm owner address is exactly "1HLy2EVVJbDNNXoVxKGgY3HdN422m6hCfe"? (y/N) [N]: y
-Flux Hub environment — 1) production  2) staging [1]:
+Owner wallet address (ZelID 1… or Flux t1…): t1VqL8mR2xKpN4cWfJ7yH3sD9gB5tZ6aQeU
+Confirm owner address is exactly "t1VqL8mR2xKpN4cWfJ7yH3sD9gB5tZ6aQeU"? (y/N) [N]: y
+Flux Hub environment — 1) production  2) staging [1]: 1
+  → the agent will run ghcr.io/w2vy/fh-agent:latest
 Flux app name for your Coalition [coalition-romeo-sierra]:
   → COALITION_URL will be https://coalition-romeo-sierra.app.runonflux.io
 
 Proxmox API token (onboarding Step 0.1):
-  Proxmox URL (an IP always works; a name must resolve INSIDE the container) — or `skip` [https://192.168.1.10:8006]: https://pve50:8006
-  PROXMOX_TOKEN_ID [fluxhub@pve!agent]: fluxhub@pve!agent
-  PROXMOX_TOKEN_SECRET (printed once when you created it): 8feca418-68a1-4b05-a83b-d1412062db0b
+  Proxmox URL (an IP always works; a name must resolve INSIDE the container) — or `skip` [https://192.168.1.10:8006]: https://192.168.102.75:8006
+  PROXMOX_TOKEN_ID [fh-agent@pve!agent]:
+  PROXMOX_TOKEN_SECRET (printed once when you created it): 3b9d2c7e-4f1a-48e6-9a0b-7c5d1e2f8a64
   Wait while the token is verified…
-  x Proxmox reachable and token accepted: cannot resolve the hostname in https://pve50:8006. Inside a container, names resolve in the CONTAINER — use an IP address, or a name this container can resolve. The token is not implicated.
-  → fix the above and retry, or `skip` to go on unverified [retry]:
-  Proxmox URL (an IP always works; a name must resolve INSIDE the container) — or `skip` [https://pve50:8006]: https://192.168.102.50:8006
-  PROXMOX_TOKEN_ID [fluxhub@pve!agent]:
-  PROXMOX_TOKEN_SECRET (Enter keeps the one you typed):
-  Wait while the token is verified…
-  + Proxmox reachable and token accepted: https://192.168.102.50:8006
-  + token holds the privileges the agent needs: 6 checked at /
-  + cluster nodes visible: pve50
+  + Proxmox reachable and token accepted: https://192.168.102.75:8006
+  + token holds the privileges the agent needs: 8 checked at / (self-reported by /access/permissions)
+  + pve75: storage readable: read shared-iso (2 storage(s) visible)
+  + pve75: bridges visible: vmbr0
 
 Stripe — skipped: a Supporter sells nothing and needs no Stripe account.
 
 Now your hardware. Everything above was about you; this is a stock-take.
-Proxmox host name(s), comma-separated [pve50]:
+Proxmox host name(s), comma-separated [pve75]: pve75
 
-— host pve50 —
-  storage pool for VM images on pve50 (must be SSD): local-lvm
-  storage holding the ArcaneOS ISO on pve50 [pve55-shared]: local-lvm
-  how many node slots does pve50 support? [1]: 2
-  WAN IP (blank when done — 0/2 placed): 203.0.113.186
+— host pve75 —
+  storages on pve75: shared-iso(SSD) local-lvm(SSD) local(SSD)
+    (2 more defined in the cluster but not usable here: backup-dir, raid5-storage)
+  storage pool for VM images on pve75 (must be SSD) [shared-iso]: local-lvm
+  shared-iso is shared — one ISO for the whole cluster, refreshed in one place.
+  storage holding the ArcaneOS ISO on pve75 [shared-iso]: local
+  how many node slots does pve75 support? [1]: 1
+  WAN IP (blank when done — 0/1 placed): 203.0.113.186
     LAN gateway WITH prefix, e.g. 192.168.87.1/24: 192.168.186.1/24
     → VMs on 192.168.186.x/24, gateway 192.168.186.1
-    Flux API port (Enter, or 'next' for the next WAN IP) [16127]: 16167
-    · slot 1 of 2
-      tier (cumulus/nimbus/stratus) [cumulus]:
-      VM name: rs-186-c6
-      LAN address — host number (e.g. 5 for 192.168.186.5) or a full IP: 6
+    Flux API port (Enter, or 'next' for the next WAN IP) [16127]: 16147
+    · slot 1 of 1
+      tier (cumulus/nimbus/stratus) [cumulus]: nimbus
+      VM name: rs-186-n4
+      LAN address — host number (e.g. 5 for 192.168.186.5) or a full IP: 4
       storage pool (SSD) [local-lvm]:
-    → 192.168.186.6/24, gateway 192.168.186.1, WAN 203.0.113.186, API port 16167, storage local-lvm
-    Flux API port (Enter, or 'next' for the next WAN IP) [16177]: 16187
-    · slot 2 of 2
-      tier (cumulus/nimbus/stratus) [cumulus]:
-      VM name: rs-186-c8
-      LAN address — host number (e.g. 5 for 192.168.186.5) or a full IP: 8
-      storage pool (SSD) [local-lvm]:
-    → 192.168.186.8/24, gateway 192.168.186.1, WAN 203.0.113.186, API port 16187, storage local-lvm
+    → 192.168.186.4/24, gateway 192.168.186.1, WAN 203.0.113.186, API port 16147, storage local-lvm
 
 These must be reachable from outside your LAN, or Flux Hub cannot pull stats:
-  203.0.113.186 → 16167, 16187
+  203.0.113.186 → 16147
   → MT_PUBKEY pinned from https://fluxhub.moltentech.us/api/mt-pubkey
 Wrote config.env, secrets.env, .env.operator, data/inventory.json, flux-app-spec.json, compose.yaml, README.txt, manifest.json to /work (the directory you ran this from)
 
@@ -123,8 +112,8 @@ Already done, from the key in this directory:
     (edit config.env later and it goes stale; re-run `fh-toolkit sign`)
 
 Next, in order:
-  1. open https://fluxhub.moltentech.us/onboard, paste manifest.json, sign with 1HLy2EVVJbDNNXoVxKGgY3HdN422m6hCfe
-     → issues AGENT_KEY, COALITION_KEY, COALITION_SIGNING_KEY for secrets.env
+  1. open https://fluxhub.moltentech.us/onboard, paste manifest.json, sign with t1VqL8mR2xKpN4cWfJ7yH3sD9gB5tZ6aQeU
+     → issues COALITION_SIGNING_KEY for secrets.env
   2. Stripe: not needed — you are not listing anything for sale.
   3. `fh-toolkit doctor`   ← run it here; it checks every file agrees
   4. `fh-toolkit env`      → env.json, the Flux "Import Environment Variables" blob
@@ -134,26 +123,26 @@ Next, in order:
      → https://coalition-romeo-sierra.app.runonflux.io
      ⚠️  enterprise, not standard: a standard Flux app's environment is
          WORLD-READABLE, and yours holds your Stripe key.
-user@host:/tmp/fh-agent$ # edit secrets.env and replace the AGENT_KEY, COALITION_KEY and COALITION_SIGNING_KEY provided by ingest signing
-user@host:/tmp/fh-agent$ fh-toolkit doctor
-checked config.env, secrets.env, .env.operator, inventory.json, manifest.json — 0 error(s), 0 warning(s)
-everything agrees.
-user@host:/tmp/fh-agent$ fh-toolkit env
-note: no paid tiers listed — building env.json without Stripe keys.
-Wrote env.json (11 vars). Contains SECRETS — do NOT commit; import it into your Flux app's Environment Variables.
-user@host:/tmp/fh-agent$ # Deploy the Flux app using the template created flux-app-spec.json and then import env.json as the components Environment Vars
-user@host:/tmp/fh-agent$ # They need to be uploaded to Flux Cloud because they are big, also select Enterprise App so the app spec is also encrypted
-user@host:/tmp/fh-agent$ # See the README.txt for assistance and then start the agent
-user@host:/tmp/fh-agent$ #docker compose up -d
-user@host:/tmp/fh-agent$
+
+fh-toolkit> exit
+bye
+user@host:~/fh-agent$
 ```
 
-Two lines above are worth stopping on. The first Proxmox URL was a **hostname**, and the
-probe failed on it: `fh-toolkit` runs in a container, so the name has to resolve
-*there*, and an IP always does. A failed probe re-asks rather than warning and carrying
-on, because a verified token is also what lets `init` offer your real node and storage
-names as defaults. And `Stripe — skipped` is not a question you missed: a Supporter sells
-nothing, so the run never asks, and `env.json` comes out with 11 variables instead of 12.
+A few lines are worth stopping on.
+
+- **The Proxmox probe drives the rest of the stock-take.** Once the token verifies, `init`
+  reads your real storages and bridges and offers them as defaults, and it tells you which
+  cluster storages are *not* usable on that host. Give it an **IP**: `fh-toolkit` runs in a
+  container, so a hostname has to resolve *there*, and on most machines it will not. A
+  failed probe re-asks rather than warning and carrying on.
+- **`Stripe — skipped` is not a question you missed.** A Supporter sells nothing, so the run
+  never asks, and `env.json` comes out with 11 variables instead of 12. (Step 5's warning
+  about "your Stripe key" is the same text an Operator sees — a Supporter's `env.json`
+  holds no Stripe key, but it still holds every other secret, so *enterprise* still applies.)
+- **`/onboard` issues one key**, `COALITION_SIGNING_KEY`, and you paste it into
+  `secrets.env` before `fh-toolkit doctor`. Your agent signs with `MANIFEST_KEY`, which
+  `init` already filled in.
 
 ## What an Operator answers differently
 
@@ -200,5 +189,5 @@ stand-in is indistinguishable from a live key to a secret scanner.
 Note what an Operator run does **not** ask: which slots to list. Every slot you declared
 is offered — the answer was always "all of them" — and you hold some back afterwards by
 editing `AGENT_LISTING_JSON` in `config.env`. On an Operator's first run `secrets.env`
-has five empty values rather than three: the three `/onboard` mints, plus the Stripe
-pair if the webhook endpoint does not exist yet.
+has three empty values rather than one: the key `/onboard` mints, plus the Stripe pair
+if the webhook endpoint does not exist yet.
