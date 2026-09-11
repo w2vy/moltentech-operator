@@ -56,7 +56,7 @@ tab — there is one component, **coalition**, and it is already open.
 
 ![Component list with the coalition component](images/flux-app/04-UpdateComponent.png)
 
-## 5. Scroll to Environment
+## 5. Environment
 
 Inside the component scroll down to **Environment** and click **Environment Variables**.
 
