@@ -514,11 +514,20 @@ An empty Stripe answer is fine. The **webhook secret does not exist yet** — it
 when you create the endpoint against your Coalition URL, which is a real wait, and
 `doctor` keeps naming it until you fill it in.
 
-⚠️ **It edits `config.env` and `secrets.env`. Nothing else.** Not `manifest.json`, not
-`SESSION_SECRET`, not the `/onboard`-issued key, not `data/inventory.json`. That
-is the whole reason it exists: `init --force` is the other way to change these two fields,
-and it rewrites all of the above. Previous versions are kept as `config.env.bak` and
-`secrets.env.bak`, mode 0600.
+⚠️ **It edits `config.env`, `secrets.env` and one line of `.env.operator`. Nothing
+else.** Not `manifest.json`, not `SESSION_SECRET`, not the `/onboard`-issued key, not
+`data/inventory.json`. That is the whole reason it exists: `init --force` is the other way
+to change these fields, and it rewrites all of the above. Previous versions are kept as
+`*.bak`, mode 0600.
+
+The `.env.operator` line is `AGENT_LISTING_JSON` — the half of "for sale" your **agent**
+asserts to Flux Hub, and the only thing that puts a card on `/providers`. It is derived the
+way `init` derives it: every priced tier, offering every slot you declared (a tier you had
+already listed keeps its hold-back). The agent reads it **only at start**, so the command
+tells you to `docker compose up -d --force-recreate` — a `docker restart` does not reload
+it. Before 2026-09-10 this line was left at `[]`, and an upgrade could finish with a signed
+operator manifest, a priced config, a green `doctor` and nothing for sale; `doctor` now
+reports that state as `TIER_PRICED_BUT_NOT_LISTED`.
 
 A below-floor price is refused **before anything is written**, so a typo costs you nothing
 rather than leaving a half-applied upgrade behind.
@@ -534,6 +543,8 @@ you re-sign and re-submit. The command prints the steps; they are also here:
 3. register a Stripe webhook endpoint at `<your coalition>/webhook`, then
    `fh-toolkit doctor --check-stripe` (which catches a key from the wrong account)
 4. `fh-toolkit env`, re-import `env.json` into the Flux app, redeploy
+5. `docker compose up -d --force-recreate` in your operator directory, so the agent
+   starts asserting the new listing
 
 The command performs no network writes and signs nothing. Only your browser can complete
 step 2, so it reports what it *wrote* — never what the hub now believes.

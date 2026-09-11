@@ -1219,10 +1219,13 @@ Proxmox credentials, and never the private half of anything you generated.
   heartbeat and can be undone by re-adding the entry. See **Retiring a host** below.
 - **Upgrade Supporter → Operator** (or back): `fh-toolkit level --set operator`. It asks
   which tiers you will offer, at what price, and for your Stripe pair — the same
-  questions `init` asks a seller — then edits **`config.env` and `secrets.env` only**.
-  Nothing else in your directory is touched: not `manifest.json`, not `SESSION_SECRET`,
-  not your issued keys, not `data/inventory.json`. (`init --force` would rewrite all of
-  those; that is why this exists.) Previous versions are kept as `*.bak`.
+  questions `init` asks a seller — then edits **`config.env`, `secrets.env`, and the
+  `AGENT_LISTING_JSON` line of `.env.operator`** (every priced tier, all declared slots
+  offered). Nothing else in your directory is touched: not `manifest.json`, not
+  `SESSION_SECRET`, not your issued keys, not `data/inventory.json`. (`init --force` would
+  rewrite all of those; that is why this exists.) Previous versions are kept as `*.bak`.
+  The agent reads `.env.operator` only at start: **`docker compose up -d --force-recreate`**
+  afterwards, or it keeps asserting the old (empty) listing and you get no card.
 
   `PROVIDER_LEVEL` is in your **signed manifest**, so this is a re-sign, not a config
   edit: `fh-toolkit sign` → re-paste `manifest.json` at `/onboard` and sign with your

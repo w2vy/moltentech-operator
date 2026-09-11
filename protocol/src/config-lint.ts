@@ -438,11 +438,12 @@ export function lintListing(
   minimums: Record<string, number>
 ): Finding[] {
   const raw = operator.AGENT_LISTING_JSON;
-  if (!raw) return []; // absent = nothing offered for sale; a valid self-hoster state
   const file = ".env.operator";
   let parsed: unknown;
   try {
-    parsed = JSON.parse(raw);
+    // Absent = nothing offered for sale, a valid self-hoster state — unless config.env
+    // prices something, which the inverse check at the bottom catches.
+    parsed = raw ? JSON.parse(raw) : [];
   } catch (e) {
     return [
       {
@@ -519,6 +520,27 @@ export function lintListing(
         message:
           `${tier} is ${entry.priceCents} in AGENT_LISTING_JSON but ${configured} in ` +
           "config.env's TIER_PRICES_JSON — Flux Hub and your Coalition would quote different prices.",
+      });
+    }
+  }
+  // The inverse direction. Every check above starts from the LISTING; a priced tier
+  // with no listing entry passed untouched, and that is exactly what a half-done
+  // upgrade looks like (2026-09-10: `level --set operator` wrote the price, the agent
+  // kept asserting `[]`, doctor said everything agrees, and the marketplace showed
+  // nothing). The agent is what puts a card on /providers, so a price it never sees is
+  // a tier that is not for sale.
+  const listedTiers = new Set((parsed as Array<Record<string, unknown>>).map((e) => e?.tier));
+  for (const [tier, priceCents] of Object.entries(prices)) {
+    if (!listedTiers.has(tier)) {
+      found.push({
+        rule: "TIER_PRICED_BUT_NOT_LISTED",
+        severity: "error",
+        file,
+        message:
+          `${tier} is priced at ${priceCents} in config.env's TIER_PRICES_JSON but absent from ` +
+          "AGENT_LISTING_JSON — the agent asserts the listing, so this tier is NOT for sale.",
+        summary: `${tier} priced but not listed`,
+        fix: "fh-toolkit level --set operator   (rewrites the listing), then recreate the agent",
       });
     }
   }

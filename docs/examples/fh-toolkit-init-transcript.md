@@ -168,7 +168,7 @@ Stripe — you are merchant of record; Flux Hub never holds these.
 
 …
 
-Offered for sale: 2 cumulus (all of them — edit AGENT_LISTING_JSON in config.env to hold any back).
+Offered for sale: 2 cumulus (all of them — edit AGENT_LISTING_JSON in .env.operator to hold any back).
 
 …
 

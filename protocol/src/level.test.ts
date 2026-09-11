@@ -174,9 +174,13 @@ test("`level` with no flags reports the level, the manifest's agreement, tiers a
   assert.match(out, /Stripe\s+not configured — a Supporter needs no Stripe account/);
 });
 
-test("⭐ the upgrade changes two files and leaves every other byte alone", () => {
+test("⭐ the upgrade changes three files and leaves every other byte alone", () => {
+  // Three, not two, since 2026-09-10: AGENT_LISTING_JSON in .env.operator is the half of
+  // "for sale" the AGENT asserts, and leaving it at `[]` made an upgrade complete with
+  // nothing listed. Everything else in .env.operator must still survive byte for byte.
   const dir = scaffoldSupporter();
-  const untouched = [".env.operator", join("data", "inventory.json"), "manifest-key.pem"];
+  const untouched = [join("data", "inventory.json"), "manifest-key.pem"];
+  const operatorBefore = readFileSync(join(dir, ".env.operator"), "utf8");
   const before = untouched.map((f) => readFileSync(join(dir, f), "utf8"));
   const secretsBefore = readFileSync(join(dir, "secrets.env"), "utf8");
   const sessionSecret = /^SESSION_SECRET=(.*)$/m.exec(secretsBefore)?.[1];
@@ -202,6 +206,13 @@ test("⭐ the upgrade changes two files and leaves every other byte alone", () =
   untouched.forEach((f, i) => {
     assert.equal(readFileSync(join(dir, f), "utf8"), before[i], `${f} was modified`);
   });
+  const operatorAfter = readFileSync(join(dir, ".env.operator"), "utf8");
+  assert.match(operatorAfter, /^AGENT_LISTING_JSON=\[\{"tier":"cumulus","priceCents":2500,"availableSlots":\d+\}\]$/m);
+  const strip = (t: string): string => t.replace(/^AGENT_LISTING_JSON=.*$/m, "");
+  assert.equal(strip(operatorAfter), strip(operatorBefore), ".env.operator changed beyond the listing line");
+  assert.equal(readFileSync(join(dir, ".env.operator.bak"), "utf8"), operatorBefore);
+  assert.match(out, /\.env\.operator AGENT_LISTING_JSON: \[\] → /, "the diff names the third file");
+  assert.match(out, /--force-recreate/, "says the agent must be recreated, not restarted");
   assert.match(secrets, new RegExp(`^SESSION_SECRET=${sessionSecret}$`, "m"), "SESSION_SECRET was reminted");
   assert.ok(readFileSync(join(dir, "config.env.bak"), "utf8").includes("PROVIDER_LEVEL=supporter"));
   assert.equal(readFileSync(join(dir, "secrets.env.bak"), "utf8"), secretsBefore);

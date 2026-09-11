@@ -182,3 +182,48 @@ test("an operator with no prices is flagged in the plan, not silently written", 
   const plan = planLevelChange({ configText: CONFIG, secretsText: "", target: "operator" });
   assert.match(plan.warnings.join(" "), /LEVEL_OPERATOR_NO_TIERS/);
 });
+
+test("🔴 going up writes AGENT_LISTING_JSON from the prices and the declared slots", () => {
+  const plan = planLevelChange({
+    configText: CONFIG,
+    secretsText: renderSecretsEnv(ANSWERS, { includeStripe: false, sessionSecret: "s".repeat(64) }),
+    operatorText: "PROVIDER_SLUG=x\nAGENT_LISTING_JSON=[]\nMANIFEST_KEY=k\n",
+    slotCounts: { cumulus: 2 },
+    target: "operator",
+    prices: { cumulus: 2500 },
+  });
+  assert.match(plan.operatorText!, /^AGENT_LISTING_JSON=\[\{"tier":"cumulus","priceCents":2500,"availableSlots":2\}\]$/m);
+  assert.match(plan.operatorText!, /^MANIFEST_KEY=k$/m, "neighbours survive");
+  assert.equal(plan.operatorEdits.length, 1);
+  assert.match(plan.nextSteps.join("\n"), /--force-recreate/);
+});
+
+test("a tier already listed keeps its hold-back; the price is the only thing updated", () => {
+  const plan = planLevelChange({
+    configText: CONFIG,
+    secretsText: "",
+    operatorText: 'AGENT_LISTING_JSON=[{"tier":"cumulus","priceCents":700,"availableSlots":1}]\n',
+    slotCounts: { cumulus: 3 },
+    target: "operator",
+    prices: { cumulus: 900 },
+  });
+  assert.match(plan.operatorText!, /"availableSlots":1\}/);
+  assert.match(plan.operatorText!, /"priceCents":900/);
+});
+
+test("going down empties the listing, and says so", () => {
+  const plan = planLevelChange({
+    configText: CONFIG.replace(/^PROVIDER_LEVEL=.*$/m, "PROVIDER_LEVEL=operator").replace(/^TIER_PRICES_JSON=.*$/m, 'TIER_PRICES_JSON={"cumulus":700}'),
+    secretsText: "",
+    operatorText: 'AGENT_LISTING_JSON=[{"tier":"cumulus","priceCents":700,"availableSlots":1}]\n',
+    target: "supporter",
+  });
+  assert.match(plan.operatorText!, /^AGENT_LISTING_JSON=\[\]$/m);
+  assert.equal(plan.operatorEdits.length, 1);
+});
+
+test("no .env.operator in reach — the plan WARNS rather than silently skipping the listing", () => {
+  const plan = planLevelChange({ configText: CONFIG, secretsText: "", target: "operator", prices: { cumulus: 2500 } });
+  assert.equal(plan.operatorText, undefined);
+  assert.ok(plan.warnings.some((w) => /AGENT_LISTING_JSON was NOT written/.test(w)));
+});

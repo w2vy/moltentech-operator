@@ -35,6 +35,7 @@ OWNER_ADDRESS=1L1wz2wSomeOwnerAddressHere
 MANIFEST_KEY=LS0tLS1CRUdJTiBQUklWQVRFIEtFWS0tLS0t
 PROXMOX_TOKEN_ID=mt-agent@pve!agent
 PROXMOX_TOKEN_SECRET=aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee
+AGENT_LISTING_JSON=[{"tier":"cumulus","priceCents":700,"availableSlots":1},{"tier":"nimbus","priceCents":2000,"availableSlots":1}]
 `;
 
 /** The REAL shape, copied from ~/mt-agents/test1/data/inventory.json — a top-level
@@ -475,4 +476,18 @@ test("the finding carries the LINE, so the operator can go straight to it", () =
   const found = lintObsoleteKeys(parseEnvLines("MANIFEST_KEY=x\n\nAGENT_KEY=ak\n"), "secrets.env");
   assert.equal(found.length, 1);
   assert.equal(found[0]!.line, 3);
+});
+
+test("🔴 a priced tier the agent never lists is an ERROR — that tier is not for sale", () => {
+  // 2026-09-10: `level --set operator` wrote TIER_PRICES_JSON, the agent kept asserting
+  // `[]`, doctor said everything agrees, and /providers showed nothing. Both directions
+  // of the price/listing agreement have to be checked, and the empty listing is the one
+  // that matters: an ABSENT listing must not short-circuit past this either.
+  for (const listing of ["[]", undefined]) {
+    const operator = listing === undefined ? GOOD_OPERATOR.replace(/^AGENT_LISTING_JSON=.*\n/m, "") : GOOD_OPERATOR.replace(/^AGENT_LISTING_JSON=.*$/m, `AGENT_LISTING_JSON=${listing}`);
+    const report = runDoctor({ configEnv: GOOD_CONFIG, envOperator: operator });
+    const rules = report.findings.filter((f) => f.rule === "TIER_PRICED_BUT_NOT_LISTED");
+    assert.equal(rules.length, 2, `listing=${listing}: ${report.findings.map((f) => f.rule).join(", ")}`);
+    assert.ok(rules.every((f) => f.severity === "error"));
+  }
 });

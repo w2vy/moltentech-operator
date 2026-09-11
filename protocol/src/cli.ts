@@ -66,6 +66,7 @@ import {
   formatReport,
   fetchTierMinimums,
   lintManifestFreshness,
+  normalizeInventory,
   TIER_FLOORS_CENTS,
   type DoctorReport,
 } from "./config-lint";
@@ -817,7 +818,7 @@ async function askAnswers(
     if (tiers.length > 0) {
       console.log(
         `\nOffered for sale: ${tiers.map((t) => `${availableSlots[t]} ${t}`).join(", ")} ` +
-          `(all of them — edit AGENT_LISTING_JSON in config.env to hold any back).`
+          `(all of them — edit AGENT_LISTING_JSON in .env.operator to hold any back).`
       );
     }
 
@@ -1346,6 +1347,24 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
       }
       const configText = readFileSync(configPath, "utf8");
       const secretsText = existsSync(secretsPath) ? readFileSync(secretsPath, "utf8") : "";
+      // The third file. AGENT_LISTING_JSON lives in .env.operator, and it is the half of
+      // "for sale" the agent actually asserts — see planLevelChange for the 2026-09-10 miss.
+      const operatorPath = join(dir, ".env.operator");
+      const operatorText = existsSync(operatorPath) ? readFileSync(operatorPath, "utf8") : undefined;
+      const inventoryPath = join(dir, "data", "inventory.json");
+      const slotCounts: Record<string, number> = {};
+      if (existsSync(inventoryPath)) {
+        try {
+          const hosts = normalizeInventory(JSON.parse(readFileSync(inventoryPath, "utf8"))) ?? [];
+          for (const h of hosts) {
+            for (const sl of (h.slots ?? []) as Array<{ tier?: unknown }>) {
+              if (typeof sl.tier === "string") slotCounts[sl.tier] = (slotCounts[sl.tier] ?? 0) + 1;
+            }
+          }
+        } catch {
+          // doctor reports a malformed inventory; here it only means availableSlots derives to 0.
+        }
+      }
       const current = readLevel(configText);
       const prices = readTierPrices(configText);
       const hubBaseUrl = parseConfigEnv(configText).MT_BASE_URL;
@@ -1467,6 +1486,8 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
       const plan = planLevelChange({
         configText,
         secretsText,
+        ...(operatorText !== undefined ? { operatorText } : {}),
+        slotCounts,
         target,
         prices: { ...askedPrices, ...cliPrices },
         stripe: {
@@ -1484,6 +1505,7 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
       console.log(`level: ${plan.from ?? "(absent)"} → ${plan.to}\n`);
       for (const e of plan.configEdits) console.log(`  config.env    ${e}`);
       for (const e of plan.secretsEdits) console.log(`  secrets.env   ${e}`);
+      for (const e of plan.operatorEdits) console.log(`  .env.operator ${e}`);
       for (const w of plan.warnings) console.log(`\n  ⚠️  ${w}`);
 
       if (dryRun) {
@@ -1507,10 +1529,13 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
         if (existsSync(secretsPath)) writeFileSync(`${secretsPath}.bak`, secretsText, { mode: 0o600 });
         writeFileSync(secretsPath, plan.secretsText, { mode: 0o600 });
       }
-      console.log(
-        `\nWrote ${wroteSecrets ? "config.env, secrets.env" : "config.env"} ` +
-          "(previous versions kept as *.bak)\n"
-      );
+      const wroteOperator = plan.operatorText !== undefined && plan.operatorText !== operatorText;
+      if (wroteOperator) {
+        writeFileSync(`${operatorPath}.bak`, operatorText!, { mode: 0o600 });
+        writeFileSync(operatorPath, plan.operatorText!, { mode: 0o600 });
+      }
+      const wrote = ["config.env", ...(wroteSecrets ? ["secrets.env"] : []), ...(wroteOperator ? [".env.operator"] : [])];
+      console.log(`\nWrote ${wrote.join(", ")} (previous versions kept as *.bak)\n`);
       for (const line of plan.nextSteps) console.log(line);
       return 0;
     }
