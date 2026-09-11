@@ -1208,7 +1208,10 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
           report.findings.push(
             ...(await probeStripeWiring({ stripeSecretKey, coalitionUrl, mtBaseUrl }))
           );
-          report.filesChecked.push("stripe (live)");
+          // "(live)" read as LIVE MODE next to an rk_test_ key; say what was actually
+          // done — the API was reached — and which mode the key selects.
+          const mode = /^(rk|sk)_test_/.test(stripeSecretKey) ? "test mode" : "live mode";
+          report.filesChecked.push(`stripe API reached, ${mode}`);
         }
       }
       // Same opt-in bargain as --check-stripe: file-level doctor stays credential-free
@@ -1226,7 +1229,7 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
           console.log("--check-proxmox: .env.operator is missing PROXMOX_URL / _TOKEN_ID / _TOKEN_SECRET — skipped.\n");
         } else {
           const probe = await probeProxmox({ url, tokenId, tokenSecret });
-          console.log(`proxmox (live) — ${url}`);
+          console.log(`proxmox API — ${url}`);
           console.log(formatProbe(probe.checks) + "\n");
           noteUnproven(report, "proxmox", probe.checks);
           for (const check of probe.checks) {
@@ -1274,7 +1277,7 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
               }
             }
           }
-          report.filesChecked.push("proxmox (live)");
+          report.filesChecked.push("proxmox API reached");
         }
       }
       // The third opt-in probe, and the only one that proves a KEY rather than a
@@ -1300,11 +1303,11 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
             localPubkey: read("manifest-pubkey.txt"),
             localManifestJson: read("manifest.json"),
           });
-          console.log(`hub (live) — ${mtBaseUrl}`);
+          console.log(`hub API — ${mtBaseUrl}`);
           console.log(formatProbe(probe.checks) + "\n");
           noteUnproven(report, "hub", probe.checks);
           report.findings.push(...probe.findings);
-          report.filesChecked.push("hub (live)");
+          report.filesChecked.push("hub API reached");
         }
       }
       // The wrapper is the one piece of an operator's setup that lives OUTSIDE every file
