@@ -257,3 +257,37 @@ the signed manifest, so the hub learns about it only when you `sign` and re-past
 you as a Supporter. The Stripe key it asked for is one you create yourself under
 onboarding Step 3, with that step's exact permission list — the upgrade does not create
 one for you.
+
+### The Stripe half — webhook, `doctor --check-stripe`, first sale
+
+Captured the next morning on the same setup. The webhook endpoint was created in the
+Stripe dashboard (Developers → Webhooks) pointing at `<COALITION_URL>/webhook` with the
+five events from onboarding Step 3, and its `whsec_` is the one the upgrade above already
+asked for. After `fh-toolkit env` and a redeploy of the Coalition with the new `env.json`:
+
+```console
+user@host:~/fh-agent$ fh-toolkit doctor --check-stripe
+checked config.env, secrets.env, .env.operator, inventory.json, manifest.json, stripe API reached, test mode — 0 error(s), 0 warning(s)
+everything agrees.
+```
+
+That line is the only proof you get before money moves that the endpoint is on **your**
+Stripe account and points at **your** Coalition — the two failures that otherwise show
+up as a checkout that silently never completes. (Recorded on an earlier build the last
+item read `stripe (live)`, meaning the live API was reached; it now names the key's mode
+instead, because next to an `rk_test_` key "live" reads as live mode.)
+
+Then a rental from a second wallet, Stripe test card `4242 4242 4242 4242`:
+
+- Stripe → Coalition `/webhook` → hub: `[agent-auth] /api/agent/payment authorized via=coalition provider=moltentech-test2` — the rental exists the moment the Coalition relays the event.
+- The slot had been idle-filled with a Foundation node. The paid rental **evicted it**
+  (stop → delete → collateral back to the pool two minutes later), then provisioned the
+  customer's VM on the same slot with a fresh VMID.
+- The VM carries the stamp an operator can audit from the Proxmox UI alone:
+  tags `cumulus;flux-hub;paid`, description `kind: paid / rental: MT-… / sub: sub_… /
+  term: recurring (monthly)`. A Stripe trial is `paid` — it is a subscription, so it never
+  self-destructs the way a free grant does.
+
+Nothing in `~/fh-agent` changed for the sale. The Coalition holds the Stripe keys, the
+hub holds the rental, and the agent's only part was asserting `AGENT_LISTING_JSON` so the
+card existed to click.
