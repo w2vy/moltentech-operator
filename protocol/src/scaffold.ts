@@ -943,11 +943,11 @@ export function renderFluxAppSpec(a: Answers): string {
   const spec = {
     version: 8,
     name: a.fluxAppName,
-    description: `MoltenTech Coalition for ${a.providerName}`,
+    description: `Flux Hub Coalition for ${a.providerName}`,
     compose: [
       {
         name: "coalition",
-        description: "MoltenTech operator Coalition",
+        description: "Flux Hub operator Coalition",
         repotag: COALITION_IMAGE,
         ports: [33001],
         domains: [""],
