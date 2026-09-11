@@ -739,6 +739,10 @@ to never listing it, and the console will withhold the node dashboard.
 **2. Register the Flux App:** Docker image `w2vy/coalition:latest`, container port
 **8088**, then supply `env.json` as the app's environment.
 
+📸 **Click-by-click with screenshots: [flux-app-registration.md](flux-app-registration.md)**
+— import the spec, Enterprise on, import `env.json` into the component, upload to Flux
+Cloud, save, review and pay.
+
 🔒 **Register it as an ENTERPRISE app.** That is the whole answer to both problems
 below; there is no second option to weigh up. The environment is encrypted into a single
 `enterprise` blob with `environmentParameters: []`, and Flux Cloud is used to carry it —
