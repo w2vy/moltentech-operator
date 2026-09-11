@@ -34,6 +34,9 @@ export interface LevelChange {
   warnings: string[];
   nextSteps: string[];
   configText: string;
+  /** `.env.operator` after the change; identical to the input when nothing changed there. */
+  operatorText?: string;
+  operatorEdits: string[];
   secretsText: string;
 }
 
@@ -171,9 +174,53 @@ export function readTierPrices(configText: string): Record<string, number> {
   }
 }
 
+export type ListingEntry = { tier: string; priceCents: number; availableSlots: number };
+
+/** Parse `AGENT_LISTING_JSON` as the agent does; anything unusable reads as empty. */
+export function readListing(operatorText: string): ListingEntry[] {
+  const raw = readEnvValue(operatorText, "AGENT_LISTING_JSON");
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(
+      (e): e is ListingEntry =>
+        e && typeof e.tier === "string" && typeof e.priceCents === "number" && typeof e.availableSlots === "number"
+    );
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * The listing an upgrade should leave behind: every priced tier, at that price, offering
+ * every declared slot — the same derivation `init` uses for a fresh Operator. A tier the
+ * operator had ALREADY listed keeps its `availableSlots` (a hold-back is a deliberate
+ * edit, and the price is the only thing this command was told about). Unpriced tiers drop.
+ */
+export function mergeListing(
+  before: ListingEntry[],
+  prices: Record<string, number>,
+  slotCounts: Record<string, number>
+): ListingEntry[] {
+  return Object.entries(prices).map(([tier, priceCents]) => ({
+    tier,
+    priceCents,
+    availableSlots: before.find((e) => e.tier === tier)?.availableSlots ?? slotCounts[tier] ?? 0,
+  }));
+}
+
 export interface LevelChangeInput {
   configText: string;
   secretsText: string;
+  /**
+   * `.env.operator`, which carries `AGENT_LISTING_JSON` — the half of "for sale" the
+   * AGENT reads. Optional only so older callers and tests keep compiling; the CLI always
+   * passes it. Absent means the listing cannot be written and a warning says so.
+   */
+  operatorText?: string;
+  /** Declared slots per tier from `data/inventory.json`; `availableSlots` is derived from it. */
+  slotCounts?: Record<string, number>;
   target: Level;
   /** Tier → price in CENTS. Only used going up. */
   prices?: Record<string, number>;
@@ -199,6 +246,8 @@ export function planLevelChange(input: LevelChangeInput): LevelChange {
 
   let configText = input.configText;
   let secretsText = input.secretsText;
+  let operatorText = input.operatorText;
+  const operatorEdits: string[] = [];
 
   if (from === undefined) {
     warnings.push(
@@ -228,6 +277,31 @@ export function planLevelChange(input: LevelChangeInput): LevelChange {
       );
     }
 
+    // 🔴 The other half of "for sale". TIER_PRICES_JSON is what the MANIFEST and the
+    // Coalition quote; AGENT_LISTING_JSON in .env.operator is what the AGENT asserts to
+    // Flux Hub, and a `ProviderStat` row — the marketplace card — exists only because of
+    // that assert. This command used to write the first and leave the second at `[]`,
+    // so an upgrade "completed" with a signed operator manifest, a priced config, a green
+    // doctor, and nothing for sale. Measured 2026-09-10 on staging: no card until the
+    // listing was hand-edited and the agent recreated.
+    if (Object.keys(prices).length > 0) {
+      if (operatorText === undefined) {
+        warnings.push(
+          "no .env.operator here, so AGENT_LISTING_JSON was NOT written — the agent asserts " +
+            "the listing, and without it nothing is for sale. Set it by hand, then recreate the agent."
+        );
+      } else {
+        const before = readListing(operatorText);
+        const listing = mergeListing(before, prices, input.slotCounts ?? {});
+        if (JSON.stringify(before) !== JSON.stringify(listing)) {
+          operatorText = upsertEnvLine(operatorText, "AGENT_LISTING_JSON", JSON.stringify(listing));
+          operatorEdits.push(
+            `AGENT_LISTING_JSON: ${JSON.stringify(before)} → ${JSON.stringify(listing)}`
+          );
+        }
+      }
+    }
+
     const beforeSecrets = secretsText;
     secretsText = addStripeBlock(secretsText, input.stripe ?? {});
     if (beforeSecrets !== secretsText) {
@@ -248,6 +322,13 @@ export function planLevelChange(input: LevelChangeInput): LevelChange {
       configText = setTierPrices(configText, {});
       configEdits.push(`TIER_PRICES_JSON: ${JSON.stringify(before)} → {} (nothing listed for sale)`);
     }
+    if (operatorText !== undefined) {
+      const listingBefore = readListing(operatorText);
+      if (listingBefore.length > 0) {
+        operatorText = upsertEnvLine(operatorText, "AGENT_LISTING_JSON", "[]");
+        operatorEdits.push(`AGENT_LISTING_JSON: ${JSON.stringify(listingBefore)} → []`);
+      }
+    }
     // The Stripe keys stay. They are inert once nothing is for sale, and re-entering
     // them is the tedious half of coming back up. Blanking them would also destroy a
     // webhook secret that Stripe only ever showed once.
@@ -264,7 +345,7 @@ export function planLevelChange(input: LevelChangeInput): LevelChange {
     );
   }
 
-  const noop = configEdits.length === 0 && secretsEdits.length === 0;
+  const noop = configEdits.length === 0 && secretsEdits.length === 0 && operatorEdits.length === 0;
   if (!noop) {
     const hub = input.hubBaseUrl ?? "https://fluxhub.moltentech.us";
     nextSteps.push(
@@ -282,6 +363,13 @@ export function planLevelChange(input: LevelChangeInput): LevelChange {
         "  4. fh-toolkit env, re-import env.json into the Flux app, redeploy"
       );
     }
+    if (operatorEdits.length > 0) {
+      nextSteps.push(
+        "",
+        "AGENT_LISTING_JSON changed in .env.operator, which the agent reads ONLY at start:",
+        "  docker compose up -d --force-recreate    ← `docker restart` does NOT reload it"
+      );
+    }
     nextSteps.push(
       "",
       "Note: README.txt still describes your old level. It is generated documentation,",
@@ -289,5 +377,8 @@ export function planLevelChange(input: LevelChangeInput): LevelChange {
     );
   }
 
-  return { from, to, noop, configEdits, secretsEdits, warnings, nextSteps, configText, secretsText };
+  return {
+    from, to, noop, configEdits, secretsEdits, operatorEdits, warnings, nextSteps,
+    configText, secretsText, operatorText,
+  };
 }
