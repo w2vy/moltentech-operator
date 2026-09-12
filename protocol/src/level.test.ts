@@ -1,8 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, writeFileSync, readFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { writeFileSync, readFileSync } from "node:fs";
+import { tmpDir } from "./test-tmp";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ProviderManifestBody, ProviderManifest } from "./manifest";
@@ -82,7 +82,7 @@ test("🔴 a legacy manifest with no level still validates — and still VERIFIE
   // knows about cannot change the bytes of a manifest signed before it existed. If this
   // ever fails, someone made `level` required or gave it a zod default, and every
   // provider onboarded before today is now unverifiable.
-  const dir = mkdtempSync(join(tmpdir(), "mt-level-"));
+  const dir = tmpDir("mt-level-");
   writeFileSync(
     join(dir, "config.env"),
     [
@@ -140,7 +140,7 @@ test("doctor stops nagging a supporter about Stripe keys they will never have", 
 // directory is byte-identical afterwards — the anti-`init --force` guarantee.
 
 function scaffoldSupporter(): string {
-  const dir = mkdtempSync(join(tmpdir(), "fh-level-"));
+  const dir = tmpDir("fh-level-");
   const answers: Answers = { ...BASE, level: "supporter", tierPricesCents: {} };
   writeFileSync(join(dir, "answers.json"), JSON.stringify(answers));
   const run = (...args: string[]): void => {

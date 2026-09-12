@@ -1,8 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, writeFileSync, readFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { writeFileSync, readFileSync } from "node:fs";
+import { tmpDir } from "./test-tmp";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { needsMtPubkey } from "./scaffold";
@@ -58,7 +58,7 @@ function runCli(dir: string, args: string[]): string {
 // `init` now REQUIRES manifest-key.pem, so every run keygens first — which is the order
 // the runbook has always taught and the only one that fills MANIFEST_PUBKEY.
 function runInit(answers: Record<string, unknown>): { dir: string; stdout: string } {
-  const dir = mkdtempSync(join(tmpdir(), "mt-init-pubkey-"));
+  const dir = tmpDir("mt-init-pubkey-");
   writeFileSync(join(dir, "answers.json"), JSON.stringify(answers));
   runCli(dir, ["keygen", "--out", dir]);
   const stdout = runCli(dir, ["init", "--out", dir, "--answers", join(dir, "answers.json")]);

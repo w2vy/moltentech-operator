@@ -1,8 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { writeFileSync } from "node:fs";
+import { tmpDir } from "./test-tmp";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { generateEd25519, signManifestBody } from "./signing";
@@ -16,7 +16,7 @@ import { manifestOwnerMessage, type ProviderManifest } from "./manifest";
 // CLI end to end — a shape assertion would not have caught that.
 
 const CLI = fileURLToPath(new URL("./cli.ts", import.meta.url));
-const dir = mkdtempSync(join(tmpdir(), "mt-verify-"));
+const dir = tmpDir("mt-verify-");
 
 /** Deterministic secp256k1 owner key (valid: 1 < k < n), as in wallet.test.ts. */
 const OWNER_PRIV = new Uint8Array(32).fill(0x22);

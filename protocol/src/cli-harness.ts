@@ -3,8 +3,8 @@
  * answers each prompt as it is printed, a fake hub, and a scaffolded operator directory.
  * Shared by the per-file command tests (slug has its own older copy of the first two).
  */
-import { mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { writeFileSync } from "node:fs";
+import { tmpDir } from "./test-tmp";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { createInterface } from "node:readline/promises";
@@ -112,7 +112,7 @@ export const ANSWERS: Answers = {
 
 /** A temp dir with a signing key. */
 export function keyedDir(prefix = "fh-cmd-"): string {
-  const dir = mkdtempSync(join(tmpdir(), prefix));
+  const dir = tmpDir(prefix);
   const { privateKey } = generateEd25519();
   writeFileSync(join(dir, "manifest-key.pem"), exportPrivateKeyPem(privateKey));
   return dir;

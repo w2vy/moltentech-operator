@@ -1,8 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, writeFileSync, readFileSync, readdirSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { writeFileSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { tmpDir } from "./test-tmp";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -59,7 +59,7 @@ function cli(args: string[]): string {
 }
 
 function scaffold(answers: Record<string, unknown> = ANSWERS): { dir: string; stdout: string } {
-  const dir = mkdtempSync(join(tmpdir(), "mt-init-fills-"));
+  const dir = tmpDir("mt-init-fills-");
   writeFileSync(join(dir, "answers.json"), JSON.stringify(answers));
   cli(["keygen", "--out", dir]);
   const stdout = cli(["init", "--out", dir, "--answers", join(dir, "answers.json")]);
@@ -71,7 +71,7 @@ const valueOf = (text: string, key: string): string =>
   text.match(new RegExp(`^${key}=(.*)$`, "m"))?.[1] ?? "";
 
 test("init REFUSES without manifest-key.pem, and names keygen as the fix", () => {
-  const dir = mkdtempSync(join(tmpdir(), "mt-init-nokey-"));
+  const dir = tmpDir("mt-init-nokey-");
   writeFileSync(join(dir, "answers.json"), JSON.stringify(ANSWERS));
   assert.throws(
     () => cli(["init", "--out", dir, "--answers", join(dir, "answers.json")]),
@@ -87,7 +87,7 @@ test("⭐ the refusal comes BEFORE the first question, not after the last one", 
   // A precondition checked where its value is first USED is not a precondition. This one
   // used to fire after every prompt AND the MT_PUBKEY fetch, so an operator without a key
   // answered the whole wizard — Proxmox token included — and lost all of it to a die().
-  const dir = mkdtempSync(join(tmpdir(), "mt-init-nokey-early-"));
+  const dir = tmpDir("mt-init-nokey-early-");
   assert.throws(
     () => cli(["init", "--out", dir]),
     (err: Error & { stdout?: string; stderr?: string }) => {
@@ -118,7 +118,7 @@ test("MANIFEST_PUBKEY is pinned, so fh-agent doctor compares instead of skipping
 });
 
 test("a deleted manifest-pubkey.txt still pins — the key itself is the source", () => {
-  const dir = mkdtempSync(join(tmpdir(), "mt-init-nopub-"));
+  const dir = tmpDir("mt-init-nopub-");
   writeFileSync(join(dir, "answers.json"), JSON.stringify(ANSWERS));
   cli(["keygen", "--out", dir]);
   const fromKeygen = read(dir, "manifest-pubkey.txt").trim();
@@ -238,7 +238,7 @@ test("the closing steps no longer tell you to run keygen — you just did", () =
  * shape this failure could take, so the guard is at the prompt, not in the docs.
  */
 test("⭐ `init` refuses a non-terminal stdin instead of exiting 0 with nothing written", () => {
-  const dir = mkdtempSync(join(tmpdir(), "fh-init-stdin-"));
+  const dir = tmpDir("fh-init-stdin-");
   try {
     // `init` needs the signing key before it asks anything, so the refusal under test is
     // the one at the prompts rather than the missing-key guard in front of them.
@@ -281,15 +281,15 @@ test("⭐ `init` refuses a non-terminal stdin instead of exiting 0 with nothing 
  * landed in whatever directory they were standing in, and the command reported success.
  */
 test("⭐ `keygen --dir` writes there, and an unknown option is refused", () => {
-  const dir = mkdtempSync(join(tmpdir(), "fh-keygen-dir-"));
-  const cwd = mkdtempSync(join(tmpdir(), "fh-keygen-cwd-"));
+  const dir = tmpDir("fh-keygen-dir-");
+  const cwd = tmpDir("fh-keygen-cwd-");
   try {
     execFileSync("npx", ["tsx", CLI, "keygen", "--dir", dir], { encoding: "utf8", cwd });
     assert.deepEqual(readdirSync(dir).sort(), ["manifest-key.pem", "manifest-pubkey.txt"]);
     assert.deepEqual(readdirSync(cwd), [], "nothing may be written to the cwd");
 
     // --out still works: it is what the docs and CI have always passed.
-    const alias = mkdtempSync(join(tmpdir(), "fh-keygen-out-"));
+    const alias = tmpDir("fh-keygen-out-");
     execFileSync("npx", ["tsx", CLI, "keygen", "--out", alias], { encoding: "utf8", cwd });
     assert.ok(readdirSync(alias).includes("manifest-key.pem"));
     rmSync(alias, { recursive: true, force: true });
