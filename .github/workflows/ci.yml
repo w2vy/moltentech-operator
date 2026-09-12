@@ -51,8 +51,9 @@ jobs:
           HEAD: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
-          # Only the paths that go INTO the image. A docs-only PR publishes nothing.
-          changed="$(git diff --name-only "$BASE" "$HEAD" -- agent protocol arcane-mage)"
+          # Only the paths that go INTO the image. A docs-only PR publishes nothing — and
+          # publish-fh-agent.yml excludes *.md the same way, so the two agree.
+          changed="$(git diff --name-only "$BASE" "$HEAD" -- agent protocol arcane-mage | grep -v '\.md$' || true)"
           if [ -z "$changed" ]; then
             echo "no image sources touched — no bump needed"
             exit 0

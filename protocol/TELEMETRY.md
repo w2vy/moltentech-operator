@@ -86,7 +86,7 @@ Rules:
 export const AgentEventKind = z.enum([
   "node_expired",      // onDeterministicList true → false between two lifecycle passes
   "node_recovered",    // false → true, or unreachable → reachable
-  "benchmark_failed",  // benchmarkPassed true → false
+  "benchmark_failed",  // benchmark status enters `failed` (a re-running benchmark or a silent node is not an edge)
   "node_unreachable",  // reachable true → false between two stats passes
 ]);
 

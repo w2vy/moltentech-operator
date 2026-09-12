@@ -56,19 +56,30 @@ async function fetchWatchedNodes(cfg: CoalitionConfig, fetchImpl: typeof fetch):
     .filter((n) => n.status && n.collateralTxid);
 }
 
+export type BenchmarkRead = {
+  /** `status` is a tier: what the lifecycle report carries. */
+  passed: boolean;
+  /**
+   * The raw `benchmarking`/`status` word (`CUMULUS`, `running`, `failed`, …), or null when the
+   * node did not answer. `passed` alone cannot tell a failing node from one whose benchmark is
+   * mid-run — the first `benchmark_failed` on prod (2026-09-12) was a re-bench in progress.
+   */
+  status: string | null;
+};
+
 /** Poll one node's Flux benchmark API from outside the operator LAN (hairpin-proof). */
-async function fetchBenchmarkPassed(node: AgentNode, fetchImpl: typeof fetch): Promise<boolean> {
+async function fetchBenchmark(node: AgentNode, fetchImpl: typeof fetch): Promise<BenchmarkRead> {
   const url = `http://${node.host}:${node.apiPort}/benchmark/getbenchmarks`;
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), NODE_TIMEOUT_MS);
   try {
     const res = await fetchImpl(url, { signal: ctrl.signal });
-    if (!res.ok) return false;
+    if (!res.ok) return { passed: false, status: null };
     const json = (await res.json()) as { data?: { benchmarking?: string; status?: string } };
     const benchStatus = json.data?.benchmarking ?? json.data?.status;
-    return !!benchStatus && PASSED_TIERS.has(benchStatus);
+    return { passed: !!benchStatus && PASSED_TIERS.has(benchStatus), status: benchStatus ?? null };
   } catch {
-    return false;
+    return { passed: false, status: null };
   } finally {
     clearTimeout(timer);
   }
@@ -242,9 +253,9 @@ async function postLifecycleReport(
 export async function checkCollateralOnce(cfg: CoalitionConfig, fetchImpl: typeof fetch = fetch): Promise<void> {
   const nodes = await fetchWatchedNodes(cfg, fetchImpl);
   const results = await Promise.all(
-    nodes.map(async (node): Promise<LifecycleNodeStatus> => {
-      const [benchmarkPassed, collateralConfs, onDeterministicList] = await Promise.all([
-        fetchBenchmarkPassed(node, fetchImpl),
+    nodes.map(async (node): Promise<LifecycleNodeStatus & { benchmarkStatus: string | null }> => {
+      const [bench, collateralConfs, onDeterministicList] = await Promise.all([
+        fetchBenchmark(node, fetchImpl),
         getCollateralConfirmations(cfg, node.collateralTxid!, fetchImpl),
         // Same `host:apiPort` this module already polls for benchmarks — the endpoint MT
         // assigned the slot, so it is what the list entry must agree with.
@@ -256,7 +267,7 @@ export async function checkCollateralOnce(cfg: CoalitionConfig, fetchImpl: typeo
           fetchImpl
         ),
       ]);
-      return { vmName: node.vmName, benchmarkPassed, collateralConfs, onDeterministicList };
+      return { vmName: node.vmName, benchmarkPassed: bench.passed, collateralConfs, onDeterministicList, benchmarkStatus: bench.status };
     })
   );
   // Edge-triggered hints (events.ts): a node that left the list or stopped passing since
@@ -264,8 +275,10 @@ export async function checkCollateralOnce(cfg: CoalitionConfig, fetchImpl: typeo
   // verifies from that and its own reads; the event only makes it look sooner.
   const observedAt = new Date().toISOString();
   const events = diffLifecycle(prevLifecycle, results, observedAt);
-  prevLifecycle = new Map(results.map((r) => [r.vmName, { benchmarkPassed: r.benchmarkPassed, onDeterministicList: r.onDeterministicList }]));
-  latest = results;
-  await postLifecycleReport(cfg, results, fetchImpl);
+  prevLifecycle = new Map(results.map((r) => [r.vmName, { benchmarkStatus: r.benchmarkStatus, onDeterministicList: r.onDeterministicList }]));
+  // The wire report is the protocol shape only — `benchmarkStatus` stays Coalition-internal.
+  const report: LifecycleNodeStatus[] = results.map(({ benchmarkStatus: _s, ...r }) => r);
+  latest = report;
+  await postLifecycleReport(cfg, report, fetchImpl);
   await postEvents(cfg, events, fetchImpl);
 }

@@ -26,12 +26,19 @@ import { mtAuthHeaders } from "./coalition-signing";
  *   hub's own sweep is the safety net. No queue, no retry.
  */
 
-export type LifecycleFacts = Pick<LifecycleNodeStatus, "benchmarkPassed" | "onDeterministicList">;
+/**
+ * What one pass remembers per node. `benchmarkStatus` is the raw benchmark word, NOT
+ * `benchmarkPassed`: a pass → not-passed flip is also what a re-running benchmark
+ * (`running`) or a timed-out read (null) looks like, and the first `benchmark_failed` ever
+ * posted to prod (2026-09-12, mt-186-c4) was exactly that — a re-bench in progress, refuted
+ * by the hub minutes later. Only the node's own verdict, `failed`, is an edge.
+ */
+export type LifecycleFacts = Pick<LifecycleNodeStatus, "onDeterministicList"> & { benchmarkStatus: string | null };
 
 /** Compare two lifecycle passes keyed by vmName. Nodes absent from `prev` set a baseline only. */
 export function diffLifecycle(
   prev: ReadonlyMap<string, LifecycleFacts>,
-  cur: readonly LifecycleNodeStatus[],
+  cur: readonly (LifecycleNodeStatus & { benchmarkStatus: string | null })[],
   observedAt: string
 ): AgentEvent[] {
   const out: AgentEvent[] = [];
@@ -43,8 +50,8 @@ export function diffLifecycle(
     } else if (p.onDeterministicList === false && n.onDeterministicList === true) {
       out.push({ kind: "node_recovered", vmName: n.vmName, observedAt, detail: "back on the deterministic list" });
     }
-    if (p.benchmarkPassed && !n.benchmarkPassed) {
-      out.push({ kind: "benchmark_failed", vmName: n.vmName, observedAt, detail: "benchmark no longer reports a supported tier" });
+    if (n.benchmarkStatus === "failed" && p.benchmarkStatus !== "failed") {
+      out.push({ kind: "benchmark_failed", vmName: n.vmName, observedAt, detail: "benchmark reports failed" });
     }
   }
   return out;

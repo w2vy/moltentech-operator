@@ -10,9 +10,10 @@ import { diffLifecycle, diffReachability, postEvents } from "./events";
 import { sampleFromBenchmarks } from "./stats";
 
 const T = "2026-09-12T20:00:00.000Z";
-const L = (vmName: string, onDeterministicList: boolean | null, benchmarkPassed = true) => ({
-  vmName, benchmarkPassed, collateralConfs: 500, onDeterministicList,
+const L = (vmName: string, onDeterministicList: boolean | null, benchmarkStatus: string | null = "CUMULUS") => ({
+  vmName, benchmarkPassed: benchmarkStatus === "CUMULUS", collateralConfs: 500, onDeterministicList, benchmarkStatus,
 });
+const F = (onDeterministicList: boolean | null, benchmarkStatus: string | null = "CUMULUS") => ({ onDeterministicList, benchmarkStatus });
 
 test("first sight of a node is a baseline: no event", () => {
   assert.deepEqual(diffLifecycle(new Map(), [L("a", false)], T), []);
@@ -20,26 +21,32 @@ test("first sight of a node is a baseline: no event", () => {
 });
 
 test("det-list true → false is node_expired; false → true is node_recovered", () => {
-  const prev = new Map([["a", { onDeterministicList: true, benchmarkPassed: true }], ["b", { onDeterministicList: false, benchmarkPassed: true }]]);
+  const prev = new Map([["a", F(true)], ["b", F(false)]]);
   const ev = diffLifecycle(prev, [L("a", false), L("b", true)], T);
   assert.deepEqual(ev.map((e) => [e.vmName, e.kind]), [["a", "node_expired"], ["b", "node_recovered"]]);
   assert.ok(ev.every((e) => e.observedAt === T));
 });
 
 test("null (unreadable) is not an edge in either direction", () => {
-  const prev = new Map([["a", { onDeterministicList: true, benchmarkPassed: true }], ["b", { onDeterministicList: null, benchmarkPassed: true }]]);
+  const prev = new Map([["a", F(true)], ["b", F(null)]]);
   assert.deepEqual(diffLifecycle(prev, [L("a", null), L("b", false)], T), []);
 });
 
 test("a standing condition is reported once — the same state on the next pass is silent", () => {
-  const prev = new Map([["a", { onDeterministicList: false, benchmarkPassed: false }]]);
-  assert.deepEqual(diffLifecycle(prev, [L("a", false, false)], T), []);
+  const prev = new Map([["a", F(false, "failed")]]);
+  assert.deepEqual(diffLifecycle(prev, [L("a", false, "failed")], T), []);
 });
 
-test("benchmark true → false is benchmark_failed; false → true says nothing (the hub sees it in the report)", () => {
-  const prev = new Map([["a", { onDeterministicList: true, benchmarkPassed: true }], ["b", { onDeterministicList: true, benchmarkPassed: false }]]);
-  const ev = diffLifecycle(prev, [L("a", true, false), L("b", true, true)], T);
+test("benchmark entering `failed` is benchmark_failed; leaving it says nothing (the hub sees it in the report)", () => {
+  const prev = new Map([["a", F(true)], ["b", F(true, "failed")]]);
+  const ev = diffLifecycle(prev, [L("a", true, "failed"), L("b", true, "CUMULUS")], T);
   assert.deepEqual(ev.map((e) => [e.vmName, e.kind]), [["a", "benchmark_failed"]]);
+});
+
+test("🔴 a re-running benchmark, or a node that did not answer, is NOT benchmark_failed (prod 2026-09-12)", () => {
+  const prev = new Map([["a", F(true)], ["b", F(true)], ["c", F(true, "running")]]);
+  const ev = diffLifecycle(prev, [L("a", true, "running"), L("b", true, null), L("c", true, "failed")], T);
+  assert.deepEqual(ev.map((e) => [e.vmName, e.kind]), [["c", "benchmark_failed"]]);
 });
 
 test("reachability edges", () => {
@@ -51,8 +58,8 @@ test("reachability edges", () => {
 });
 
 test("every emitted event validates against the wire schema", () => {
-  const prev = new Map([["a", { onDeterministicList: true, benchmarkPassed: true }]]);
-  const events = diffLifecycle(prev, [L("a", false, false)], T);
+  const prev = new Map([["a", F(true)]]);
+  const events = diffLifecycle(prev, [L("a", false, "failed")], T);
   assert.equal(events.length, 2);
   const r = EventReport.safeParse({ schemaVersion: SCHEMA_VERSION, providerSlug: "moltentech", reportedAt: T, events });
   assert.equal(r.success, true, JSON.stringify(r));
