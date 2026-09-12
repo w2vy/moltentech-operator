@@ -42,7 +42,13 @@ export async function ensurePrice(
   const found = await stripe.prices.search({ query: `lookup_key:'${lookupKey}'` });
   if (found.data[0]) return found.data[0].id;
 
-  const product = await stripe.products.create({ name: `Flux Hub ${tier.toUpperCase()} (${slug})` });
+  // IaaS (business use) is the category that matches a rented node; Stripe Tax treats it
+  // as non-taxable in the US, whereas the account default ("General - Electronically
+  // Supplied Services") is taxed like a digital download.
+  const product = await stripe.products.create({
+    name: `Flux Hub ${tier.toUpperCase()} (${slug})`,
+    tax_code: "txcd_10101000",
+  });
   const price = await stripe.prices.create({
     product: product.id,
     unit_amount: priceCents,
