@@ -20,8 +20,13 @@ upgrade to Operator.
   `https://<yourFluxAppName>.app.runonflux.io` — and you chose the app name in Step 1,
   so you can register the webhook before the app is deployed. The examples below use
   `https://coalition-cute-dogs.app.runonflux.io`.
-- *(placeholder — creating a Stripe Product per tier; the Coalition currently
-  materializes the Price from the tier price you declare, so nothing to do here yet)*
+- **You do not create Products or Prices by hand.** The first checkout for a tier makes
+  the Coalition create a Product (`Flux Hub <TIER> (<slug>)`) and a monthly Price from
+  the tier price you declared, keyed by a deterministic `lookup_key`, and reuse them
+  after that. The Product is created in the **Infrastructure as a service (IaaS) -
+  business use** tax category, which is non-taxable in the US. If you see a product
+  under *Preset: General - Electronically Supplied Services* in **Product catalog**, it
+  was created by an older Coalition — open it and set the category to IaaS yourself.
 
 ## 1. Enable Test mode and create a sandbox
 
