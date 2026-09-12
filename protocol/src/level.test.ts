@@ -27,6 +27,7 @@ const CLI = fileURLToPath(new URL("./cli.ts", import.meta.url));
 
 const BASE: Answers = {
   providerSlug: "level-test",
+  vmNamePrefix: "lt-",
   providerName: "Level Test",
   ownerAddress: "t1owner",
   mtBaseUrl: "https://127.0.0.1:1",
@@ -304,4 +305,56 @@ test("⭐ doctor reports both halves of a level that disagrees with what is for 
       `a consistent config must not be flagged: ${configEnv}`
     );
   }
+});
+
+// ── The names are checked BEFORE the upgrade writes anything ─────────────────
+// In-process, so a fake hub can answer `check-names`: the subprocess runs above point
+// MT_BASE_URL at an unreachable port, which is the fail-soft path (a note, no refusal).
+import { runCommand, CliError } from "./cli";
+import type { NameCheckRequest } from "./name-check";
+
+function hubSaying(verdict: (req: NameCheckRequest) => Record<string, unknown>, seen: NameCheckRequest[] = []): typeof fetch {
+  return (async (url: string, init?: RequestInit) => {
+    if (url.endsWith("/api/onboard/check-names")) {
+      const req = JSON.parse(String(init?.body)) as NameCheckRequest;
+      seen.push(req);
+      return new Response(JSON.stringify({ advisory: true, ...verdict(req) }), { status: 200 });
+    }
+    return new Response("nope", { status: 404 });
+  }) as unknown as typeof fetch;
+}
+
+test("⭐ `--set operator` refuses to write when the hub says the prefix is taken — unless --yes", async () => {
+  const dir = scaffoldSupporter();
+  const before = readFileSync(join(dir, "config.env"), "utf8");
+  const seen: NameCheckRequest[] = [];
+  const fetch = hubSaying(() => ({ vmNamePrefix: { value: "lt-", available: false, reason: "taken" } }), seen);
+  const args = ["--dir", dir, "--set", "operator", "--price", "cumulus=25", "--stripe-key", "rk_test_x", "--stripe-webhook", "whsec_x"];
+
+  await assert.rejects(
+    runCommand("level", args, { dir, interactive: false, fetch }),
+    (e: unknown) => e instanceof CliError && /refuses 1 of your names/.test(e.message) && /nothing written/.test(e.message)
+  );
+  assert.equal(readFileSync(join(dir, "config.env"), "utf8"), before, "nothing written");
+  // Asked as the provider it already is, with everything config.env + inventory know.
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0]!.self, "level-test");
+  assert.equal(seen[0]!.vmNamePrefix, "lt-");
+  assert.deepEqual(seen[0]!.vmNames, ["lt-c1"]);
+
+  const code = await runCommand("level", [...args, "--yes"], { dir, interactive: false, fetch });
+  assert.equal(code, 0);
+  assert.match(readFileSync(join(dir, "config.env"), "utf8"), /^PROVIDER_LEVEL=operator$/m);
+});
+
+test("`--dry-run` still shows the hub's verdict, and an available name changes nothing", async () => {
+  const dir = scaffoldSupporter();
+  const before = readFileSync(join(dir, "config.env"), "utf8");
+  const fetch = hubSaying(() => ({ vmNamePrefix: { value: "lt-", available: true } }));
+  const args = ["--dir", dir, "--set", "operator", "--price", "cumulus=25", "--stripe-key", "rk_test_x", "--stripe-webhook", "whsec_x"];
+  const code = await runCommand("level", [...args, "--dry-run"], { dir, interactive: false, fetch });
+  assert.equal(code, 0);
+  assert.equal(readFileSync(join(dir, "config.env"), "utf8"), before);
+  const taken = hubSaying(() => ({ vmNamePrefix: { value: "lt-", available: false, reason: "taken" } }));
+  assert.equal(await runCommand("level", [...args, "--dry-run"], { dir, interactive: false, fetch: taken }), 0, "dry-run never dies");
 });

@@ -16,6 +16,7 @@ import { generateAll, renderReadme, type Answers } from "./scaffold";
 
 const BASE: Answers = {
   providerSlug: "acme-nodes",
+  vmNamePrefix: "ac-",
   providerName: "Acme Nodes",
   ownerAddress: "t1ownerWallet",
   mtBaseUrl: "https://fluxhub.moltentech.us",

@@ -240,7 +240,7 @@ those two comparisons is the one that catches `docker compose pull` without
 # `fh-toolkit`
 
 ```
-fh-toolkit <keygen|init|level|doctor|sign|env|verify> [options]   # one command, then exit
+fh-toolkit <keygen|init|slug|level|doctor|sign|env|verify> [options]   # one command, then exit
 fh-toolkit                                                  # an interactive session
 ```
 
@@ -258,6 +258,7 @@ in your operator directory, `doctor`, `sign` and `env` take no arguments at all.
 |---|---|---|---|
 | `keygen` | make your permanent signing identity | — | `manifest-key.pem`, `manifest-pubkey.txt` |
 | `init` | interview → the whole scaffold, signed | `manifest-key.pem` | 8 files (see below) |
+| `slug` | your slug, VM name prefix and hub — checked with Flux Hub | `config.env` (if any) | `config.env`; re-signs `manifest.json` when present |
 | `level` | show or change Supporter ⇄ Operator | `config.env`, `secrets.env` | those two, and only those |
 | `doctor` | prove every file agrees; optionally prove the live wiring | all of them | — |
 | `sign` | re-sign after a `config.env` edit | `config.env`, key | `manifest.json` |
@@ -369,7 +370,49 @@ fh-toolkit init [--dir <dir>] [--answers <answers.json>] [--force]
 ```
 
 The installation interview. Roughly eight questions, then it writes and **signs** the
-whole scaffold. This is the one command that needs `-i` on the `docker run`.
+whole scaffold. `init` and `slug` are the two commands that need `-i` on the `docker run`.
+
+The questions come in four blocks, in this order: **who you are** (hub, level, slug, VM
+name prefix, display name, owner wallet, Flux app name — the same block `slug` asks on
+its own), **Proxmox** (token, verified against the cluster), **what you sell** (prices and
+Stripe — Operators only), then **your hardware** (hosts, storage, slots). Selling is asked
+before hardware on purpose: each slot picks its tier from the list you priced.
+
+### The first question is which hub
+
+Production or staging — asked **first**, because everything that goes to the network from
+then on has to know which registry it is talking to: the tier floors, and the checks below.
+The two are separate registries with separate floors and separate names.
+
+### Names are checked with Flux Hub as you type them
+
+Your **slug** and your **VM name prefix** are permanent — the hub pins both at first ingest
+— so `init` asks the hub whether each is free at the prompt where you can still change it,
+instead of letting a collision surface as a rejected manifest (or, for a slug someone else
+already holds, as the misleading `pubkey does not match`). A taken or reserved name is
+re-asked on the spot. Your display name, host names and VM names are checked too; a
+look-alike display name is a warning (the hub flags it for an admin), a VM name another
+provider already uses is re-asked.
+
+All of it is **advisory** — nothing is reserved, ingest re-checks and wins — and
+**fail-soft**: if the hub cannot be reached you get one `could not reach … names are
+checked again at ingest` note and the wizard carries on. The `--answers` path makes one
+combined check after validation and prints what it finds, never refusing: it is the
+scripted route, and ingest is the authority.
+
+### The VM name prefix
+
+Every VM name you declare starts with your prefix — `mt-` for `mt-187-c2`. The rule is
+**2–8 lowercase letters/digits, starting with a letter, ending in `-`**, no hyphen inside
+(`mt-c-` would emit names that also start with `mt-`). `fh-` is the Foundation's and is
+refused. The wizard suggests one from your slug's initials and asks the hub whether it is
+free; it lands in `config.env` as `PROVIDER_VM_PREFIX` and in your signed manifest as
+`provider.vmNamePrefix`.
+
+The slot prompts then ask only for the part **after** the prefix — `VM name suffix (after
+"mt-")`, defaulting to `<host>-c<n>` — so a name outside your namespace cannot be typed.
+The hub refuses a new slot whose name is outside the declared prefix; `doctor` reports the
+same thing offline as `VMNAME_OUTSIDE_PREFIX`.
 
 **Run `keygen` first.** `init` requires the key and checks for it **before the first
 question** — it fills `MANIFEST_KEY` in two files from it and pins `MANIFEST_PUBKEY`, and
@@ -422,8 +465,9 @@ Both preconditions fire **before** the first question, which is the point:
   keep sessions alive.
 - **`COALITION_URL`** — derived from the Flux app name you choose
   (`https://<app>.app.runonflux.io`), never asked separately.
-- **Tier minimums** — fetched live from Flux Hub before the prompts, so the wizard quotes
-  the real floor; falls back to the bundled table with a note if FH is unreachable.
+- **Tier minimums** — fetched live from the hub you chose in the first question, so the
+  wizard quotes that hub's floor; falls back to the bundled table with a note if it is
+  unreachable. (`--answers` uses the file's `mtBaseUrl`.)
 
 ### Non-interactive: `--answers`
 
@@ -435,6 +479,7 @@ Shape (see `Answers` in `protocol/src/scaffold.ts` for the full type):
 ```jsonc
 {
   "providerSlug": "acme",           // required
+  "vmNamePrefix": "ac-",            // required — every hosts[].slots[].vmName must start with it
   "providerName": "Acme Hosting",   // required
   "providerLocation": "US-East",    // optional
   "providerContact": "ops@acme.io", // optional
@@ -469,6 +514,42 @@ not expressible. This is unrelated to a *free rental*, which is a rental an admi
 ⚠️ **The signed manifest is a snapshot of `config.env`.** Edit `config.env` afterwards and
 it is stale — `doctor` compares the two and says so, which is what makes signing
 automatically here safe. The fix is `fh-toolkit sign`.
+
+---
+
+## `slug`
+
+```
+fh-toolkit slug [--dir <dir>] [--force]
+```
+
+The **who you are** block of `init`, on its own: which hub, your slug, your VM name prefix,
+your display name — each checked with Flux Hub as you type it, exactly as `init` does.
+Interactive (needs `-i`). Two uses:
+
+- **Before `init`, in an empty directory.** Settle the permanent names with the hub before
+  any hardware is typed in. Writes a `config.env` with the identity filled in and the
+  stock-take (`HOSTS`, `TIER_PRICES_JSON`) blank; `doctor` reads those as not yet filled,
+  and `init --force` fills in the rest (its identity questions default to what you chose).
+- **After `init`, in a scaffolded directory.** Re-check your names, move between staging
+  and production, or fix a display name — without re-answering the whole wizard. Enter
+  keeps each current value; the questions that are not this command's business (owner
+  wallet, location, contact, Flux app name) are skipped when `config.env` already has
+  them. Only the keys that changed are rewritten, the previous file is kept as
+  `config.env.bak`, and when a signed `manifest.json` is present it is **re-signed in
+  place** (the slug, prefix and name are manifest fields) — then re-paste it at
+  `/onboard`. Changing the hub also refreshes `MT_PUBKEY`, which is per-hub.
+
+Same answers as the file already holds → `Nothing to change`, nothing written. That is
+the "just check again" use.
+
+⚠️ **The slug is refused if you try to change it.** It is your identity on the hub; a
+different slug is a *new* provider, not a rename. Keep it (Enter), or pass `--force` if a
+new provider is what you mean.
+
+⚠️ **The prefix is pinned by the hub at first ingest.** `slug` lets you change it in
+`config.env` and warns you when a manifest already exists: if that manifest was ingested,
+the hub will refuse the new prefix — a pinned prefix is a support request to change.
 
 ---
 
@@ -509,6 +590,15 @@ against the live floors), then for your Stripe pair. They are `init`'s own selli
 questions — the same code, so they cannot drift apart. Answer non-interactively with
 `--price cumulus=25 --price nimbus=40 --stripe-key rk_… --stripe-webhook whsec_… --yes`,
 and read the diff first with `--dry-run`.
+
+**Your names are checked with the hub before anything is written.** The diff is followed
+by the hub's verdict on your slug, VM name prefix, display name, hosts and VM names (the
+same check `init` and `doctor` make). A supporter who onboarded before the prefix existed
+reaches the operator level through this command, and the re-ingest it ends with is where
+the hub pins the prefix — so this is the last moment a wrong one is cheap. A name the hub
+refuses stops the upgrade with nothing written; fix it (`slug` for the slug/prefix,
+`data/inventory.json` for a VM name) or pass `--yes` to write anyway. `--dry-run` shows
+the verdict and stops; an unreachable hub is a note, not a refusal.
 
 An empty Stripe answer is fine. The **webhook secret does not exist yet** — it is minted
 when you create the endpoint against your Coalition URL, which is a real wait, and
@@ -594,11 +684,23 @@ next.
 Tier price minimums come from Flux Hub live when `MT_BASE_URL` is reachable, falling back
 to this tool's bundled copy — the minimum is FH's to set.
 
+`doctor` also asks the hub named in `MT_BASE_URL` about your names — slug, VM name
+prefix, display name, hosts and VM names — as the provider you already are, so your own
+registered names never come back as taken. Same fail-soft rule: an unreachable hub is
+counted as an unproven check, never an error.
+
 ### File-level findings
 
 | Rule | What it caught |
 |---|---|
 | `NOT_YET_FILLED` | a placeholder that was never replaced |
+| `VM_PREFIX_NOT_SET` | no `PROVIDER_VM_PREFIX` — the hub will not activate you without one → `slug` |
+| `VM_PREFIX_INVALID` | a prefix the hub refuses (rule: 2–8 lowercase, letter first, ends in `-`) |
+| `VMNAME_OUTSIDE_PREFIX` | an inventory slot whose name does not start with your prefix → the hub refuses it |
+| `SLUG_TAKEN_BY_OTHER` | your slug is registered under a different signing key — ingest will say `pubkey does not match` |
+| `VM_PREFIX_TAKEN` / `VM_PREFIX_RESERVED` | another provider's namespace / the Foundation's `fh-` |
+| `NAME_CONFUSABLE` | your display name looks like an existing provider's (an admin reviews it) |
+| `HOSTNAME_TAKEN` / `VMNAME_TAKEN` | a host or VM name the hub already has under another provider |
 | `MANIFEST_STALE` | `config.env` changed after `manifest.json` was signed → re-run `sign` |
 | `MANIFEST_SIG_INVALID` / `MANIFEST_UNPARSEABLE` | the manifest does not verify, or is not readable |
 | `PRICE_BELOW_FLOOR` | a listed price under FH's per-tier minimum → 422 on listing |
@@ -933,6 +1035,8 @@ store. It is not a middlebox on your network and not a Proxmox certificate probl
 | Situation | Run |
 |---|---|
 | First time, from nothing | `keygen` → `init` → paste `manifest.json` at `/onboard` |
+| Is my slug / VM prefix free? | `slug` (before `init`, or any time after) |
+| Move between staging and production | `slug` → change the hub → `env` → re-import |
 | `/onboard` gave me a key | put it in `secrets.env`, then `doctor` |
 | Everything is filled in — is it right? | `doctor`, then `doctor --check-proxmox --check-stripe` |
 | I edited `config.env` | `sign`, then `env`, then re-import to Flux |

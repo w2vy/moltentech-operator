@@ -23,6 +23,7 @@ const CLI = fileURLToPath(new URL("./cli.ts", import.meta.url));
 
 const ANSWERS = {
   providerSlug: "fills-test",
+  vmNamePrefix: "ft-",
   providerName: "Fills Test Operator",
   ownerAddress: "t1exampleOwnerWalletAddress",
   // Unreachable on purpose: these tests are about local file contents, and no test

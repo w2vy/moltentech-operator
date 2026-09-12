@@ -112,6 +112,7 @@ this as `CFG_INLINE_COMMENT`.
 | Key | Signed? | Notes |
 |---|:--:|---|
 | `PROVIDER_SLUG` | ✅ | permanent — Flux Hub knows you by this |
+| `PROVIDER_VM_PREFIX` | ✅ | your VM-name namespace, e.g. `mt-`; every declared VM name starts with it. Pinned at first ingest — `fh-toolkit slug` checks it is free |
 | `PROVIDER_NAME` | ✅ | |
 | `PROVIDER_LOCATION` / `PROVIDER_CONTACT` / `PROVIDER_DESCRIPTION` | ✅ | optional; omitted when empty |
 | `COALITION_URL` | ✅ | derived from your Flux app name; `https://<app>.app.runonflux.io` |

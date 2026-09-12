@@ -508,6 +508,9 @@ the signed manifest and the Coalition's runtime config, so the two can never dri
 
 ```sh
 PROVIDER_SLUG=your-slug
+# PROVIDER_VM_PREFIX — every VM name you declare starts with this (e.g. mt-). Pinned by
+# Flux Hub at first ingest; changing it later is a support request.
+PROVIDER_VM_PREFIX=ys-
 PROVIDER_NAME=Your Operator Name
 PROVIDER_LOCATION=City, Country
 PROVIDER_CONTACT=ops@example.com
@@ -1168,6 +1171,7 @@ Nothing compares these for you, and each pair has bitten a real onboarding:
 | Value | Appears in | Must equal |
 |---|---|---|
 | `PROVIDER_SLUG` | `config.env`, `.env.operator` | itself, and the slug in the signed manifest |
+| `PROVIDER_VM_PREFIX` | `config.env`, every `vmName` in `inventory.json` | the prefix in the signed manifest; the hub refuses a slot outside it |
 | `MT_BASE_URL` | `config.env`, `.env.operator` | itself — a staging/prod mix leaves you half-onboarded |
 | `OWNER_ADDRESS` | `config.env`, `.env.operator`, your wallet | the address you signed with at `/onboard` |
 | `COALITION_URL` | `config.env`, `.env.operator`, Stripe endpoint | the real Flux app URL |

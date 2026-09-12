@@ -23,6 +23,7 @@ const CLI = fileURLToPath(new URL("./cli.ts", import.meta.url));
 
 const ANSWERS = {
   providerSlug: "fresh-test",
+  vmNamePrefix: "ft-",
   providerName: "Fresh Test",
   ownerAddress: "t1exampleOwnerWalletAddress",
   mtBaseUrl: "https://127.0.0.1:1",

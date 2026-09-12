@@ -13,7 +13,7 @@
  * writes what comes back — so the interactive and non-interactive paths run the exact
  * same generator, and the tests drive the same one the operator does.
  */
-import { ProviderSlug } from "./common";
+import { ProviderSlug, VM_NAME_PREFIX_RULE, VmNamePrefix } from "./common";
 import { FOUNDATION_VM_PREFIX } from "./messages";
 
 import { TIER_FLOORS_CENTS } from "./config-lint";
@@ -53,6 +53,13 @@ export interface HostAnswer {
 
 export interface Answers {
   providerSlug: string;
+  /**
+   * The VM-name namespace, WITH its trailing "-" (e.g. `mt-`). Every `slot.vmName`
+   * starts with it; the hub pins it at first ingest and refuses a later change. Chosen
+   * at the prompt (the wizard composes VM names from it) and REQUIRED on the
+   * `--answers` path, where the names arrive whole and are checked against it.
+   */
+  vmNamePrefix: string;
   providerName: string;
   providerLocation?: string;
   providerContact?: string;
@@ -71,7 +78,7 @@ export interface Answers {
    * Stripe keys are scaffolded.
    *
    * ⚠️ Not selling is an EMPTY price list, never a tier priced at 0 — MT enforces a
-   * per-tier minimum (`TierInfo.minPriceCents`, 700 at the lowest) and 422s anything
+   * per-tier minimum (`TierInfo.minPriceCents`, 250 at the lowest) and 422s anything
    * under it, so a 0 is not expressible.
    *
    * ⚠️ This is NOT what a "free rental" is. That is a rental an admin ASSIGNS to a
@@ -161,6 +168,48 @@ export function slugProblem(slug: string): string | undefined {
 }
 
 /**
+ * The VM-name prefix rule is `VmNamePrefix` (`common.ts`) plus the one policy the
+ * toolkit can check offline: the Foundation's namespace is not for operators. Both
+ * checked at the PROMPT, for the same reason as `slugProblem`: the prefix is pinned by
+ * the hub at first ingest, so a wrong one is expensive after this moment and free now.
+ */
+export function vmNamePrefixProblem(prefix: string): string | undefined {
+  if (!VmNamePrefix.safeParse(prefix).success) {
+    return `"${prefix}" is not a usable VM name prefix — ${VM_NAME_PREFIX_RULE}. It is PERMANENT, pinned at first ingest.`;
+  }
+  if (prefix.toLowerCase().startsWith(FOUNDATION_VM_PREFIX)) {
+    return `"${prefix}" is reserved for Foundation nodes — pick another.`;
+  }
+  return undefined;
+}
+
+/**
+ * A DEFAULT for the prefix prompt, never asserted: the first letter of each word of the
+ * slug, at most three, plus the separator (`acme-cloud` → `ac-`, `moltentech` → `m-`
+ * is too short so `mo-`). The hub decides whether it is free; this only saves typing.
+ */
+export function suggestVmNamePrefix(providerSlug: string): string {
+  const words = providerSlug.split("-").filter(Boolean);
+  let letters = words.map((w) => w[0]!).join("").slice(0, 3);
+  if (letters.length < 2) letters = providerSlug.replace(/-/g, "").slice(0, 2);
+  if (!/^[a-z]/.test(letters)) letters = `x${letters}`.slice(0, 3);
+  return `${letters}-`;
+}
+
+/** `${prefix}${suffix}` — spelled out so every caller composes a VM name the same way. */
+export function composeVmName(prefix: string, suffix: string): string {
+  return `${prefix}${suffix}`;
+}
+
+/**
+ * The suffix the wizard offers for slot N on a host: `<host>-c<N>`, today's `mt-187-c2`
+ * shape. The prefix goes in front, so the operator types only what is theirs to choose.
+ */
+export function defaultVmNameSuffix(hostName: string, slotNumber: number): string {
+  return `${hostName}-c${slotNumber}`;
+}
+
+/**
  * A plain IPv4 address — the shape a WAN IP and a full LAN address have to be.
  *
  * Checked at the PROMPT, not only in `validateAnswers`: a hostname or a typo'd octet
@@ -201,6 +250,8 @@ export function validateAnswers(
   const errs: string[] = [];
   const slugErr = slugProblem(a.providerSlug);
   if (slugErr) errs.push(`providerSlug ${slugErr}`);
+  const prefixErr = a.vmNamePrefix ? vmNamePrefixProblem(a.vmNamePrefix) : "is required — every VM name starts with it.";
+  if (prefixErr) errs.push(`vmNamePrefix ${prefixErr}`);
   if (!a.providerName) errs.push("providerName is required.");
   if (!a.ownerAddress) errs.push("ownerAddress is required — it is baked into the bytes signed at /onboard.");
   if (!/^https:\/\//.test(a.mtBaseUrl)) errs.push(`mtBaseUrl "${a.mtBaseUrl}" must be an https URL.`);
@@ -217,6 +268,11 @@ export function validateAnswers(
       }
       if (minimums[s.tier] == null) errs.push(`slot ${s.vmName}: unknown tier "${s.tier}".`);
       if (seenVmNames.has(s.vmName)) errs.push(`duplicate vmName "${s.vmName}".`);
+      // The hub refuses a name outside the declared namespace at ingest; the --answers
+      // path supplies whole names, so this is where that rule meets them.
+      if (!prefixErr && !s.vmName.toLowerCase().startsWith(a.vmNamePrefix)) {
+        errs.push(`slot ${s.vmName}: vmName must start with the VM name prefix "${a.vmNamePrefix}".`);
+      }
       seenVmNames.add(s.vmName);
       if (!Number.isInteger(s.apiPort)) errs.push(`slot ${s.vmName}: apiPort must be an integer.`);
     }
@@ -332,6 +388,12 @@ export function renderConfigEnv(a: Answers): string {
     "# Comments live on their own line: everything after `=` is part of the value.",
     "",
     `PROVIDER_SLUG=${a.providerSlug}`,
+    // ALWAYS emitted, beside the slug it is pinned with. Both are permanent after the
+    // first ingest; a config.env from before this key existed reads as "not set" and
+    // `doctor` says so, rather than the hub refusing to Activate with no local hint.
+    "# PROVIDER_VM_PREFIX — every VM name you declare starts with this (e.g. mt-). Pinned by",
+    "# Flux Hub at first ingest; changing it later is a support request.",
+    `PROVIDER_VM_PREFIX=${a.vmNamePrefix}`,
     `PROVIDER_NAME=${a.providerName}`,
   ];
   if (a.providerLocation) lines.push(`PROVIDER_LOCATION=${a.providerLocation}`);
