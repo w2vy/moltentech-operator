@@ -366,6 +366,7 @@ jobs:
           cat > "$work/answers.json" <<'ANSWERS'
           {
             "providerSlug": "ci-selfhost",
+            "vmNamePrefix": "ci-",
             "providerName": "CI Self Host",
             "ownerAddress": "t1exampleOwnerWalletAddress",
             "mtBaseUrl": "https://fluxhub.moltentech.us",
