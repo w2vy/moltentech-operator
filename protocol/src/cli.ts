@@ -55,11 +55,15 @@ import { createInterface, type Interface } from "node:readline/promises";
 import { ProviderManifest, ProviderManifestBody, unwrapManifest } from "./manifest";
 import {
   planLevelChange,
+  planSellingChange,
   readLevel,
   readTierPrices,
   readEnvValue,
   upsertEnvLine,
+  readListing,
+  mergeListing,
   type Level,
+  type LevelChange,
 } from "./level-change";
 import { renderManifestBodyFromConfig, parseConfigEnv } from "./manifest-config";
 import { checkNames, describeNameFindings, type NameCheckRequest, type NameCheckResponse } from "./name-check";
@@ -110,6 +114,10 @@ import {
   needsMtPubkey,
   slotCountsByTier,
   validateAnswers,
+  validateHosts,
+  renderEnvOperator,
+  renderSecretsEnv,
+  renderInventoryJson,
   resolvedPrices,
   hasPaidTier,
   coalitionUrlFor,
@@ -682,7 +690,14 @@ export interface ProxmoxAnswers {
 }
 
 /** The Proxmox token block: asked, verified against the cluster, `skip`-able. */
-export async function askProxmox(ask: Ask): Promise<ProxmoxAnswers> {
+export interface ProxmoxDefaults {
+  url?: string;
+  tokenId?: string;
+  /** The current secret, when re-running over an existing .env.operator. Never echoed. */
+  tokenSecret?: string;
+}
+
+export async function askProxmox(ask: Ask, defaults: ProxmoxDefaults = {}): Promise<ProxmoxAnswers> {
   // Step 0.1 has already produced these by the time init runs, and leaving them for
   // later meant the agent could not make a single Proxmox call until the operator
   // hand-edited .env.operator. Asked, not derived — init holds no cluster to ask.
@@ -706,9 +721,9 @@ export async function askProxmox(ask: Ask): Promise<ProxmoxAnswers> {
   // at the retry prompt, so going on without a verified token is a decision rather than
   // the path of least resistance.
   console.log("\nProxmox API token (onboarding Step 0.1):");
-  let proxmoxUrl = "";
-  let proxmoxTokenId = "";
-  let proxmoxTokenSecret = "";
+  let proxmoxUrl = defaults.url ?? "";
+  let proxmoxTokenId = defaults.tokenId ?? "";
+  let proxmoxTokenSecret = defaults.tokenSecret ?? "";
   let survey: ProxmoxSurvey | undefined;
   for (;;) {
     proxmoxUrl = await ask(
@@ -725,7 +740,9 @@ export async function askProxmox(ask: Ask): Promise<ProxmoxAnswers> {
     // defaults in brackets, and a retry loop would then print the token secret to the
     // terminal on every round. Enter re-uses it without showing it.
     const secretPrompt = proxmoxTokenSecret
-      ? "  PROXMOX_TOKEN_SECRET (Enter keeps the one you typed)"
+      ? defaults.tokenSecret && proxmoxTokenSecret === defaults.tokenSecret
+        ? "  PROXMOX_TOKEN_SECRET (Enter keeps the current one)"
+        : "  PROXMOX_TOKEN_SECRET (Enter keeps the one you typed)"
       : "  PROXMOX_TOKEN_SECRET (printed once when you created it)";
     proxmoxTokenSecret = (await ask(secretPrompt)) || proxmoxTokenSecret;
 
@@ -789,15 +806,25 @@ export async function askHosts(
     minimums: Record<string, number>;
     survey: ProxmoxSurvey | undefined;
     hub: HubNames;
+    /**
+     * The inventory as it stands, when `fh-toolkit inventory` re-runs over an existing
+     * file: every prompt defaults to the current answer, in order, so an unchanged
+     * stock-take is Enter all the way through and a one-host change is one typed line.
+     */
+    current?: HostAnswer[];
   }
 ): Promise<HostAnswer[]> {
-  const { prefix, tiers, minimums, survey, hub } = input;
+  const { prefix, tiers, minimums, survey, hub, current = [] } = input;
   const vmSuffixProblem = vmSuffixProblemFor(prefix);
   console.log("\nNow your hardware. Everything above was about you; this is a stock-take.");
   const hosts: HostAnswer[] = [];
   // Defaulted to what the cluster actually reports, so the names cannot be mistyped
-  // and an operator who forgot a node sees it listed.
-  const hostNames = (await ask("Proxmox host name(s), comma-separated", survey?.nodes.join(",")))
+  // and an operator who forgot a node sees it listed. A file being re-run wins over the
+  // survey: its names are the ones the hub already knows.
+  const hostNames = (await ask(
+    "Proxmox host name(s), comma-separated",
+    current.length > 0 ? current.map((h) => h.name).join(",") : survey?.nodes.join(",")
+  ))
     .split(",")
     .map((s) => s.trim())
     .filter(Boolean);
@@ -817,6 +844,9 @@ export async function askHosts(
 
   for (const name of hostNames) {
     console.log(`\n— host ${name} —`);
+    // Re-run defaults: this host's current entry; its slots are consumed in order below.
+    const was = current.find((h) => h.name === name);
+    const wasSlots = was?.slots ?? [];
     // The highest-value question in the list: a spinning-disk default wastes an entire
     // provision + benchmark cycle and reports NO cause. When the probe answered, the
     // safe options are printed and the default is one of them — the operator has to go
@@ -846,7 +876,7 @@ export async function askHosts(
     const storageImages = await askUntil(
       `  storage pool for VM images on ${name} (must be SSD)`,
       (v) => storageContentProblem(v, options, "images"),
-      ssd[0]?.id
+      was?.storageImages ?? ssd[0]?.id
     );
     const chosen = options.find((o) => o.id === storageImages);
     if (chosen?.rotational === true) {
@@ -866,10 +896,13 @@ export async function askHosts(
     const storageIso = await askUntil(
       `  storage holding the ArcaneOS ISO on ${name}`,
       (v) => (v ? storageContentProblem(v, options, "iso") : "name the storage that holds the ArcaneOS ISO."),
-      iso[0]?.id
+      was?.storageIso ?? iso[0]?.id
     );
 
-    const capacity = Math.max(1, Math.trunc(Number(await ask(`  how many node slots does ${name} support?`, "1"))) || 1);
+    const capacity = Math.max(
+      1,
+      Math.trunc(Number(await ask(`  how many node slots does ${name} support?`, String(wasSlots.length || 1)))) || 1
+    );
 
     // ── Slots, grouped by WAN IP ────────────────────────────────────────────────
     // A host is not one public address. pve40 fronts several, and each WAN IP carries
@@ -878,20 +911,31 @@ export async function askHosts(
     // the same address got retyped for every node on it, and Flux refuses a duplicated
     // WAN IP + port pair with an error that names neither.
     const slots: SlotAnswer[] = [];
+    const nextWas = (): SlotAnswer | undefined => wasSlots[slots.length];
     while (slots.length < capacity) {
+      // ⚠️ `ask` returns the default for an empty answer, so "blank = done" needs an
+      // explicit word once a default is offered. `done` is accepted either way.
+      const wasWan = nextWas()?.ipAddress;
       const ipAddress = await askUntil(
-        `  WAN IP (blank when done — ${slots.length}/${capacity} placed)`,
-        (v) => (v === "" || isIPv4(v) ? undefined : `"${v}" is not an IPv4 address. Flux needs the address itself, not a hostname.`),
-        ""
-      );
+        wasWan
+          ? `  WAN IP (\`done\` when finished — ${slots.length}/${capacity} placed)`
+          : `  WAN IP (blank when done — ${slots.length}/${capacity} placed)`,
+        (v) => (v === "" || v === "done" || isIPv4(v) ? undefined : `"${v}" is not an IPv4 address. Flux needs the address itself, not a hostname.`),
+        wasWan ?? ""
+      ).then((v) => (v === "done" ? "" : v));
       if (!ipAddress) break;
 
       // ⭐ ONE answer for the whole LAN: gateway AND prefix. Asked separately, the prefix
       // is what gets left off a lanIp — and a bare lanIp silently becomes /32, so the
       // node boots with no route out and is reachable by nobody.
       let net: LanNetwork | undefined;
+      const wasNet = ((): string | undefined => {
+        const w = nextWas();
+        if (!w?.gateway || !/\/\d{1,2}$/.test(w.lanIp)) return undefined;
+        return `${w.gateway}${w.lanIp.slice(w.lanIp.lastIndexOf("/"))}`;
+      })();
       while (!net) {
-        const answer = await ask("    LAN gateway WITH prefix, e.g. 192.168.87.1/24", lastNetwork);
+        const answer = await ask("    LAN gateway WITH prefix, e.g. 192.168.87.1/24", wasNet ?? lastNetwork);
         try {
           net = parseLanNetwork(answer);
           lastNetwork = answer;
@@ -926,7 +970,12 @@ export async function askHosts(
         // The port prompt doubles as the "another node behind this WAN IP?" question, so
         // the common answer — Enter, take the next port — costs one keystroke, and moving
         // on costs one word.
-        const portAnswer = await ask(`    Flux API port (Enter, or 'next' for the next WAN IP)`, String(nextPort));
+        // Re-run: the current slot's port when it is still on this WAN IP and free; `next`
+        // when the current file moves to another WAN IP here.
+        const w = nextWas();
+        const wasPort =
+          w === undefined ? undefined : w.ipAddress === ipAddress && !used.has(w.apiPort) ? String(w.apiPort) : "next";
+        const portAnswer = await ask(`    Flux API port (Enter, or 'next' for the next WAN IP)`, wasPort ?? String(nextPort));
         if (portAnswer.toLowerCase() === "next") break;
         const apiPort = Number(portAnswer);
         if (!isFluxApiPort(apiPort)) {
@@ -952,18 +1001,21 @@ export async function askHosts(
         const tier = await askUntil(
           `      tier (${allowed.join("/")})`,
           (v) => (allowed.includes(v) ? undefined : `"${v}" is not one of: ${allowed.join(", ")}.`),
-          allowed[0]
+          w && allowed.includes(w.tier) ? w.tier : allowed[0]
         );
         // Only the part after the prefix is typed: the namespace is fixed, so a name
         // outside it is not a mistake the prompt can make. Validated on the WHOLE name.
         const vmName = await askUntil(
           `      VM name suffix (after "${prefix}")`,
           (v) => vmSuffixProblem(v, slots, hosts),
-          defaultVmNameSuffix(name, slots.length + 1)
+          w && w.vmName.toLowerCase().startsWith(prefix) ? w.vmName.slice(prefix.length) : defaultVmNameSuffix(name, slots.length + 1)
         ).then((v) => composeVmName(prefix, v));
         let lanIp = "";
         while (!lanIp) {
-          const answer = await ask(`      LAN address — host number (e.g. 5 for ${net.base}5) or a full IP`);
+          const answer = await ask(
+            `      LAN address — host number (e.g. 5 for ${net.base}5) or a full IP`,
+            w?.lanIp.split("/")[0]
+          );
           try {
             lanIp = slotLanIp(answer, net);
           } catch (e) {
@@ -973,7 +1025,7 @@ export async function askHosts(
         // Per slot, defaulted to the host's pool. Almost always the default — but a host
         // with two SSD pools has no other way to say which node lands where, and the
         // agent already honours `slot.storagePool ?? host.storageImages`.
-        const storagePool = await ask("      storage pool (SSD)", storageImages);
+        const storagePool = await ask("      storage pool (SSD)", w?.storagePool ?? storageImages);
         console.log(
           `    → ${lanIp}, gateway ${net.gateway}, WAN ${ipAddress}, API port ${apiPort}, storage ${storagePool}`
         );
@@ -1172,6 +1224,215 @@ const BODY_TEMPLATE = {
   trustedSelfClaim: false,
 };
 
+
+// ── Shared by the per-file commands (proxmox / stripe / inventory) and `level` ──────────
+
+/** Everything the per-file commands read from an operator directory. */
+interface OperatorDir {
+  dir: string;
+  configPath: string;
+  configText: string;
+  env: Record<string, string>;
+  secretsPath: string;
+  secretsText: string | undefined;
+  operatorPath: string;
+  operatorText: string | undefined;
+  inventoryPath: string;
+  inventoryText: string | undefined;
+  /** Declared slots per tier from data/inventory.json; `availableSlots` derives from it. */
+  slotCounts: Record<string, number>;
+  /** data/inventory.json as `HostAnswer`s, for re-run defaults. Empty when absent or unreadable. */
+  currentHosts: HostAnswer[];
+}
+
+/**
+ * The stock-take as the file on disk has it. Tolerant of the fields the agent ignores
+ * and of an older hand-written layout: a row the wizard cannot re-offer as a default is
+ * simply not offered, never a refusal — `doctor` is the linter.
+ */
+function hostsFromInventory(inventoryText: string): HostAnswer[] {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(inventoryText);
+  } catch {
+    return [];
+  }
+  const rows = normalizeInventory(raw) ?? [];
+  const hosts: HostAnswer[] = [];
+  for (const r of rows as Array<Record<string, unknown>>) {
+    if (typeof r.name !== "string") continue;
+    const slots: SlotAnswer[] = [];
+    for (const sl of (Array.isArray(r.slots) ? r.slots : []) as Array<Record<string, unknown>>) {
+      if (typeof sl.vmName !== "string" || typeof sl.tier !== "string") continue;
+      slots.push({
+        tier: sl.tier,
+        vmName: sl.vmName,
+        ipAddress: typeof sl.ipAddress === "string" ? sl.ipAddress : "",
+        lanIp: typeof sl.lanIp === "string" ? sl.lanIp : "",
+        gateway: typeof sl.gateway === "string" ? sl.gateway : "",
+        apiPort: typeof sl.apiPort === "number" ? sl.apiPort : 0,
+        ...(typeof sl.network === "string" && sl.network !== r.network ? { network: sl.network } : {}),
+        ...(typeof sl.storagePool === "string" && sl.storagePool !== r.storageImages ? { storagePool: sl.storagePool } : {}),
+      });
+    }
+    hosts.push({
+      name: r.name,
+      ...(typeof r.nodeName === "string" && r.nodeName !== r.name ? { nodeName: r.nodeName } : {}),
+      ...(typeof r.network === "string" ? { network: r.network } : {}),
+      storageImages: typeof r.storageImages === "string" ? r.storageImages : "",
+      storageIso: typeof r.storageIso === "string" ? r.storageIso : "",
+      slots,
+    });
+  }
+  return hosts;
+}
+
+function readOperatorDir(cmd: string, dir: string): OperatorDir {
+  const configPath = join(dir, "config.env");
+  if (!existsSync(configPath)) {
+    die(`${configPath} not found — run \`fh-toolkit slug\` first (or \`init\`), or pass --dir.`);
+  }
+  const configText = readFileSync(configPath, "utf8");
+  const secretsPath = join(dir, "secrets.env");
+  const operatorPath = join(dir, ".env.operator");
+  const inventoryPath = join(dir, "data", "inventory.json");
+  const inventoryText = existsSync(inventoryPath) ? readFileSync(inventoryPath, "utf8") : undefined;
+  const currentHosts = inventoryText !== undefined ? hostsFromInventory(inventoryText) : [];
+  const slotCounts: Record<string, number> = {};
+  for (const h of currentHosts) for (const sl of h.slots) slotCounts[sl.tier] = (slotCounts[sl.tier] ?? 0) + 1;
+  void cmd;
+  return {
+    dir,
+    configPath,
+    configText,
+    env: parseConfigEnv(configText),
+    secretsPath,
+    secretsText: existsSync(secretsPath) ? readFileSync(secretsPath, "utf8") : undefined,
+    operatorPath,
+    operatorText: existsSync(operatorPath) ? readFileSync(operatorPath, "utf8") : undefined,
+    inventoryPath,
+    inventoryText,
+    slotCounts,
+    currentHosts,
+  };
+}
+
+/**
+ * The identity half of `Answers`, read back out of config.env — what the per-file
+ * renderers need when they run without the wizard's answers in hand.
+ */
+function answersFromConfig(od: OperatorDir, hosts: HostAnswer[] = []): Answers {
+  const env = od.env;
+  const appName = env.COALITION_URL?.match(/^https:\/\/([^./]+)\.app\.runonflux\.io\/?$/)?.[1];
+  return {
+    providerSlug: env.PROVIDER_SLUG ?? "",
+    vmNamePrefix: env.PROVIDER_VM_PREFIX ?? "",
+    providerName: env.PROVIDER_NAME ?? "",
+    providerLocation: env.PROVIDER_LOCATION || undefined,
+    providerContact: env.PROVIDER_CONTACT || undefined,
+    ownerAddress: env.OWNER_ADDRESS ?? "",
+    mtBaseUrl: env.MT_BASE_URL ?? "",
+    fluxAppName: appName ?? "",
+    mtPubkey: env.MT_PUBKEY || undefined,
+    hosts,
+    level: readLevel(od.configText),
+    tierPricesCents: readTierPrices(od.configText),
+  };
+}
+
+/** Write `after` over `path`, keeping the previous bytes as `.bak`. Returns whether anything changed. */
+function writeWithBackup(path: string, before: string | undefined, after: string, mode = 0o600): boolean {
+  if (before === after) return false;
+  if (before !== undefined) writeFileSync(`${path}.bak`, before, { mode });
+  writeFileSync(path, after, { mode });
+  return true;
+}
+
+/**
+ * Re-sign manifest.json in place after a manifest FIELD changed in config.env, when the
+ * key is here; otherwise say that the manifest is stale. Shared by `slug` and
+ * `inventory`, the two commands whose edits would otherwise go stale silently.
+ */
+function resignAfterConfigChange(dir: string, configText: string, wrote: string[]): void {
+  const manifestPath = join(dir, "manifest.json");
+  const keyPath = join(dir, "manifest-key.pem");
+  if (!existsSync(manifestPath)) return;
+  if (existsSync(keyPath)) {
+    const manifest = signManifestFromConfig(configText, readFileSync(keyPath, "utf8"));
+    writeFileSync(`${manifestPath}.bak`, readFileSync(manifestPath, "utf8"), { mode: 0o600 });
+    writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + "\n", { mode: 0o600 });
+    wrote.push("manifest.json (re-signed)");
+  } else {
+    console.log(`\n⚠ ${manifestPath} is now stale and ${keyPath} is not here to re-sign it — run \`fh-toolkit sign\` where the key is.`);
+  }
+}
+
+/**
+ * `--price <tier>=<dollars>`, repeatable, in DOLLARS — the scripted twin of the price
+ * prompts, spelled the same way for `level` and `stripe`.
+ */
+function parsePriceFlags(args: string[]): Record<string, number> {
+  const cliPrices: Record<string, number> = {};
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] !== "--price") continue;
+    const spec = args[i + 1];
+    if (!spec || !spec.includes("=")) die("--price takes <tier>=<dollars>, e.g. --price cumulus=25");
+    const [tier, dollars] = spec.split("=", 2) as [string, string];
+    if (!/^\$?\d+(\.\d{1,2})?$/.test(dollars.trim())) {
+      die(`--price ${tier}: "${dollars}" is not an amount in dollars.`);
+    }
+    cliPrices[tier] = Math.round(Number(dollars.replace("$", "")) * 100);
+  }
+  return cliPrices;
+}
+
+/** Below-floor and unknown-tier prices are refused BEFORE anything is written. */
+function refuseBadPrices(cliPrices: Record<string, number>, minimums: Record<string, number>): void {
+  for (const [tier, cents] of Object.entries(cliPrices)) {
+    const floor = minimums[tier];
+    if (floor === undefined) die(`--price ${tier}: unknown tier. Flux Hub knows ${Object.keys(minimums).join(", ")}.`);
+    if (cents < floor) {
+      die(
+        `--price ${tier}: $${(cents / 100).toFixed(2)} is below the $${(floor / 100).toFixed(2)} ` +
+          "floor Flux Hub enforces. Nothing was written."
+      );
+    }
+  }
+}
+
+/** Print a selling plan the way `level` always has: one line per edit, warnings after. */
+function printPlan(plan: LevelChange): void {
+  for (const e of plan.configEdits) console.log(`  config.env    ${e}`);
+  for (const e of plan.secretsEdits) console.log(`  secrets.env   ${e}`);
+  for (const e of plan.operatorEdits) console.log(`  .env.operator ${e}`);
+  for (const w of plan.warnings) console.log(`\n  ⚠️  ${w}`);
+}
+
+/** Apply a plan to disk — backups first — and report which files changed. */
+function applyPlan(od: OperatorDir, plan: LevelChange): string[] {
+  const wrote: string[] = [];
+  if (writeWithBackup(od.configPath, od.configText, plan.configText)) wrote.push("config.env");
+  if (writeWithBackup(od.secretsPath, od.secretsText, plan.secretsText)) wrote.push("secrets.env");
+  if (plan.operatorText !== undefined && writeWithBackup(od.operatorPath, od.operatorText, plan.operatorText)) {
+    wrote.push(".env.operator");
+  }
+  return wrote;
+}
+
+/**
+ * A fresh secrets.env for `stripe` to add its block to: the same skeleton `init`
+ * writes, with MANIFEST_KEY from the key on disk and a generated SESSION_SECRET.
+ */
+function freshSecretsEnv(od: OperatorDir): string {
+  const keyPath = join(od.dir, "manifest-key.pem");
+  const manifestKey = existsSync(keyPath) ? Buffer.from(readFileSync(keyPath, "utf8"), "utf8").toString("base64") : undefined;
+  return renderSecretsEnv(answersFromConfig(od), {
+    includeStripe: false,
+    manifestKey,
+    sessionSecret: randomBytes(32).toString("hex"),
+  });
+}
+
 export async function runCommand(cmd: string | undefined, args: string[], ctx: Ctx): Promise<number> {
   switch (cmd) {
     case "coalition-keygen": {
@@ -1357,6 +1618,303 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
       for (const [key, from, to] of changes) console.log(`  ${key}: ${from ?? "(unset)"} → ${to}`);
       if (manifestFields) {
         console.log(`\nNext: paste manifest.json at ${id.mtBaseUrl}/onboard and sign with your owner wallet.`);
+      }
+      return 0;
+    }
+    case "proxmox": {
+      // The Proxmox block of `init`, on its own: the three PROXMOX_* credentials in
+      // .env.operator — the AGENT's file, the only one the agent reads. Before `init`
+      // it renders a fresh .env.operator from config.env's identity (storage lines blank
+      // until `inventory`); afterwards it patches the three lines in place. The token
+      // is probed here, where the operator can fix it, exactly as `init` does.
+      rejectUnknownFlags("proxmox", args, ["--dir", "--url", "--token-id", "--token-secret"], ["--no-probe", "--yes"]);
+      const od = readOperatorDir("proxmox", dirFlag(args));
+      const opEnv = od.operatorText !== undefined ? parseConfigEnv(od.operatorText) : {};
+      const yes = args.includes("--yes");
+
+      let url: string;
+      let tokenId: string;
+      let tokenSecret: string;
+      const flagUrl = flag(args, "--url");
+      if (flagUrl !== undefined || flag(args, "--token-id") !== undefined || flag(args, "--token-secret") !== undefined) {
+        // Scripted: every flag is optional and the current file fills the gaps.
+        url = flagUrl ?? opEnv.PROXMOX_URL ?? "";
+        tokenId = flag(args, "--token-id") ?? opEnv.PROXMOX_TOKEN_ID ?? "";
+        tokenSecret = flag(args, "--token-secret") ?? opEnv.PROXMOX_TOKEN_SECRET ?? "";
+        if (!url || !tokenId || !tokenSecret) die("--url, --token-id and --token-secret are all needed (or already in .env.operator).");
+        if (!args.includes("--no-probe")) {
+          console.log("Verifying the token…");
+          const probe = await probeProxmox({ url, tokenId, tokenSecret });
+          console.log(formatProbe(probe.checks));
+          if (!probe.ok && !yes) die("the token did not verify — nothing written. Fix it, or pass --yes to write it anyway.");
+        }
+      } else {
+        console.log(
+          od.operatorText !== undefined
+            ? `fh-toolkit proxmox — ${od.operatorPath} exists; Enter keeps each current value.\n`
+            : "fh-toolkit proxmox — the agent's Proxmox credentials; `inventory` adds the hosts.\n"
+        );
+        const p = await withPrompts(ctx, (ask) =>
+          askProxmox(ask, { url: opEnv.PROXMOX_URL, tokenId: opEnv.PROXMOX_TOKEN_ID, tokenSecret: opEnv.PROXMOX_TOKEN_SECRET })
+        );
+        ({ proxmoxUrl: url, proxmoxTokenId: tokenId, proxmoxTokenSecret: tokenSecret } = p);
+        if (!url) {
+          console.log("nothing written.");
+          return 0;
+        }
+      }
+
+      const wrote: string[] = [];
+      if (od.operatorText === undefined) {
+        // Fresh: the whole file, from the identity in config.env. MANIFEST_KEY/PUBKEY come
+        // from the key when it is here, as `init` fills them; `keygen` fills them later otherwise.
+        const keyPath = join(od.dir, "manifest-key.pem");
+        const keyPem = existsSync(keyPath) ? readFileSync(keyPath, "utf8") : undefined;
+        let manifestPubkey: string | undefined;
+        try {
+          manifestPubkey = keyPem ? publicKeyBase64FromPrivate(importPrivateKeyPem(keyPem)) : undefined;
+        } catch {
+          manifestPubkey = undefined;
+        }
+        let text = renderEnvOperator(answersFromConfig(od, od.currentHosts), {
+          url,
+          tokenId,
+          tokenSecret,
+          manifestKey: keyPem ? Buffer.from(keyPem, "utf8").toString("base64") : undefined,
+          manifestPubkey,
+        });
+        // COALITION_URL is copied verbatim when it is not the derivable shape.
+        if (od.env.COALITION_URL && !od.env.COALITION_URL.match(/^https:\/\/([^./]+)\.app\.runonflux\.io\/?$/)) {
+          text = upsertEnvLine(text, "COALITION_URL", od.env.COALITION_URL);
+        }
+        mkdirSync(od.dir, { recursive: true });
+        writeFileSync(od.operatorPath, text, { mode: 0o600 });
+        wrote.push(".env.operator");
+        console.log(`\nWrote ${od.operatorPath}.`);
+        if (od.currentHosts.length === 0) {
+          console.log("PROXMOX_STORAGE_IMAGES/ISO are blank until you declare hosts: fh-toolkit inventory");
+        }
+        return 0;
+      }
+      let text = od.operatorText;
+      const changes: string[] = [];
+      for (const [key, to] of [["PROXMOX_URL", url], ["PROXMOX_TOKEN_ID", tokenId], ["PROXMOX_TOKEN_SECRET", tokenSecret]] as const) {
+        if ((opEnv[key] ?? "") === to) continue;
+        text = upsertEnvLine(text, key, to);
+        changes.push(key === "PROXMOX_TOKEN_SECRET" ? `${key}: (changed)` : `${key}: ${opEnv[key] ?? "(unset)"} → ${to}`);
+      }
+      if (changes.length === 0) {
+        console.log("\nNothing to change — .env.operator already says exactly this.");
+        return 0;
+      }
+      writeWithBackup(od.operatorPath, od.operatorText, text);
+      console.log("\nWrote .env.operator (previous version kept as .env.operator.bak)");
+      for (const c of changes) console.log(`  ${c}`);
+      console.log("\nThe agent reads .env.operator ONLY at start:");
+      console.log("  docker compose up -d --force-recreate    ← `docker restart` does NOT reload it");
+      return 0;
+    }
+    case "stripe": {
+      // What you SELL: tier prices (config.env), the listing the agent asserts
+      // (.env.operator) and the Stripe pair (secrets.env) — the selling block of `init`,
+      // and the same three files `level --set operator` writes, minus the level itself.
+      // Use it to price a tier, change a price, or paste the webhook secret once Stripe
+      // has minted it. The level is reported, never changed here.
+      rejectUnknownFlags("stripe", args, ["--dir", "--price", "--stripe-key", "--stripe-webhook"], ["--dry-run", "--yes"]);
+      const od = readOperatorDir("stripe", dirFlag(args));
+      const dryRun = args.includes("--dry-run");
+      const yes = args.includes("--yes");
+      const hubBaseUrl = od.env.MT_BASE_URL;
+      const minimums = (await cachedTierMinimums(ctx, hubBaseUrl ?? PRODUCTION_BASE_URL)) ?? TIER_FLOORS_CENTS;
+
+      const cliPrices = parsePriceFlags(args);
+      refuseBadPrices(cliPrices, minimums);
+      const cliStripe = { secretKey: flag(args, "--stripe-key"), webhookSecret: flag(args, "--stripe-webhook") };
+
+      let askedPrices: Record<string, number> | undefined;
+      let askedStripe: { secretKey?: string; webhookSecret?: string } | undefined;
+      const scripted = Object.keys(cliPrices).length > 0 || cliStripe.secretKey !== undefined || cliStripe.webhookSecret !== undefined;
+      if (!scripted && !yes) {
+        await withPrompts(ctx, async (ask, askUntil) => {
+          const have = readTierPrices(od.configText);
+          console.log(
+            Object.keys(have).length > 0
+              ? `fh-toolkit stripe — currently for sale: ${Object.entries(have).map(([t, c]) => `${t} $${(c / 100).toFixed(2)}`).join(", ")}\n`
+              : "fh-toolkit stripe — the same questions `init` asks a seller.\n"
+          );
+          const selling = await askSellingAnswers(ask, askUntil, minimums);
+          askedPrices = selling.tierPricesCents;
+          askedStripe = {
+            secretKey: selling.stripeSecretKey || undefined,
+            webhookSecret: selling.stripeWebhookSecret || undefined,
+          };
+        });
+      }
+
+      // Fresh secrets.env → the `init` skeleton, then the Stripe block goes on it.
+      const secretsText = od.secretsText ?? freshSecretsEnv(od);
+      const plan = planSellingChange({
+        configText: od.configText,
+        secretsText,
+        ...(od.operatorText !== undefined ? { operatorText: od.operatorText } : {}),
+        slotCounts: od.slotCounts,
+        prices: { ...askedPrices, ...cliPrices },
+        stripe: {
+          secretKey: cliStripe.secretKey ?? askedStripe?.secretKey,
+          webhookSecret: cliStripe.webhookSecret ?? askedStripe?.webhookSecret,
+        },
+        ...(hubBaseUrl ? { hubBaseUrl } : {}),
+      });
+      if (od.secretsText === undefined) plan.secretsEdits.unshift("(new file — MANIFEST_KEY and SESSION_SECRET filled in)");
+      if (plan.noop) {
+        console.log("Already priced and wired — nothing to change.");
+        return 0;
+      }
+      console.log("");
+      printPlan(plan);
+      if (dryRun) {
+        console.log("\n--dry-run: nothing written.");
+        return 0;
+      }
+      if (!yes && process.stdin.isTTY === true && scripted) {
+        const answer = await withPrompts(ctx, async (ask) => (await ask("\nApply these changes? [y/N]")).toLowerCase());
+        if (!answer.startsWith("y")) {
+          console.log("nothing written.");
+          return 1;
+        }
+      }
+      const wrote = applyPlan(od, plan);
+      console.log(`\nWrote ${wrote.join(", ")} (previous versions kept as *.bak)\n`);
+      for (const line of plan.nextSteps) console.log(line);
+      return 0;
+    }
+    case "inventory": {
+      // The stock-take of `init`, on its own: hosts, storage and slots. Writes
+      // data/inventory.json and the three lines derived from it — HOSTS in config.env
+      // (a manifest field, so the manifest is re-signed), PROXMOX_STORAGE_IMAGES/ISO in
+      // .env.operator (what a provision actually READS; inventory.json only declares),
+      // and AGENT_LISTING_JSON's slot counts. Over an existing file every prompt
+      // defaults to the current answer, so a re-run is Enter-through.
+      rejectUnknownFlags("inventory", args, ["--dir", "--hosts"], ["--dry-run", "--yes"]);
+      const od = readOperatorDir("inventory", dirFlag(args));
+      const dryRun = args.includes("--dry-run");
+      const prefix = od.env.PROVIDER_VM_PREFIX ?? "";
+      if (!od.env.PROVIDER_SLUG || !prefix) {
+        die("config.env has no PROVIDER_SLUG / PROVIDER_VM_PREFIX yet — run `fh-toolkit slug` first; VM names are composed from the prefix.");
+      }
+      const prefixWhy = vmNamePrefixProblem(prefix);
+      if (prefixWhy) die(`PROVIDER_VM_PREFIX ${prefixWhy}`);
+      const hubBaseUrl = od.env.MT_BASE_URL;
+      const minimums = (await cachedTierMinimums(ctx, hubBaseUrl ?? PRODUCTION_BASE_URL)) ?? TIER_FLOORS_CENTS;
+      const prices = readTierPrices(od.configText);
+      const hub = hubNames(ctx, hubBaseUrl ?? PRODUCTION_BASE_URL);
+
+      let hosts: HostAnswer[];
+      const hostsPath = flag(args, "--hosts");
+      if (hostsPath) {
+        // Scripted: the `hosts` array of an answers file, same shape as `init --answers`.
+        try {
+          const parsed = JSON.parse(readFileSync(hostsPath, "utf8")) as unknown;
+          hosts = (Array.isArray(parsed) ? parsed : (parsed as { hosts?: unknown }).hosts) as HostAnswer[];
+          if (!Array.isArray(hosts)) throw new Error("expected a JSON array of hosts (or {hosts: [...]})");
+        } catch (e) {
+          die(`${hostsPath}: ${(e as Error).message}`);
+        }
+      } else {
+        // The survey that fills the storage defaults comes from the agent's own
+        // credentials when .env.operator has them — silently skipped when it does not.
+        const opEnv = od.operatorText !== undefined ? parseConfigEnv(od.operatorText) : {};
+        let survey: ProxmoxSurvey | undefined;
+        if (opEnv.PROXMOX_URL && opEnv.PROXMOX_TOKEN_ID && opEnv.PROXMOX_TOKEN_SECRET) {
+          console.log("Surveying Proxmox with the token in .env.operator…");
+          const probe = await probeProxmox({ url: opEnv.PROXMOX_URL, tokenId: opEnv.PROXMOX_TOKEN_ID, tokenSecret: opEnv.PROXMOX_TOKEN_SECRET });
+          if (probe.ok) survey = probe.survey;
+          else console.log(formatProbe(probe.checks) + "\n  → no survey; storage names are typed, not picked. `fh-toolkit proxmox` fixes the token.");
+        }
+        hosts = await withPrompts(ctx, (ask, askUntil) =>
+          askHosts(ask, askUntil, {
+            prefix,
+            tiers: Object.keys(prices),
+            minimums,
+            survey,
+            hub,
+            current: od.currentHosts,
+          })
+        );
+      }
+      const problems = validateHosts(hosts, prefix, minimums);
+      if (problems.length > 0) die(`hosts are not usable:\n  - ${problems.join("\n  - ")}`);
+      if (hostsPath) {
+        // The wizard checked names at its prompts; the scripted path gets one composite check.
+        hub.advise(await hub.check({ hostNames: hosts.map((h) => h.name), vmNames: hosts.flatMap((h) => h.slots.map((sl) => sl.vmName)) }));
+      }
+
+      const a = answersFromConfig(od, hosts);
+      const inventoryText = renderInventoryJson(a);
+      const configText = upsertEnvLine(od.configText, "HOSTS", hosts.map((h) => h.name).join(","));
+      const hostsChanged = configText !== od.configText;
+      let operatorText = od.operatorText;
+      if (operatorText !== undefined) {
+        const first = hosts[0]!;
+        operatorText = upsertEnvLine(operatorText, "PROXMOX_STORAGE_IMAGES", first.storageImages);
+        operatorText = upsertEnvLine(operatorText, "PROXMOX_STORAGE_ISO", first.storageIso);
+        if (Object.keys(prices).length > 0) {
+          // The listing's counts follow the stock-take: a tier that offered ALL its slots
+          // keeps offering all of them; a deliberate hold-back is kept, clamped to what
+          // is now declared so the listing never oversells.
+          const before = readListing(operatorText);
+          const counts = slotCountsByTier(a);
+          const listing = mergeListing(before, prices, counts).map((e) => {
+            const was = before.find((b) => b.tier === e.tier);
+            const now = counts[e.tier] ?? 0;
+            if (!was || was.availableSlots >= (od.slotCounts[e.tier] ?? 0)) return { ...e, availableSlots: now };
+            return { ...e, availableSlots: Math.min(was.availableSlots, now) };
+          });
+          if (JSON.stringify(before) !== JSON.stringify(listing)) {
+            operatorText = upsertEnvLine(operatorText, "AGENT_LISTING_JSON", JSON.stringify(listing));
+          }
+        }
+      }
+
+      // The agent is upsert-only: a host or slot that vanishes from this file stays on the
+      // hub until it is retired in the console, and nothing else will say so.
+      const goneHosts = od.currentHosts.filter((h) => !hosts.some((n) => n.name === h.name)).map((h) => h.name);
+      const goneSlots = od.currentHosts
+        .flatMap((h) => h.slots.map((sl) => sl.vmName))
+        .filter((v) => !hosts.some((h) => h.slots.some((sl) => sl.vmName === v)));
+
+      console.log(`\ndata/inventory.json: ${hosts.length} host(s), ${hosts.reduce((n, h) => n + h.slots.length, 0)} slot(s)${od.inventoryText !== undefined ? " (rewritten)" : ""}`);
+      if (hostsChanged) console.log(`  config.env    HOSTS: ${od.env.HOSTS ?? "(unset)"} → ${hosts.map((h) => h.name).join(",")}`);
+      if (operatorText !== undefined && operatorText !== od.operatorText) console.log("  .env.operator PROXMOX_STORAGE_IMAGES/ISO from the first host; AGENT_LISTING_JSON counts refreshed");
+      if (od.operatorText === undefined) console.log("  (no .env.operator here — run `fh-toolkit proxmox` to create it; the storage lines come from this file)");
+      for (const name of [...goneHosts, ...goneSlots]) {
+        console.log(`  ⚠️  the agent is upsert-only — \`${name}\` stays on Flux Hub until you retire it in the console`);
+      }
+      if (dryRun) {
+        console.log("\n--dry-run: nothing written.");
+        return 0;
+      }
+
+      mkdirSync(join(od.dir, "data"), { recursive: true, mode: 0o755 });
+      const wrote: string[] = [];
+      if (writeWithBackup(od.inventoryPath, od.inventoryText, inventoryText, 0o644)) wrote.push("data/inventory.json");
+      if (writeWithBackup(od.configPath, od.configText, configText)) wrote.push("config.env");
+      if (operatorText !== undefined && writeWithBackup(od.operatorPath, od.operatorText, operatorText)) wrote.push(".env.operator");
+      // HOSTS is `hardware[]` in the signed manifest.
+      if (hostsChanged) resignAfterConfigChange(od.dir, configText, wrote);
+      if (wrote.length === 0) {
+        console.log("\nNothing to change — every file already says exactly this.");
+        return 0;
+      }
+      console.log(`\nWrote ${wrote.join(", ")} (previous versions kept as *.bak)`);
+      if (hostsChanged && existsSync(join(od.dir, "manifest.json"))) {
+        console.log(`\nNext: paste manifest.json at ${hubBaseUrl ?? PRODUCTION_BASE_URL}/onboard and sign with your owner wallet — HOSTS is in the signed manifest.`);
+      }
+      if (wrote.includes(".env.operator")) {
+        console.log("\n.env.operator changed, which the agent reads ONLY at start:");
+        console.log("  docker compose up -d --force-recreate    ← `docker restart` does NOT reload it");
+      } else if (wrote.includes("data/inventory.json")) {
+        console.log("\nThe agent re-reads data/inventory.json on its next cycle — nothing to restart.");
       }
       return 0;
     }
@@ -1862,18 +2420,9 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
       const yes = args.includes("--yes");
 
       // Non-interactive equivalents of the prompts, so this is testable and scriptable.
-      // --price is repeatable: --price cumulus=25 --price nimbus=40, in DOLLARS.
-      const cliPrices: Record<string, number> = {};
-      for (let i = 0; i < args.length; i++) {
-        if (args[i] !== "--price") continue;
-        const spec = args[i + 1];
-        if (!spec || !spec.includes("=")) die("--price takes <tier>=<dollars>, e.g. --price cumulus=25");
-        const [tier, dollars] = spec.split("=", 2) as [string, string];
-        if (!/^\$?\d+(\.\d{1,2})?$/.test(dollars.trim())) {
-          die(`--price ${tier}: "${dollars}" is not an amount in dollars.`);
-        }
-        cliPrices[tier] = Math.round(Number(dollars.replace("$", "")) * 100);
-      }
+      // --price is repeatable: --price cumulus=25 --price nimbus=40, in DOLLARS — the
+      // same flags as `fh-toolkit stripe`, which is the priced half of this on its own.
+      const cliPrices = parsePriceFlags(args);
       const cliStripe = {
         secretKey: flag(args, "--stripe-key"),
         webhookSecret: flag(args, "--stripe-webhook"),
@@ -1890,16 +2439,7 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
 
         // Below-floor prices are rejected before anything is written, so a bad --price
         // costs nothing rather than leaving a half-applied upgrade behind.
-        for (const [tier, cents] of Object.entries(cliPrices)) {
-          const floor = minimums[tier];
-          if (floor === undefined) die(`--price ${tier}: unknown tier. Flux Hub knows ${Object.keys(minimums).join(", ")}.`);
-          if (cents < floor) {
-            die(
-              `--price ${tier}: $${(cents / 100).toFixed(2)} is below the $${(floor / 100).toFixed(2)} ` +
-                "floor Flux Hub enforces. Nothing was written."
-            );
-          }
-        }
+        refuseBadPrices(cliPrices, minimums);
 
         const wouldHavePrices = Object.keys({ ...prices, ...cliPrices }).length > 0;
         const wouldHaveStripe =
@@ -1943,10 +2483,7 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
       }
 
       console.log(`level: ${plan.from ?? "(absent)"} → ${plan.to}\n`);
-      for (const e of plan.configEdits) console.log(`  config.env    ${e}`);
-      for (const e of plan.secretsEdits) console.log(`  secrets.env   ${e}`);
-      for (const e of plan.operatorEdits) console.log(`  .env.operator ${e}`);
-      for (const w of plan.warnings) console.log(`\n  ⚠️  ${w}`);
+      printPlan(plan);
 
       // The names, checked BEFORE anything is written. A supporter who onboarded before
       // the VM prefix existed reaches the operator level through exactly this command,
@@ -2286,13 +2823,21 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
     case "-h":
     default:
       console.log(
-        "usage: fh-toolkit <keygen|coalition-keygen|init|slug|level|doctor|sign|env|verify|wrapper|version> [options]\n"
+        "usage: fh-toolkit <keygen|coalition-keygen|init|slug|proxmox|stripe|inventory|level|doctor|sign|env|verify|wrapper|version> [options]\n"
       );
       console.log("  keygen           [--out <dir>]");
       console.log("  coalition-keygen [--out <dir>]   Phase D signing key (operator-held custody)");
       console.log("  init      [--out <dir>] [--answers <answers.json>] [--force]");
       console.log("  slug      [--dir <dir>] [--force]              your slug, VM name prefix and hub, checked");
       console.log("            against Flux Hub; before init, or later to re-check or move hubs");
+      console.log("  proxmox   [--dir <dir>] [--url <u> --token-id <id> --token-secret <s>] [--no-probe] [--yes]");
+      console.log("            the agent's Proxmox token in .env.operator, verified");
+      console.log("  stripe    [--dir <dir>] [--price <tier>=<usd>]... [--stripe-key <k>] [--stripe-webhook <k>]");
+      console.log("            [--dry-run] [--yes]              prices, listing and Stripe keys — the selling block");
+      console.log("  inventory [--dir <dir>] [--hosts <hosts.json>] [--dry-run]");
+      console.log("            hosts, storage and slots → data/inventory.json, HOSTS, storage lines, listing counts");
+      console.log("  (slug → proxmox → stripe → inventory is what `init` asks, one file at a time; each");
+      console.log("   works instead of init on a fresh directory, or after setup to change one thing)");
       console.log("  level     [--dir <dir>]                      show your level, tiers and Stripe state");
       console.log("            --set <supporter|operator> [--price <tier>=<usd>] [--stripe-key <k>]");
       console.log("            [--stripe-webhook <k>] [--dry-run] [--yes]");

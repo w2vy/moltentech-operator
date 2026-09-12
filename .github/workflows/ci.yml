@@ -355,6 +355,50 @@ jobs:
           print("generated config OK:", pairs["TIER_PRICES_JSON"])
           ASSERT
 
+      - name: The per-file commands build the same directory `init` does, one file at a time
+        run: |
+          set -euo pipefail
+          work="$(mktemp -d)"
+          run() { docker run --rm -v "$work:/work" -u "$(id -u):$(id -g)" fh-toolkit:ci "$@"; }
+          run keygen
+          # slug has no scripted path (it is the one that talks to the hub), so its
+          # output is stood in for by config.env from the fixture above; the other three
+          # are driven by flags, in the order init asks them.
+          cat > "$work/config.env" <<'CFG'
+          PROVIDER_SLUG=ci-perfile
+          PROVIDER_VM_PREFIX=cp-
+          PROVIDER_NAME=CI Per-File Operator
+          MT_BASE_URL=https://fluxhub.moltentech.us
+          COALITION_URL=https://coalition-ci-perfile.app.runonflux.io
+          OWNER_ADDRESS=t1exampleOwnerWalletAddress
+          PROVIDER_LEVEL=operator
+          MT_PUBKEY=
+          HOSTS=
+          TIER_PRICES_JSON={}
+          TRIAL_DAYS=1
+          MANUAL_APPROVAL=false
+          CFG
+          run stripe --price cumulus=7 --stripe-key rk_test_ci --yes
+          run proxmox --url https://192.0.2.1:8006 --token-id fh-agent@pve!agent --token-secret ci-secret --no-probe
+          cat > "$work/hosts.json" <<'HOSTS'
+          [{"name": "pve-01", "storageImages": "ssd", "storageIso": "iso-store",
+            "slots": [{"tier": "cumulus", "vmName": "cp-c1", "ipAddress": "203.0.113.10",
+                       "lanIp": "192.168.1.10/24", "gateway": "192.168.1.1", "apiPort": 16127}]}]
+          HOSTS
+          run inventory --hosts hosts.json
+          grep -q '^HOSTS=pve-01$' "$work/config.env"
+          grep -q '^TIER_PRICES_JSON={"cumulus":700}$' "$work/config.env"
+          grep -q '^PROXMOX_STORAGE_IMAGES=ssd$' "$work/.env.operator"
+          grep -q '^PROXMOX_TOKEN_SECRET=ci-secret$' "$work/.env.operator"
+          grep -q '^AGENT_LISTING_JSON=\[{"tier":"cumulus","priceCents":700,"availableSlots":1}\]$' "$work/.env.operator"
+          grep -q '^STRIPE_SECRET_KEY=rk_test_ci$' "$work/secrets.env"
+          test -s "$work/data/inventory.json"
+          # No manifest yet (init signs; the per-file commands only re-sign one that exists), so:
+          run sign
+          run verify --in manifest.json
+          # …and the whole directory lints clean, same as init's output.
+          run doctor
+
       - name: A generated sell-nothing operator needs no Stripe keys
         run: |
           set -euo pipefail

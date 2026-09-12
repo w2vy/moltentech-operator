@@ -240,7 +240,7 @@ those two comparisons is the one that catches `docker compose pull` without
 # `fh-toolkit`
 
 ```
-fh-toolkit <keygen|init|slug|level|doctor|sign|env|verify> [options]   # one command, then exit
+fh-toolkit <keygen|init|slug|proxmox|stripe|inventory|level|doctor|sign|env|verify> [options]   # one command, then exit
 fh-toolkit                                                  # an interactive session
 ```
 
@@ -550,6 +550,86 @@ new provider is what you mean.
 ⚠️ **The prefix is pinned by the hub at first ingest.** `slug` lets you change it in
 `config.env` and warns you when a manifest already exists: if that manifest was ingested,
 the hub will refuse the new prefix — a pinned prefix is a support request to change.
+
+---
+
+## `init`, one file at a time: `slug` → `proxmox` → `stripe` → `inventory`
+
+`init` asks four blocks of questions and writes every file at the end. Each block is also
+its own command, wired to **one file**, usable instead of `init` on a fresh directory
+(`keygen` → `slug` → `proxmox` → `stripe` → `inventory` → `sign` builds the same directory
+`init` does, minus README/compose/flux-app-spec, which only `init` renders) or after setup
+to change one thing without re-answering the wizard. Every one of them decides its mode by
+whether its file exists — **fresh** renders it, **existing** patches it in place, keeps the
+previous bytes as `*.bak`, and says `Nothing to change` when the answers match.
+
+| Command | Asks | Writes | Re-signs the manifest? |
+|---|---|---|---|
+| `slug` | hub, slug, VM prefix, name | `config.env` identity | yes (slug/prefix/name are manifest fields) |
+| `proxmox` | URL, token id, token secret — probed | `.env.operator` `PROXMOX_URL/TOKEN_ID/TOKEN_SECRET` | never (not a manifest field) |
+| `stripe` | tiers + prices (floors from the hub), Stripe keys | `TIER_PRICES_JSON` in `config.env`, `AGENT_LISTING_JSON` in `.env.operator`, `STRIPE_*` in `secrets.env` | no — prints the `sign` + re-paste steps, as `level` does |
+| `inventory` | hosts, storage, slots | `data/inventory.json`, `HOSTS` in `config.env`, `PROXMOX_STORAGE_IMAGES/ISO` + listing counts in `.env.operator` | yes (`HOSTS` is `hardware[]`) |
+
+### `proxmox`
+
+```
+fh-toolkit proxmox [--dir <dir>] [--url <u> --token-id <id> --token-secret <s>] [--no-probe] [--yes]
+```
+
+The agent's Proxmox token — the three `PROXMOX_*` lines of `.env.operator`, which is the
+AGENT's file and the only one it reads. The token is **verified here**, with the same probe
+and retry loop as `init` (`skip` goes on unverified). Interactive: the current values are
+the defaults and the secret is never echoed (Enter keeps it). Scripted: any flag not given
+is taken from the file; a failed probe writes nothing unless `--yes`; `--no-probe` skips it.
+
+Fresh (no `.env.operator`): renders the whole file from `config.env`'s identity, with
+`MANIFEST_KEY`/`MANIFEST_PUBKEY` from the key when it is here and the storage lines blank
+until `inventory` fills them. Existing: the three lines, in place — then
+`docker compose up -d --force-recreate` (the agent reads its env only at start).
+
+### `stripe`
+
+```
+fh-toolkit stripe [--dir <dir>] [--price <tier>=<usd>]... [--stripe-key <k>] [--stripe-webhook <k>] [--dry-run] [--yes]
+```
+
+What you **sell** — the same questions `init` asks a seller, the same three files
+`level --set operator` writes, minus the level itself. Use it to price a tier, change a
+price, or paste the webhook secret once Stripe has minted it (`--stripe-webhook whsec_…`
+alone touches one line of `secrets.env` and nothing else). Prices are in dollars and
+refused below the hub's floor before anything is written; the listing's `availableSlots`
+follows `data/inventory.json` for a newly priced tier and keeps a hold-back you set by hand.
+No `secrets.env` yet → the `init` skeleton is written first (`MANIFEST_KEY` from the key,
+a generated `SESSION_SECRET`) and the Stripe block added to it.
+
+`TIER_PRICES_JSON` is a manifest field, so the closing steps are `sign` → re-paste at
+`/onboard`, then `docker compose up -d --force-recreate` when the listing changed. On a
+Supporter it writes the prices and says so: nothing is for sale until `level --set operator`.
+
+### `inventory`
+
+```
+fh-toolkit inventory [--dir <dir>] [--hosts <hosts.json>] [--dry-run]
+```
+
+The stock-take: hosts, storage, slots — with VM names composed from `PROVIDER_VM_PREFIX`
+and every host name and VM name checked with the hub, exactly as `init` does. Needs
+`config.env` with the slug and prefix (`slug` first); the tier list comes from
+`TIER_PRICES_JSON` (`stripe` first — every tier the hub knows is offered when nothing is
+priced yet). When `.env.operator` holds a working token the cluster is surveyed so node
+names and storage are picked, not typed.
+
+**Over an existing file every prompt defaults to the current answer, in order** — an
+unchanged stock-take is Enter all the way through, and adding a host is one typed line at
+the first prompt. It **rewrites** `data/inventory.json` from the answers; a host or slot
+that is no longer in it is named on the way out, because the agent is upsert-only and the
+hub keeps the record until you retire it in the console. `--hosts <file>` takes the
+`hosts` array of an `init --answers` file for scripted use.
+
+`HOSTS` is `hardware[]` in the signed manifest, so when it changes the manifest is re-signed
+in place (key present) and you re-paste it at `/onboard`. The agent re-reads
+`data/inventory.json` on its next cycle; only a changed `.env.operator` (storage lines,
+listing counts) needs `docker compose up -d --force-recreate`.
 
 ---
 
@@ -1040,8 +1120,11 @@ store. It is not a middlebox on your network and not a Proxmox certificate probl
 | `/onboard` gave me a key | put it in `secrets.env`, then `doctor` |
 | Everything is filled in — is it right? | `doctor`, then `doctor --check-proxmox --check-stripe` |
 | I edited `config.env` | `sign`, then `env`, then re-import to Flux |
-| I changed a price | `env`, then re-import — **no re-sign** |
-| I added a Proxmox host | edit `HOSTS` in `config.env` → `sign` → **re-paste at `/onboard`** → `env` → re-import |
+| I changed a price | `stripe --price <tier>=<usd>` → `sign` → re-paste at `/onboard` → `env` → re-import |
+| Stripe minted my webhook secret | `stripe --stripe-webhook whsec_…` |
+| I added a Proxmox host or slot | `inventory` (Enter through the rest) → **re-paste at `/onboard`** → `env` → re-import |
+| I rotated the Proxmox token | `proxmox`, then `docker compose up -d --force-recreate` |
+| Build the directory without the wizard | `keygen` → `slug` → `proxmox` → `stripe` → `inventory` → `sign` |
 | Ready to deploy the Coalition | `env` → import `env.json` into the Flux app (**enterprise**) |
 | Ready to start the agent | `fh-agent doctor`, then `docker compose up -d` |
 | Checkout is failing and nothing looks wrong | `doctor --check-hub --check-stripe` |

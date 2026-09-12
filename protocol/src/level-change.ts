@@ -210,6 +210,156 @@ export function mergeListing(
   }));
 }
 
+
+/** What `applySelling` was given and what it changed — the pure core shared by `level` and `stripe`. */
+interface SellingTexts {
+  configText: string;
+  secretsText: string;
+  operatorText?: string;
+}
+interface SellingResult extends SellingTexts {
+  configEdits: string[];
+  secretsEdits: string[];
+  operatorEdits: string[];
+  warnings: string[];
+}
+
+/**
+ * The "what you sell" half, on its own: TIER_PRICES_JSON in config.env, AGENT_LISTING_JSON in
+ * .env.operator, the STRIPE_* block in secrets.env. `level --set operator` runs it after
+ * flipping the level; `fh-toolkit stripe` runs it alone. One body, so the two commands cannot
+ * disagree about which three files "for sale" lives in.
+ */
+function applySelling(
+  texts: SellingTexts,
+  input: Pick<LevelChangeInput, "prices" | "stripe" | "slotCounts">
+): SellingResult {
+  let { configText, secretsText, operatorText } = texts;
+  const configEdits: string[] = [];
+  const secretsEdits: string[] = [];
+  const operatorEdits: string[] = [];
+  const warnings: string[] = [];
+
+  const prices = { ...readTierPrices(configText), ...(input.prices ?? {}) };
+  if (Object.keys(prices).length > 0) {
+    const before = readTierPrices(configText);
+    if (JSON.stringify(before) !== JSON.stringify(prices)) {
+      configText = setTierPrices(configText, prices);
+      configEdits.push(`TIER_PRICES_JSON: ${JSON.stringify(before)} → ${JSON.stringify(prices)}`);
+    }
+  } else {
+    warnings.push(
+      "no tier prices — an operator with an empty TIER_PRICES_JSON has nothing for " +
+        "sale, which is the half-finished state `doctor` reports as LEVEL_OPERATOR_NO_TIERS."
+    );
+  }
+
+  // 🔴 The other half of "for sale". TIER_PRICES_JSON is what the MANIFEST and the
+  // Coalition quote; AGENT_LISTING_JSON in .env.operator is what the AGENT asserts to
+  // Flux Hub, and a `ProviderStat` row — the marketplace card — exists only because of
+  // that assert. `level` used to write the first and leave the second at `[]`, so an
+  // upgrade "completed" with a signed operator manifest, a priced config, a green
+  // doctor, and nothing for sale. Measured 2026-09-10 on staging: no card until the
+  // listing was hand-edited and the agent recreated.
+  if (Object.keys(prices).length > 0) {
+    if (operatorText === undefined) {
+      warnings.push(
+        "no .env.operator here, so AGENT_LISTING_JSON was NOT written — the agent asserts " +
+          "the listing, and without it nothing is for sale. Set it by hand, then recreate the agent."
+      );
+    } else {
+      const before = readListing(operatorText);
+      const listing = mergeListing(before, prices, input.slotCounts ?? {});
+      if (JSON.stringify(before) !== JSON.stringify(listing)) {
+        operatorText = upsertEnvLine(operatorText, "AGENT_LISTING_JSON", JSON.stringify(listing));
+        operatorEdits.push(`AGENT_LISTING_JSON: ${JSON.stringify(before)} → ${JSON.stringify(listing)}`);
+      }
+    }
+  }
+
+  const beforeSecrets = secretsText;
+  secretsText = addStripeBlock(secretsText, input.stripe ?? {});
+  if (beforeSecrets !== secretsText) {
+    const key = readEnvValue(secretsText, "STRIPE_SECRET_KEY");
+    const hook = readEnvValue(secretsText, "STRIPE_WEBHOOK_SECRET");
+    secretsEdits.push(
+      `STRIPE_SECRET_KEY: ${key ? "set" : "added, EMPTY — fill it in"}`,
+      `STRIPE_WEBHOOK_SECRET: ${hook ? "set" : "added, EMPTY — minted when you create the endpoint"}`
+    );
+  }
+
+  return { configText, secretsText, operatorText, configEdits, secretsEdits, operatorEdits, warnings };
+}
+
+/**
+ * `fh-toolkit stripe` — prices + keys, no level semantics. The level is reported, not changed:
+ * a Supporter who prices a tier is told that nothing is for sale until `level --set operator`.
+ */
+export function planSellingChange(input: Omit<LevelChangeInput, "target">): LevelChange {
+  const from = readLevel(input.configText);
+  const sold = applySelling(
+    { configText: input.configText, secretsText: input.secretsText, operatorText: input.operatorText },
+    input
+  );
+  const warnings = [...sold.warnings];
+  if (from === "supporter") {
+    warnings.push(
+      "PROVIDER_LEVEL is supporter — these prices are written but nothing is for sale until " +
+        "`fh-toolkit level --set operator`."
+    );
+  }
+  const noop = sold.configEdits.length === 0 && sold.secretsEdits.length === 0 && sold.operatorEdits.length === 0;
+  return {
+    from,
+    to: from ?? "operator",
+    noop,
+    configEdits: sold.configEdits,
+    secretsEdits: sold.secretsEdits,
+    operatorEdits: sold.operatorEdits,
+    warnings,
+    nextSteps: noop ? [] : sellingNextSteps({
+      manifestField: sold.configEdits.length > 0,
+      stripe: true,
+      listingChanged: sold.operatorEdits.length > 0,
+      hubBaseUrl: input.hubBaseUrl,
+    }),
+    configText: sold.configText,
+    secretsText: sold.secretsText,
+    operatorText: sold.operatorText,
+  };
+}
+
+/** The closing checklist, shared so `level` and `stripe` send the operator the same way. */
+function sellingNextSteps(o: { manifestField: boolean; stripe: boolean; listingChanged: boolean; hubBaseUrl?: string }): string[] {
+  const hub = o.hubBaseUrl ?? "https://fluxhub.moltentech.us";
+  const steps: string[] = [];
+  if (o.manifestField) {
+    steps.push(
+      "TIER_PRICES_JSON is in your SIGNED manifest, so Flux Hub needs a re-ingest:",
+      "  1. fh-toolkit sign",
+      `  2. paste manifest.json at ${hub}/onboard and sign with your owner wallet`,
+      "     — the hub re-ingests there; nothing this command wrote reaches it until you do"
+    );
+  }
+  if (o.stripe) {
+    steps.push(
+      "",
+      "Stripe (you are merchant of record; Flux Hub never holds these):",
+      "  3. register a webhook endpoint at <your coalition>/webhook, then:",
+      "     fh-toolkit doctor --check-stripe    ← catches a key from the wrong account",
+      "  4. fh-toolkit env, re-import env.json into the Flux app, redeploy"
+    );
+  }
+  if (o.listingChanged) {
+    steps.push(
+      "",
+      "AGENT_LISTING_JSON changed in .env.operator, which the agent reads ONLY at start:",
+      "  docker compose up -d --force-recreate    ← `docker restart` does NOT reload it"
+    );
+  }
+  return steps;
+}
+
 export interface LevelChangeInput {
   configText: string;
   secretsText: string;
@@ -257,61 +407,16 @@ export function planLevelChange(input: LevelChangeInput): LevelChange {
   }
 
   if (to === "operator") {
-    const prices = { ...readTierPrices(configText), ...(input.prices ?? {}) };
     if (from !== "operator") {
       configText = upsertEnvLine(configText, "PROVIDER_LEVEL", "operator");
       configEdits.push(`PROVIDER_LEVEL: ${from ?? "(absent)"} → operator`);
     }
-    if (Object.keys(prices).length > 0) {
-      const before = readTierPrices(configText);
-      if (JSON.stringify(before) !== JSON.stringify(prices)) {
-        configText = setTierPrices(configText, prices);
-        configEdits.push(
-          `TIER_PRICES_JSON: ${JSON.stringify(before)} → ${JSON.stringify(prices)}`
-        );
-      }
-    } else {
-      warnings.push(
-        "no tier prices — an operator with an empty TIER_PRICES_JSON has nothing for " +
-          "sale, which is the half-finished state `doctor` reports as LEVEL_OPERATOR_NO_TIERS."
-      );
-    }
-
-    // 🔴 The other half of "for sale". TIER_PRICES_JSON is what the MANIFEST and the
-    // Coalition quote; AGENT_LISTING_JSON in .env.operator is what the AGENT asserts to
-    // Flux Hub, and a `ProviderStat` row — the marketplace card — exists only because of
-    // that assert. This command used to write the first and leave the second at `[]`,
-    // so an upgrade "completed" with a signed operator manifest, a priced config, a green
-    // doctor, and nothing for sale. Measured 2026-09-10 on staging: no card until the
-    // listing was hand-edited and the agent recreated.
-    if (Object.keys(prices).length > 0) {
-      if (operatorText === undefined) {
-        warnings.push(
-          "no .env.operator here, so AGENT_LISTING_JSON was NOT written — the agent asserts " +
-            "the listing, and without it nothing is for sale. Set it by hand, then recreate the agent."
-        );
-      } else {
-        const before = readListing(operatorText);
-        const listing = mergeListing(before, prices, input.slotCounts ?? {});
-        if (JSON.stringify(before) !== JSON.stringify(listing)) {
-          operatorText = upsertEnvLine(operatorText, "AGENT_LISTING_JSON", JSON.stringify(listing));
-          operatorEdits.push(
-            `AGENT_LISTING_JSON: ${JSON.stringify(before)} → ${JSON.stringify(listing)}`
-          );
-        }
-      }
-    }
-
-    const beforeSecrets = secretsText;
-    secretsText = addStripeBlock(secretsText, input.stripe ?? {});
-    if (beforeSecrets !== secretsText) {
-      const key = readEnvValue(secretsText, "STRIPE_SECRET_KEY");
-      const hook = readEnvValue(secretsText, "STRIPE_WEBHOOK_SECRET");
-      secretsEdits.push(
-        `STRIPE_SECRET_KEY: ${key ? "set" : "added, EMPTY — fill it in"}`,
-        `STRIPE_WEBHOOK_SECRET: ${hook ? "set" : "added, EMPTY — minted when you create the endpoint"}`
-      );
-    }
+    const sold = applySelling({ configText, secretsText, operatorText }, input);
+    ({ configText, secretsText, operatorText } = sold);
+    configEdits.push(...sold.configEdits);
+    secretsEdits.push(...sold.secretsEdits);
+    operatorEdits.push(...sold.operatorEdits);
+    warnings.push(...sold.warnings);
   } else {
     if (from !== "supporter") {
       configText = upsertEnvLine(configText, "PROVIDER_LEVEL", "supporter");
