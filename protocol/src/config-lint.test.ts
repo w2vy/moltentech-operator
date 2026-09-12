@@ -180,7 +180,7 @@ test("an EMPTY MANIFEST_KEY slot is 'not yet filled'; a MISSING one is a real er
 });
 
 test("PRICE_BELOW_FLOOR fires under the floor and not on it", () => {
-  const below = lintTierPrices(parseEnvLines('TIER_PRICES_JSON={"cumulus":500}\n'), "config.env");
+  const below = lintTierPrices(parseEnvLines('TIER_PRICES_JSON={"cumulus":100}\n'), "config.env");
   assert.deepEqual(below.map((f) => f.rule), ["PRICE_BELOW_FLOOR"]);
 
   const atFloor = lintTierPrices(
@@ -334,13 +334,13 @@ test("live minimums override the bundled table, and the source is reported", asy
   // The whole point: if MT lowers a minimum, doctor must stop rejecting the new price
   // without anyone editing this repo.
   const cheap = runDoctor({
-    configEnv: 'TIER_PRICES_JSON={"cumulus":500}\n',
-    tierMinimums: { cumulus: 400 },
+    configEnv: 'TIER_PRICES_JSON={"cumulus":100}\n',
+    tierMinimums: { cumulus: 100 },
   });
   assert.deepEqual(rules(cheap), []);
   assert.equal(cheap.minimumsSource, "api");
 
-  const bundled = runDoctor({ configEnv: 'TIER_PRICES_JSON={"cumulus":500}\n' });
+  const bundled = runDoctor({ configEnv: 'TIER_PRICES_JSON={"cumulus":100}\n' });
   assert.deepEqual(rules(bundled), ["PRICE_BELOW_FLOOR"]);
   assert.equal(bundled.minimumsSource, "bundled");
 });

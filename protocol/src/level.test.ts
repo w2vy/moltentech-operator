@@ -251,7 +251,7 @@ test("⭐ a below-floor price is refused and NOTHING is written", () => {
   const before = readFileSync(join(dir, "config.env"), "utf8");
   const { out, code } = level(dir, "--set", "operator", "--price", "cumulus=1", "--yes");
   assert.equal(code, 1);
-  assert.match(out, /below the \$7\.00 floor/);
+  assert.match(out, /below the \$2\.50 floor/);
   assert.match(out, /Nothing was written/);
   assert.equal(readFileSync(join(dir, "config.env"), "utf8"), before, "a rejected run must not half-apply");
 });

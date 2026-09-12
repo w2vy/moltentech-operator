@@ -37,9 +37,9 @@ import { canonicalize, verifyManifestObject } from "./signing";
  * build instead of silently blessing a price MT will 422.
  */
 export const TIER_FLOORS_CENTS: Record<string, number> = {
-  cumulus: 700,
-  nimbus: 2000,
-  stratus: 4000,
+  cumulus: 250,
+  nimbus: 700,
+  stratus: 1400,
 };
 
 export interface TierCatalogEntry {
