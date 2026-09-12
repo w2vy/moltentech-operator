@@ -19,6 +19,8 @@
  */
 import { renderManifestBodyFromConfig } from "./manifest-config";
 import { canonicalize, verifyManifestObject } from "./signing";
+import { VM_NAME_PREFIX_RULE, VmNamePrefix } from "./common";
+import type { NameCheckResponse } from "./name-check";
 
 
 /** The lowest price, in CENTS, MT will accept for a listed tier — **FALLBACK ONLY**.
@@ -310,6 +312,49 @@ export function lintLevelAgreement(entries: EnvEntry[], file: string): Finding[]
           "so fixing it is a re-sign and a re-ingest, not a file edit.",
         summary: "supporter with prices that cannot be listed",
         fix: "fh-toolkit level --set operator",
+      },
+    ];
+  }
+  return [];
+}
+
+/**
+ * The VM-name namespace. Two offline rules: the key must be there (a config.env from
+ * before it existed has no prefix, and the hub will not Activate a provider without one),
+ * and what is there must be a namespace the hub accepts. Every VM name must then fall
+ * inside it — that check needs the inventory, so it lives in `lintInventory`.
+ */
+export function lintVmPrefix(entries: EnvEntry[], file: string): Finding[] {
+  const entry = entries.find((e) => e.key === "PROVIDER_VM_PREFIX");
+  // Only a file that names a provider is missing its namespace; a fragment with no
+  // PROVIDER_SLUG is not a config.env yet, and every other rule already lets it be.
+  const isProviderConfig = entries.some((e) => e.key === "PROVIDER_SLUG" && e.value);
+  if (!entry || !entry.value) {
+    if (!isProviderConfig) return [];
+    return [
+      {
+        rule: "VM_PREFIX_NOT_SET",
+        severity: "warning",
+        file,
+        line: entry?.line,
+        message:
+          "PROVIDER_VM_PREFIX is not set — the namespace every one of your VM names lives in " +
+          "(e.g. mt-). Flux Hub pins it at first ingest and will not activate a provider without one.",
+        summary: "no VM name prefix declared",
+        fix: "fh-toolkit slug",
+      },
+    ];
+  }
+  if (!VmNamePrefix.safeParse(entry.value).success) {
+    return [
+      {
+        rule: "VM_PREFIX_INVALID",
+        severity: "error",
+        file,
+        line: entry.line,
+        message: `PROVIDER_VM_PREFIX="${entry.value}" is not a usable namespace — ${VM_NAME_PREFIX_RULE}. The hub refuses the manifest.`,
+        summary: "VM name prefix malformed",
+        fix: "fh-toolkit slug",
       },
     ];
   }
@@ -784,7 +829,9 @@ export function lintStorageAgreement(
 export function lintInventory(
   inventoryText: string,
   hostsFromConfig: string[],
-  file = "inventory.json"
+  file = "inventory.json",
+  /** `PROVIDER_VM_PREFIX` from config.env, when it is set and well-formed. */
+  vmNamePrefix?: string
 ): Finding[] {
   let parsed: unknown;
   try {
@@ -820,6 +867,19 @@ export function lintInventory(
       });
     }
     for (const slot of host.slots ?? []) {
+      // VMNAME_OUTSIDE_PREFIX — the hub refuses a NEW slot whose name is outside the
+      // declared namespace (an existing one only warns, so this is exactly the case the
+      // next heartbeat would 409 on).
+      if (vmNamePrefix && slot.vmName && !slot.vmName.toLowerCase().startsWith(vmNamePrefix)) {
+        found.push({
+          rule: "VMNAME_OUTSIDE_PREFIX",
+          severity: "error",
+          file,
+          message:
+            `slot "${slot.vmName}" is outside your VM name prefix "${vmNamePrefix}" — the hub ` +
+            `refuses a new slot whose name does not start with it.`,
+        });
+      }
       // A bare lanIp becomes /32 — no gateway, node boots with no route out, and
       // nothing anywhere says why.
       if (slot.lanIp && !/\/\d{1,2}$/.test(slot.lanIp)) {
@@ -847,6 +907,13 @@ export interface DoctorInput {
   manifestJson?: string;
   /** Live minimums from `GET /api/tiers`; omitted = use the bundled fallback. */
   tierMinimums?: Record<string, number>;
+  /**
+   * The hub's verdict on this provider's names (`POST /api/onboard/check-names`, asked
+   * with `self` = the slug so the provider's own rows do not count). `null` = the hub
+   * could not be asked, omitted = the caller did not ask; both add nothing. The fetch
+   * stays in the CLI so this function is pure.
+   */
+  nameCheck?: NameCheckResponse | null;
 }
 
 export interface DoctorReport {
@@ -971,6 +1038,7 @@ export function runDoctor(input: DoctorInput): DoctorReport {
     findings.push(...lintSecretPlacement(entries, "config.env", SECRET_KEYS_BANNED_IN_CONFIG));
     findings.push(...lintTierPrices(entries, "config.env", minimums));
     findings.push(...lintLevelAgreement(entries, "config.env"));
+    findings.push(...lintVmPrefix(entries, "config.env"));
   }
 
   if (input.secretsEnv != null) {
@@ -1007,7 +1075,15 @@ export function runDoctor(input: DoctorInput): DoctorReport {
 
   if (input.inventoryJson != null) {
     filesChecked.push("inventory.json");
-    findings.push(...lintInventory(input.inventoryJson, hostsFromConfig));
+    const prefix = configRec.PROVIDER_VM_PREFIX;
+    findings.push(
+      ...lintInventory(
+        input.inventoryJson,
+        hostsFromConfig,
+        "inventory.json",
+        prefix && VmNamePrefix.safeParse(prefix).success ? prefix : undefined
+      )
+    );
     // Needs both files, so it lives here rather than in either one's own linter.
     if (input.envOperator != null) {
       findings.push(...lintStorageAgreement(input.inventoryJson, operatorRec));
@@ -1019,7 +1095,90 @@ export function runDoctor(input: DoctorInput): DoctorReport {
     findings.push(...lintManifestFreshness(input.manifestJson, input.configEnv));
   }
 
+  if (input.nameCheck) findings.push(...lintNameCheck(input.nameCheck));
+
   return { findings, filesChecked, minimumsSource };
+}
+
+/**
+ * The hub's name verdicts as findings. Each unavailable value is an error the next
+ * ingest would raise; the advisory ones are warnings an admin will see either way.
+ *
+ * `SLUG_TAKEN_BY_OTHER` deserves its own words: the request names the slug as `self`,
+ * so the hub only reports it taken when it belongs to a provider that is NOT this one —
+ * i.e. the local key is not the registered one, and ingest is about to say "pubkey does
+ * not match", which reads like a signing problem and is not.
+ */
+export function lintNameCheck(resp: NameCheckResponse): Finding[] {
+  const file = "config.env";
+  const found: Finding[] = [];
+  const s = resp.slug;
+  if (s && !s.available) {
+    found.push({
+      rule: "SLUG_TAKEN_BY_OTHER",
+      severity: "error",
+      file,
+      message:
+        `slug "${s.value}" is registered on this hub under a different signing key — ingest will ` +
+        `say "pubkey does not match". Either this is not your manifest-key.pem, or the slug is someone else's.`,
+      summary: "slug registered to another key",
+    });
+  }
+  const p = resp.vmNamePrefix;
+  if (p && !p.available) {
+    found.push(
+      p.reason === "reserved"
+        ? {
+            rule: "VM_PREFIX_RESERVED",
+            severity: "error",
+            file,
+            message: `VM name prefix "${p.value}" is reserved for Foundation nodes — the hub refuses the manifest.`,
+            summary: "VM name prefix reserved",
+            fix: "fh-toolkit slug",
+          }
+        : {
+            rule: "VM_PREFIX_TAKEN",
+            severity: "error",
+            file,
+            message: `VM name prefix "${p.value}" belongs to another provider on this hub — ingest refuses it.`,
+            summary: "VM name prefix taken",
+            fix: "fh-toolkit slug",
+          }
+    );
+  }
+  const n = resp.name;
+  if (n && (n.warning || !n.available)) {
+    found.push({
+      rule: "NAME_CONFUSABLE",
+      severity: "warning",
+      file,
+      message:
+        `display name "${n.value}" looks like an existing provider's — the hub flags it for an admin ` +
+        `to review before activation.`,
+      summary: "display name confusable with another provider",
+    });
+  }
+  for (const h of resp.hostNames ?? []) {
+    if (h.available) continue;
+    found.push({
+      rule: "HOSTNAME_TAKEN",
+      severity: "error",
+      file: "inventory.json",
+      message: `host "${h.value}" is already registered on this hub — a heartbeat naming it is refused.`,
+      summary: "host name taken",
+    });
+  }
+  for (const v of resp.vmNames ?? []) {
+    if (v.available) continue;
+    found.push({
+      rule: "VMNAME_TAKEN",
+      severity: "error",
+      file: "inventory.json",
+      message: `VM name "${v.value}" is already registered on this hub by another provider — the heartbeat declaring it is refused.`,
+      summary: "VM name taken",
+    });
+  }
+  return found;
 }
 
 /** Human-readable report. Returns the text and whether anything is fatal. */

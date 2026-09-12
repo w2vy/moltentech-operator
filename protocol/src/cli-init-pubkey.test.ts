@@ -22,6 +22,7 @@ const CLI = fileURLToPath(new URL("./cli.ts", import.meta.url));
 
 const ANSWERS = {
   providerSlug: "pubkey-test",
+  vmNamePrefix: "pk-",
   providerName: "Pubkey Test Operator",
   ownerAddress: "t1exampleOwnerWalletAddress",
   // Unreachable on purpose: no network, instant connection-refused, and it still proves

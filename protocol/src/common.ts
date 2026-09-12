@@ -21,6 +21,19 @@ export const ProviderSlug = z
   .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, "lowercase kebab-case");
 
 /**
+ * The VM-name namespace a provider owns: 2–8 lowercase alphanumerics, letter first, WITH
+ * the trailing "-". The separator is part of the value so uniqueness is plain equality
+ * and never a prefix-overlap question (`mt-` vs `mtc-` are different namespaces; `mt` vs
+ * `mtc` would not be). No hyphen inside: `mt-c-` would emit `mt-c-1`, which also starts
+ * with `mt-` and so lands inside someone else's namespace.
+ *
+ * Format only. Reservation (`fh-` is the Foundation's) and uniqueness are hub policy,
+ * enforced at ingest — see the hub's `lib/name-availability.ts`.
+ */
+export const VM_NAME_PREFIX_RULE = "2–8 lowercase letters/digits, starting with a letter, ending in '-' (e.g. mt-)";
+export const VmNamePrefix = z.string().regex(/^[a-z][a-z0-9]{1,7}-$/, VM_NAME_PREFIX_RULE);
+
+/**
  * A single-line string with no control characters (newlines, CR, tabs, NUL, etc.).
  * Use for any value that gets written into a structured document (e.g. the provision
  * YAML) where an embedded newline could inject syntax. Rejects C0 controls + DEL.

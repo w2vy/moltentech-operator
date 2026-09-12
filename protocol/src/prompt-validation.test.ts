@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { isIPv4, vmNameProblem, slugProblem } from "./scaffold";
+import { isIPv4, vmNameProblem, slugProblem, vmNamePrefixProblem, suggestVmNamePrefix, composeVmName, defaultVmNameSuffix } from "./scaffold";
 import { ProviderSlug } from "./common";
 import { FOUNDATION_VM_PREFIX } from "./messages";
 
@@ -68,4 +68,32 @@ test("⭐ the prompt rule IS the wire rule — a doubled hyphen is refused at th
       `slugProblem and ProviderSlug disagree about ${JSON.stringify(s)}`
     );
   }
+});
+
+test("vmNamePrefixProblem: the wire rule plus the one offline policy (Foundation's namespace)", () => {
+  assert.equal(vmNamePrefixProblem("mt-"), undefined);
+  assert.equal(vmNamePrefixProblem("mt1-"), undefined);
+  assert.match(vmNamePrefixProblem("mt")!, /not a usable VM name prefix/);
+  assert.match(vmNamePrefixProblem("mt")!, /PERMANENT/);
+  assert.match(vmNamePrefixProblem("Mt-")!, /not a usable/);
+  assert.match(vmNamePrefixProblem("mt-c-")!, /not a usable/);
+  assert.match(vmNamePrefixProblem(`${FOUNDATION_VM_PREFIX}`)!, /reserved for Foundation nodes/);
+});
+
+test("suggestVmNamePrefix: the slug's initials, a default and nothing more", () => {
+  assert.equal(suggestVmNamePrefix("acme-cloud"), "ac-");
+  assert.equal(suggestVmNamePrefix("moltentech"), "mo-");
+  assert.equal(suggestVmNamePrefix("a-b-c-d"), "abc-");
+  // A one-letter slug cannot pass ProviderSlug (min 3), but the helper must still not
+  // produce something the prompt then rejects.
+  assert.equal(suggestVmNamePrefix("9lives"), "x9l-");
+  // Whatever it suggests, it is always a prefix the prompt would accept.
+  for (const slug of ["acme-cloud", "moltentech", "a-b-c-d", "x1", "9lives", "cute-dogs", "moltentech-test1"]) {
+    assert.equal(vmNamePrefixProblem(suggestVmNamePrefix(slug)), undefined, slug);
+  }
+});
+
+test("composeVmName / defaultVmNameSuffix produce today's mt-187-c2 shape", () => {
+  assert.equal(composeVmName("mt-", defaultVmNameSuffix("187", 2)), "mt-187-c2");
+  assert.equal(composeVmName("cd-", defaultVmNameSuffix("pve75", 1)), "cd-pve75-c1");
 });

@@ -9,6 +9,8 @@ import { SCHEMA_VERSION } from "./common";
  *
  * Mapping:
  *   PROVIDER_SLUG/NAME/LOCATION/DESCRIPTION/CONTACT -> provider.*
+ *   PROVIDER_VM_PREFIX                              -> provider.vmNamePrefix (the VM-name
+ *                                                      namespace, e.g. mt-; optional)
  *   COALITION_URL                                   -> coalitionUrl
  *   HOSTS=pve20,pve40,…                             -> hardware[{name}] (the owner-attested
  *                                                      Proxmox host rows; tiers/counts
@@ -52,6 +54,9 @@ export function renderManifestBodyFromConfig(configText: string): Record<string,
   };
 
   const provider: Record<string, unknown> = { slug: need("PROVIDER_SLUG"), name: need("PROVIDER_NAME") };
+  // The VM-name namespace. Emitted only when set so a config.env from before the key
+  // existed still renders the byte-identical manifest it always did.
+  if (env.PROVIDER_VM_PREFIX) provider.vmNamePrefix = env.PROVIDER_VM_PREFIX;
   if (env.PROVIDER_LOCATION) provider.location = env.PROVIDER_LOCATION;
   if (env.PROVIDER_DESCRIPTION) provider.description = env.PROVIDER_DESCRIPTION;
   if (env.PROVIDER_CONTACT) provider.contact = env.PROVIDER_CONTACT;

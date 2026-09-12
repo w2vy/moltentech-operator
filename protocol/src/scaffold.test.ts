@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   generateAll,
+  renderConfigEnv,
   validateAnswers,
   coalitionUrlFor,
   suggestFluxAppName,
@@ -26,6 +27,7 @@ import { ProviderManifest } from "./manifest";
 /** Modelled on moltentech-test1, the known-good output of a real onboarding. */
 const ANSWERS: Answers = {
   providerSlug: "acme-nodes",
+  vmNamePrefix: "mt-",
   providerName: "Acme Nodes",
   providerLocation: "Florida, US",
   providerContact: "ops@acme.example",
@@ -429,4 +431,28 @@ test("the Flux app spec does not claim an owner — FluxOS fills it from the log
   // The fields the generator CAN know are still there.
   assert.equal(spec.name, ANSWERS.fluxAppName);
   assert.equal(spec.compose[0].repotag, COALITION_IMAGE);
+});
+
+test("validateAnswers: the VM name prefix is required, well-formed, and every slot starts with it", () => {
+  const { vmNamePrefix: _drop, ...noPrefix } = ANSWERS;
+  assert.match(validateAnswers(noPrefix as unknown as Answers).join("\n"), /vmNamePrefix is required/);
+  assert.match(validateAnswers({ ...ANSWERS, vmNamePrefix: "mt" }).join("\n"), /vmNamePrefix "mt" is not a usable/);
+  assert.match(validateAnswers({ ...ANSWERS, vmNamePrefix: "fh-" }).join("\n"), /reserved for Foundation/);
+  const outside = { ...ANSWERS, vmNamePrefix: "ms-" };
+  assert.match(validateAnswers(outside).join("\n"), /slot mt-187-c2: vmName must start with the VM name prefix "ms-"/);
+  // Case-insensitive: Proxmox lowercases nothing, the hub compares lowercased.
+  const upper = { ...ANSWERS, hosts: [{ ...ANSWERS.hosts[0]!, slots: [{ ...ANSWERS.hosts[0]!.slots[0]!, vmName: "MT-187-c2" }] }] };
+  assert.deepEqual(validateAnswers(upper).filter((e) => /prefix/.test(e)), []);
+});
+
+test("config.env always carries PROVIDER_VM_PREFIX, beside the slug, with its comment", () => {
+  const text = renderConfigEnv(ANSWERS);
+  const lines = text.split("\n");
+  const slugAt = lines.findIndex((l) => l.startsWith("PROVIDER_SLUG="));
+  const prefixAt = lines.findIndex((l) => l === "PROVIDER_VM_PREFIX=mt-");
+  assert.ok(prefixAt > slugAt && prefixAt - slugAt <= 3, "right after the slug");
+  assert.match(lines[prefixAt - 1]!, /^# Flux Hub at first ingest/);
+  // And it round-trips into the manifest body.
+  const body = renderManifestBodyFromConfig(text);
+  assert.equal((body.provider as { vmNamePrefix?: string }).vmNamePrefix, "mt-");
 });

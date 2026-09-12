@@ -19,6 +19,7 @@ import {
 
 const GOOD_CONFIG = `# MoltenTech operator config
 PROVIDER_SLUG=acme-nodes
+PROVIDER_VM_PREFIX=mt-
 PROVIDER_NAME=Acme Nodes
 PROVIDER_CONTACT=ops@acme.example
 MT_BASE_URL=https://fluxhub.moltentech.us
@@ -490,4 +491,72 @@ test("🔴 a priced tier the agent never lists is an ERROR — that tier is not 
     assert.equal(rules.length, 2, `listing=${listing}: ${report.findings.map((f) => f.rule).join(", ")}`);
     assert.ok(rules.every((f) => f.severity === "error"));
   }
+});
+
+// ── The VM-name namespace ─────────────────────────────────────────────────────
+
+test("VM_PREFIX_NOT_SET: a provider config with no prefix warns and points at `slug`; a fragment does not", () => {
+  const r = runDoctor({ configEnv: "PROVIDER_SLUG=acme\nPROVIDER_NAME=Acme\n" });
+  assert.deepEqual(rules(r), ["VM_PREFIX_NOT_SET"]);
+  assert.equal(r.findings[0]!.severity, "warning");
+  assert.equal(r.findings[0]!.fix, "fh-toolkit slug");
+  // An empty value is "not set" too — the key was written blank, never filled.
+  assert.deepEqual(rules(runDoctor({ configEnv: "PROVIDER_SLUG=acme\nPROVIDER_VM_PREFIX=\n" })), ["VM_PREFIX_NOT_SET"]);
+  // No PROVIDER_SLUG → not a provider config yet; the other rules already let it be.
+  assert.deepEqual(rules(runDoctor({ configEnv: 'TIER_PRICES_JSON={"cumulus":700}\n' })), []);
+});
+
+test("VM_PREFIX_INVALID: a prefix the hub would refuse is an error, with the line", () => {
+  for (const bad of ["mt", "MT-", "mt-c-", "abcdefghi-", "1a-"]) {
+    const r = runDoctor({ configEnv: `PROVIDER_SLUG=acme\nPROVIDER_VM_PREFIX=${bad}\n` });
+    assert.deepEqual(rules(r), ["VM_PREFIX_INVALID"], bad);
+    assert.equal(r.findings[0]!.severity, "error");
+    assert.equal(r.findings[0]!.line, 2);
+  }
+  assert.deepEqual(rules(runDoctor({ configEnv: "PROVIDER_SLUG=acme\nPROVIDER_VM_PREFIX=mt1-\n" })), []);
+});
+
+test("VMNAME_OUTSIDE_PREFIX: every slot must start with the declared prefix (case-insensitive)", () => {
+  const inv = JSON.stringify([
+    { name: "pve30", slots: [{ vmName: "mt-187-c2", lanIp: "10.0.0.2/24" }, { vmName: "MT-187-c3", lanIp: "10.0.0.3/24" }, { vmName: "ms-186-c8", lanIp: "10.0.0.8/24" }] },
+  ]);
+  const found = lintInventory(inv, ["pve30"], "inventory.json", "mt-");
+  assert.deepEqual(found.map((f) => f.rule), ["VMNAME_OUTSIDE_PREFIX"]);
+  assert.match(found[0]!.message, /"ms-186-c8" is outside your VM name prefix "mt-"/);
+  // No prefix known → the rule is inert, exactly as before it existed.
+  assert.deepEqual(lintInventory(inv, ["pve30"]), []);
+  // Through runDoctor: the prefix comes from config.env, and only when it is well-formed.
+  const r = runDoctor({ configEnv: "PROVIDER_SLUG=acme\nHOSTS=pve30\nPROVIDER_VM_PREFIX=mt-\n", inventoryJson: inv });
+  assert.deepEqual(rules(r), ["VMNAME_OUTSIDE_PREFIX"]);
+  const malformed = runDoctor({ configEnv: "PROVIDER_SLUG=acme\nHOSTS=pve30\nPROVIDER_VM_PREFIX=mt\n", inventoryJson: inv });
+  assert.deepEqual(rules(malformed), ["VM_PREFIX_INVALID"], "a malformed prefix is its own finding, not three more");
+});
+
+test("the hub's name verdicts become findings, one rule per kind; null or omitted adds nothing", () => {
+  const base = { configEnv: GOOD_CONFIG, inventoryJson: GOOD_INVENTORY };
+  assert.deepEqual(rules(runDoctor(base)), []);
+  assert.deepEqual(rules(runDoctor({ ...base, nameCheck: null })), []);
+  assert.deepEqual(rules(runDoctor({ ...base, nameCheck: { advisory: true, slug: { value: "acme-nodes", available: true } } })), []);
+
+  const r = runDoctor({
+    ...base,
+    nameCheck: {
+      advisory: true,
+      slug: { value: "acme-nodes", available: false, reason: "taken" },
+      name: { value: "Acme Nodes", available: true, warning: "confusable" },
+      vmNamePrefix: { value: "mt-", available: false, reason: "taken" },
+      hostNames: [{ value: "pve30", available: false, reason: "taken" }, { value: "pve50", available: true }],
+      vmNames: [{ value: "mt-187-c2", available: false, reason: "taken" }],
+    },
+  });
+  assert.deepEqual(rules(r), ["SLUG_TAKEN_BY_OTHER", "VM_PREFIX_TAKEN", "NAME_CONFUSABLE", "HOSTNAME_TAKEN", "VMNAME_TAKEN"]);
+  const by = Object.fromEntries(r.findings.map((f) => [f.rule, f]));
+  assert.equal(by.SLUG_TAKEN_BY_OTHER!.severity, "error");
+  assert.match(by.SLUG_TAKEN_BY_OTHER!.message, /pubkey does not match/, "names the misleading ingest error it pre-empts");
+  assert.equal(by.NAME_CONFUSABLE!.severity, "warning");
+  assert.equal(by.VMNAME_TAKEN!.file, "inventory.json");
+  assert.equal(formatReport(r).ok, false);
+
+  const reserved = runDoctor({ ...base, nameCheck: { advisory: true, vmNamePrefix: { value: "fh-", available: false, reason: "reserved" } } });
+  assert.deepEqual(rules(reserved), ["VM_PREFIX_RESERVED"]);
 });

@@ -120,3 +120,33 @@ test("unwrapManifest splits a wrapper and passes a bare manifest through", () =>
   assert.equal(wrapped.manifest, manifest);
   assert.equal(wrapped.ownerSignature, ownerSignature);
 });
+
+// ── provider.vmNamePrefix — the VM-name namespace, format only ───────────────
+test("vmNamePrefix: well-formed namespaces parse, malformed ones do not, omitted is byte-identical", () => {
+  const { publicKeyBase64 } = generateEd25519();
+  const body = (vmNamePrefix?: string): Record<string, unknown> => ({
+    schemaVersion: 2,
+    provider: { slug: "prefix-test", name: "Prefix Test", ...(vmNamePrefix === undefined ? {} : { vmNamePrefix }) },
+    coalitionUrl: "https://coalition.example",
+    pubkey: publicKeyBase64,
+    hardware: [{ name: "pve-01" }],
+    trialDays: 1,
+    manualApproval: false,
+    serviceFlags: {},
+    trustedSelfClaim: false,
+    publishedAt: "2026-09-12T00:00:00.000Z",
+    signature: "x",
+  });
+  for (const ok of ["mt-", "mt1-", "cd-", "a1-", "abcdefgh-"]) {
+    assert.equal(ProviderManifest.safeParse(body(ok)).success, true, `${ok} should parse`);
+  }
+  // The zod is FORMAT only: `fh-` is a valid namespace shape; its reservation is hub policy.
+  assert.equal(ProviderManifest.safeParse(body("fh-")).success, true);
+  for (const bad of ["mt", "Mt-", "mt-c-", "abcdefghi-", "1mt-", "-", "m-", "mt_", "mt-c"]) {
+    assert.equal(ProviderManifest.safeParse(body(bad)).success, false, `${bad} should be rejected`);
+  }
+  // Omitting the field serializes exactly as it did before the field existed.
+  const without = ProviderManifest.parse(body());
+  assert.equal("vmNamePrefix" in without.provider, false);
+  assert.equal(JSON.stringify(without.provider), JSON.stringify({ slug: "prefix-test", name: "Prefix Test" }));
+});

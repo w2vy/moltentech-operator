@@ -14,6 +14,7 @@ import { renderSecretsEnv, type Answers } from "./scaffold";
 /** The only fields renderSecretsEnv reads are the Stripe pair; the rest just has to typecheck. */
 const ANSWERS: Answers = {
   providerSlug: "demo",
+  vmNamePrefix: "dm-",
   providerName: "Demo",
   ownerAddress: "t1owner",
   mtBaseUrl: "https://hub.example",

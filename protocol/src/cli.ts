@@ -58,9 +58,12 @@ import {
   readLevel,
   readTierPrices,
   readEnvValue,
+  upsertEnvLine,
   type Level,
 } from "./level-change";
 import { renderManifestBodyFromConfig, parseConfigEnv } from "./manifest-config";
+import { checkNames, describeNameFindings, type NameCheckRequest, type NameCheckResponse } from "./name-check";
+import { VM_NAME_PREFIX_RULE } from "./common";
 import {
   runDoctor,
   formatReport,
@@ -95,6 +98,11 @@ import {
   isIPv4,
   vmNameProblem,
   slugProblem,
+  renderConfigEnv,
+  vmNamePrefixProblem,
+  suggestVmNamePrefix,
+  composeVmName,
+  defaultVmNameSuffix,
   type LanNetwork,
   generateAll,
   GENERATED_PATHS,
@@ -241,6 +249,11 @@ export type Ctx = {
    * assumed down for the rest of the session.
    */
   tierMinimums?: Map<string, Record<string, number>>;
+  /**
+   * The fetch every hub call goes through. Injected by tests that drive `runCommand`
+   * in-process with a fake hub; production leaves it unset and uses the global.
+   */
+  fetch?: typeof fetch;
 };
 
 /**
@@ -316,7 +329,7 @@ async function withPrompts<T>(
   const askUntil: AskUntil = async (q, problem, def) => {
     for (;;) {
       const answer = await ask(q, def);
-      const why = problem(answer);
+      const why = await problem(answer);
       if (!why) return answer;
       console.log(`    ${why}`);
     }
@@ -332,7 +345,7 @@ async function withPrompts<T>(
 async function cachedTierMinimums(ctx: Ctx, baseUrl: string): Promise<Record<string, number> | null> {
   const hit = ctx.tierMinimums?.get(baseUrl);
   if (hit) return hit;
-  const fetched = await fetchTierMinimums(baseUrl);
+  const fetched = await fetchTierMinimums(baseUrl, ctx.fetch ?? fetch);
   if (fetched) (ctx.tierMinimums ??= new Map()).set(baseUrl, fetched);
   return fetched;
 }
@@ -356,10 +369,10 @@ async function cachedTierMinimums(ctx: Ctx, baseUrl: string): Promise<Record<str
  * in the file rather than being an absent line nobody can notice. It is per-MT: a
  * Coalition moved between instances needs this changed as well as MT_BASE_URL.
  */
-async function fetchMtPubkey(mtBaseUrl: string): Promise<string> {
+async function fetchMtPubkey(mtBaseUrl: string, fetchImpl: typeof fetch = fetch): Promise<string> {
   const url = `${mtBaseUrl.replace(/\/$/, "")}/api/mt-pubkey`;
   try {
-    const res = await fetch(url, { signal: AbortSignal.timeout(10_000) });
+    const res = await fetchImpl(url, { signal: AbortSignal.timeout(10_000) });
     if (res.status === 503) {
       console.log(`  → MT_PUBKEY: ${mtBaseUrl} has signing disabled (503) — leaving it blank.`);
       return "";
@@ -382,9 +395,13 @@ async function fetchMtPubkey(mtBaseUrl: string): Promise<string> {
 }
 
 export type Ask = (q: string, def?: string) => Promise<string>;
+/**
+ * `problem` may go to the network (the hub's name check), so it may return a promise.
+ * A sync validator is the common case and needs no wrapping.
+ */
 export type AskUntil = (
   q: string,
-  problem: (answer: string) => string | undefined,
+  problem: (answer: string) => string | undefined | Promise<string | undefined>,
   def?: string
 ) => Promise<string>;
 
@@ -454,123 +471,580 @@ export async function askSellingAnswers(
   return { tierPricesCents, stripeSecretKey, stripeWebhookSecret };
 }
 
-async function askAnswers(
-  ctx: Ctx,
-  minimums: Record<string, number> = TIER_FLOORS_CENTS
-): Promise<Answers> {
-  return withPrompts(ctx, async (ask, askUntil) => {
-    console.log("fh-toolkit init — this writes every onboarding file from your answers.\n");
+/**
+ * One hub, one "could not reach" line per run.
+ *
+ * Every hub check in the wizard is ADVISORY — ingest re-checks and wins — so an
+ * unreachable hub must not stop a scaffold. It also must not print the same warning at
+ * every prompt: the first `null` says "names unchecked" once, and the rest are silent.
+ */
+interface HubNames {
+  /** The raw verdicts, or null when the hub could not be asked. */
+  check(req: NameCheckRequest): Promise<NameCheckResponse | null>;
+  /** The first BLOCKING finding as prompt text, or undefined (available, or unreachable). */
+  blocking(req: NameCheckRequest): Promise<string | undefined>;
+  /** Print the advisory findings, if any. */
+  advise(resp: NameCheckResponse | null): void;
+}
 
-    // Asked FIRST because it decides which of the later questions exist at all. A
-    // Supporter is not a degenerate operator — it is the level most participants will
-    // hold, and it has no Stripe account to ask about, no prices to set, and nothing
-    // listed for sale.
+function hubNames(ctx: Ctx, mtBaseUrl: string, self?: string): HubNames {
+  let warned = false;
+  const check = async (req: NameCheckRequest): Promise<NameCheckResponse | null> => {
+    const resp = await checkNames(mtBaseUrl, self ? { self, ...req } : req, ctx.fetch ?? fetch);
+    if (resp === null && !warned) {
+      warned = true;
+      console.log(`    note: could not reach ${mtBaseUrl} to check names — they are checked again at ingest.`);
+    }
+    return resp;
+  };
+  return {
+    check,
+    blocking: async (req) => {
+      const resp = await check(req);
+      return resp ? describeNameFindings(resp).blocking[0] : undefined;
+    },
+    advise: (resp) => {
+      if (!resp) return;
+      for (const line of describeNameFindings(resp).advisory) console.log(`    ⚠ ${line}`);
+    },
+  };
+}
+
+/** The one request that covers a whole answers file / scaffold. Pure. */
+export function nameCheckRequestFor(a: Answers): NameCheckRequest {
+  return {
+    slug: a.providerSlug,
+    name: a.providerName,
+    vmNamePrefix: a.vmNamePrefix,
+    hostNames: a.hosts.map((h) => h.name),
+    vmNames: a.hosts.flatMap((h) => h.slots.map((s) => s.vmName)),
+  };
+}
+
+/**
+ * The same request for a scaffolded directory: config.env (+ inventory.json when it is
+ * there), with `self` set so the hub excludes this provider's own rows.
+ */
+export function nameCheckRequestForConfig(configText: string, inventoryText?: string): NameCheckRequest {
+  const env = parseConfigEnv(configText);
+  const req: NameCheckRequest = { self: env.PROVIDER_SLUG || undefined };
+  if (env.PROVIDER_SLUG) req.slug = env.PROVIDER_SLUG;
+  if (env.PROVIDER_NAME) req.name = env.PROVIDER_NAME;
+  if (env.PROVIDER_VM_PREFIX) req.vmNamePrefix = env.PROVIDER_VM_PREFIX;
+  const hosts = (env.HOSTS ?? "").split(",").map((h) => h.trim()).filter(Boolean);
+  if (hosts.length > 0) req.hostNames = hosts;
+  if (inventoryText) {
+    try {
+      const inv = normalizeInventory(JSON.parse(inventoryText));
+      const vmNames = (inv ?? []).flatMap((h) => (h.slots ?? []).map((s) => s.vmName).filter((v): v is string => !!v));
+      if (vmNames.length > 0) req.vmNames = vmNames;
+    } catch {
+      // A malformed inventory is INVENTORY_MALFORMED's finding; nothing to ask about.
+    }
+  }
+  return req;
+}
+
+/** Everything `slug` and `init` have in common: who you are and which hub you are on. */
+export interface IdentityAnswers {
+  level: "supporter" | "operator";
+  providerSlug: string;
+  vmNamePrefix: string;
+  providerName: string;
+  providerLocation: string;
+  providerContact: string;
+  ownerAddress: string;
+  mtBaseUrl: string;
+  fluxAppName: string;
+}
+
+/**
+ * What `slug` already knows when it runs in a scaffolded directory. Every value present
+ * becomes the prompt's default, and the questions that are not the command's business
+ * (location, contact, owner, app name) are skipped when config.env already has them.
+ */
+export interface IdentityDefaults {
+  /**
+   * The slug in config.env is this provider's identity on the hub: a different one is a
+   * NEW provider, not a rename. `slug` locks it unless --force says that is the intent.
+   */
+  slugLocked?: boolean;
+  mtBaseUrl?: string;
+  level?: "supporter" | "operator";
+  providerSlug?: string;
+  vmNamePrefix?: string;
+  providerName?: string;
+  providerLocation?: string;
+  providerContact?: string;
+  ownerAddress?: string;
+  fluxAppName?: string;
+}
+
+/**
+ * The identity block of the wizard. Extracted so `init` and `slug` ask it with the SAME
+ * words; the two other blocks (`askProxmox`, `askHosts`) and `askSellingAnswers` are cut
+ * along the same lines, and `init` is their composition.
+ *
+ * ⭐ The hub environment is the FIRST question. Everything that goes to the network from
+ * here on — the tier floors, the slug and prefix checks — has to know which registry it is
+ * asking, and prod and staging are separate ones. It used to be asked seventh, after the
+ * floors had already been fetched from wherever `MT_BASE_URL` happened to point, which
+ * quoted production's floors to every staging operator.
+ */
+export async function askIdentity(
+  ctx: Ctx,
+  ask: Ask,
+  askUntil: AskUntil,
+  defaults: IdentityDefaults = {}
+): Promise<IdentityAnswers> {
+  // Offered as a choice, never free text by default: free-typing this is what put
+  // half a deployment on staging and half on prod.
+  const which = await ask(
+    "Flux Hub environment — 1) production  2) staging",
+    defaults.mtBaseUrl === STAGING_BASE_URL ? "2" : "1"
+  );
+  const mtBaseUrl = which.startsWith("2") ? STAGING_BASE_URL : PRODUCTION_BASE_URL;
+  // The compose file follows this answer: staging gets `:staging`, production `:latest`.
+  console.log(`  → ${mtBaseUrl}; the agent will run ${agentImageFor(mtBaseUrl)}\n`);
+
+  // Asked before the slug because it decides which of the later questions exist at all.
+  // A Supporter is not a degenerate operator — it is the level most participants will
+  // hold, and it has no Stripe account to ask about, no prices to set, and nothing
+  // listed for sale.
+  let level: "supporter" | "operator";
+  if (defaults.level) {
+    level = defaults.level;
+  } else {
     console.log("Which are you?");
     console.log("  1) Flux Hub Supporter — your own nodes, plus Foundation nodes on your idle");
     console.log("     capacity. Nothing for sale, no Stripe account needed.");
     console.log("  2) Flux Hub Operator  — the above, plus hardware rented out through the");
     console.log("     marketplace. You are merchant of record on your own Stripe account.");
     const levelAnswer = await ask("  choose 1 or 2", "2");
-    const level: "supporter" | "operator" = levelAnswer.startsWith("1") ? "supporter" : "operator";
+    level = levelAnswer.startsWith("1") ? "supporter" : "operator";
     console.log(`  → Flux Hub ${level === "supporter" ? "Supporter" : "Operator"}\n`);
+  }
 
-    const providerSlug = await askUntil(
-      "Provider slug (lowercase, PERMANENT once ingested)",
-      slugProblem
-    );
-    const providerName = await ask("Display name", providerSlug);
-    const providerLocation = await ask("Location (shown on your marketplace card)", "");
-    const providerContact = await ask("Contact email", "");
+  // The slug the operator already IS excludes their own rows from every "taken", so a
+  // re-run in a scaffolded directory does not report the operator's own name back at them.
+  const hub = hubNames(ctx, mtBaseUrl, defaults.providerSlug);
+  const providerSlug = await askUntil(
+    "Provider slug (lowercase, PERMANENT once ingested)",
+    async (v) => {
+      if (defaults.slugLocked && defaults.providerSlug && v !== defaults.providerSlug) {
+        return (
+          `config.env says PROVIDER_SLUG=${defaults.providerSlug}. The slug is your identity on the hub — ` +
+          "a different one is a NEW provider, not a rename. Keep it (Enter), or re-run with --force if a new provider is what you mean."
+        );
+      }
+      return slugProblem(v) ?? (await hub.blocking({ slug: v }));
+    },
+    defaults.providerSlug
+  );
+  // The namespace every VM name lives in. Pinned by the hub at first ingest, like the
+  // slug — so it is checked against the hub at the one moment it is still free to change.
+  const vmNamePrefix = await askUntil(
+    `VM name prefix (${VM_NAME_PREFIX_RULE}; PERMANENT once ingested)`,
+    async (v) => vmNamePrefixProblem(v) ?? (await hub.blocking({ vmNamePrefix: v })),
+    defaults.vmNamePrefix ?? suggestVmNamePrefix(providerSlug)
+  );
+  const providerName = await ask("Display name", defaults.providerName ?? providerSlug);
+  // A look-alike display name is advisory: the hub accepts it and flags it for an admin.
+  hub.advise(await hub.check({ name: providerName }));
 
-    // Echoed back and confirmed: this address is baked into the bytes signed at
-    // /onboard, so a typo means re-signing everything downstream.
-    let ownerAddress = "";
-    for (;;) {
-      ownerAddress = await ask("Owner wallet address (ZelID 1… or Flux t1…)");
-      const yes = (await ask(`Confirm owner address is exactly "${ownerAddress}"? (y/N)`, "N")).toLowerCase();
-      if (yes === "y" || yes === "yes") break;
-    }
+  const providerLocation =
+    defaults.providerLocation ?? (await ask("Location (shown on your marketplace card)", ""));
+  const providerContact = defaults.providerContact ?? (await ask("Contact email", ""));
 
-    // Offered as a choice, never free text by default: free-typing this is what put
-    // half a deployment on staging and half on prod.
-    const which = await ask("Flux Hub environment — 1) production  2) staging", "1");
-    const mtBaseUrl = which.startsWith("2") ? STAGING_BASE_URL : PRODUCTION_BASE_URL;
-    // The compose file follows this answer: staging gets `:staging`, production `:latest`.
-    console.log(`  → the agent will run ${agentImageFor(mtBaseUrl)}`);
+  // Echoed back and confirmed: this address is baked into the bytes signed at
+  // /onboard, so a typo means re-signing everything downstream.
+  let ownerAddress = defaults.ownerAddress ?? "";
+  while (!ownerAddress) {
+    ownerAddress = await ask("Owner wallet address (ZelID 1… or Flux t1…)");
+    const yes = (await ask(`Confirm owner address is exactly "${ownerAddress}"? (y/N)`, "N")).toLowerCase();
+    if (yes !== "y" && yes !== "yes") ownerAddress = "";
+  }
 
-    const fluxAppName = await ask("Flux app name for your Coalition", suggestFluxAppName(providerSlug));
+  let fluxAppName = defaults.fluxAppName ?? "";
+  if (!fluxAppName) {
+    fluxAppName = await ask("Flux app name for your Coalition", suggestFluxAppName(providerSlug));
     console.log(`  → COALITION_URL will be ${coalitionUrlFor(fluxAppName)}`);
+  }
+  return { level, providerSlug, vmNamePrefix, providerName, providerLocation, providerContact, ownerAddress, mtBaseUrl, fluxAppName };
+}
 
-    // Step 0.1 has already produced these by the time init runs, and leaving them for
-    // later meant the agent could not make a single Proxmox call until the operator
-    // hand-edited .env.operator. Asked, not derived — init holds no cluster to ask.
-    // Prompts are labelled with the ENVIRONMENT VARIABLE each answer becomes, not with a
-    // prose description of it. The operator is holding the output of Step 0.1 — two values
-    // the runbook names as PROXMOX_TOKEN_ID and PROXMOX_TOKEN_SECRET — and matching those
-    // names here removes the guess about which half goes where.
-    // ⭐ Proved HERE, not five steps later in `fh-agent doctor`. A mistyped secret, a
-    // path-scoped token, a URL the container cannot resolve — all of them used to
-    // surface long after the step that caused them, in a different tool.
-    //
-    // The probe is not only validation: a PASS fills `survey`, and `survey` supplies the
-    // defaults for the node names and storage ids asked further down. A failed probe
-    // used to print a warning and carry on, which quietly demoted the rest of the wizard
-    // to hand-typing exactly the two answers that fail SILENTLY later — a node name that
-    // does not exist, and `local-lvm` on a spinning disk. So we now ask again instead of
-    // accepting the failure by default.
-    //
-    // Still escapable: this is a scaffolder, and an operator whose hypervisor is behind a
-    // VPN or momentarily down must be able to generate their files. `skip` is spelled out
-    // at the retry prompt, so going on without a verified token is a decision rather than
-    // the path of least resistance.
-    console.log("\nProxmox API token (onboarding Step 0.1):");
-    let proxmoxUrl = "";
-    let proxmoxTokenId = "";
-    let proxmoxTokenSecret = "";
-    let survey: ProxmoxSurvey | undefined;
-    for (;;) {
-      proxmoxUrl = await ask(
-        "  Proxmox URL (an IP always works; a name must resolve INSIDE the container) — or `skip`",
-        proxmoxUrl || "https://192.168.1.10:8006"
-      );
-      if (proxmoxUrl.toLowerCase() === "skip") {
-        proxmoxUrl = "";
-        console.log("  → skipped. Fill PROXMOX_* in .env.operator, then `fh-toolkit doctor --check-proxmox`.");
-        break;
-      }
-      proxmoxTokenId = await ask("  PROXMOX_TOKEN_ID", proxmoxTokenId || "fh-agent@pve!agent");
-      // The captured secret is deliberately NOT offered back as a default: `ask` echoes
-      // defaults in brackets, and a retry loop would then print the token secret to the
-      // terminal on every round. Enter re-uses it without showing it.
-      const secretPrompt = proxmoxTokenSecret
-        ? "  PROXMOX_TOKEN_SECRET (Enter keeps the one you typed)"
-        : "  PROXMOX_TOKEN_SECRET (printed once when you created it)";
-      proxmoxTokenSecret = (await ask(secretPrompt)) || proxmoxTokenSecret;
+export interface ProxmoxAnswers {
+  proxmoxUrl: string;
+  proxmoxTokenId: string;
+  proxmoxTokenSecret: string;
+  /** What the cluster reported when the token verified; the defaults for `askHosts`. */
+  survey: ProxmoxSurvey | undefined;
+}
 
-      if (!proxmoxUrl || !proxmoxTokenId || !proxmoxTokenSecret) {
-        console.log("    all three are needed to verify the token.");
-        continue;
-      }
+/** The Proxmox token block: asked, verified against the cluster, `skip`-able. */
+export async function askProxmox(ask: Ask): Promise<ProxmoxAnswers> {
+  // Step 0.1 has already produced these by the time init runs, and leaving them for
+  // later meant the agent could not make a single Proxmox call until the operator
+  // hand-edited .env.operator. Asked, not derived — init holds no cluster to ask.
+  // Prompts are labelled with the ENVIRONMENT VARIABLE each answer becomes, not with a
+  // prose description of it. The operator is holding the output of Step 0.1 — two values
+  // the runbook names as PROXMOX_TOKEN_ID and PROXMOX_TOKEN_SECRET — and matching those
+  // names here removes the guess about which half goes where.
+  // ⭐ Proved HERE, not five steps later in `fh-agent doctor`. A mistyped secret, a
+  // path-scoped token, a URL the container cannot resolve — all of them used to
+  // surface long after the step that caused them, in a different tool.
+  //
+  // The probe is not only validation: a PASS fills `survey`, and `survey` supplies the
+  // defaults for the node names and storage ids asked further down. A failed probe
+  // used to print a warning and carry on, which quietly demoted the rest of the wizard
+  // to hand-typing exactly the two answers that fail SILENTLY later — a node name that
+  // does not exist, and `local-lvm` on a spinning disk. So we now ask again instead of
+  // accepting the failure by default.
+  //
+  // Still escapable: this is a scaffolder, and an operator whose hypervisor is behind a
+  // VPN or momentarily down must be able to generate their files. `skip` is spelled out
+  // at the retry prompt, so going on without a verified token is a decision rather than
+  // the path of least resistance.
+  console.log("\nProxmox API token (onboarding Step 0.1):");
+  let proxmoxUrl = "";
+  let proxmoxTokenId = "";
+  let proxmoxTokenSecret = "";
+  let survey: ProxmoxSurvey | undefined;
+  for (;;) {
+    proxmoxUrl = await ask(
+      "  Proxmox URL (an IP always works; a name must resolve INSIDE the container) — or `skip`",
+      proxmoxUrl || "https://192.168.1.10:8006"
+    );
+    if (proxmoxUrl.toLowerCase() === "skip") {
+      proxmoxUrl = "";
+      console.log("  → skipped. Fill PROXMOX_* in .env.operator, then `fh-toolkit doctor --check-proxmox`.");
+      break;
+    }
+    proxmoxTokenId = await ask("  PROXMOX_TOKEN_ID", proxmoxTokenId || "fh-agent@pve!agent");
+    // The captured secret is deliberately NOT offered back as a default: `ask` echoes
+    // defaults in brackets, and a retry loop would then print the token secret to the
+    // terminal on every round. Enter re-uses it without showing it.
+    const secretPrompt = proxmoxTokenSecret
+      ? "  PROXMOX_TOKEN_SECRET (Enter keeps the one you typed)"
+      : "  PROXMOX_TOKEN_SECRET (printed once when you created it)";
+    proxmoxTokenSecret = (await ask(secretPrompt)) || proxmoxTokenSecret;
 
-      // Several seconds of silence with no cursor is indistinguishable from a hang, and
-      // this is the one prompt that goes to the network before answering.
-      console.log("  Wait while the token is verified…");
-      const probe = await probeProxmox({
-        url: proxmoxUrl,
-        tokenId: proxmoxTokenId,
-        tokenSecret: proxmoxTokenSecret,
-      });
-      console.log(formatProbe(probe.checks));
-      if (probe.ok) {
-        survey = probe.survey;
-        break;
+    if (!proxmoxUrl || !proxmoxTokenId || !proxmoxTokenSecret) {
+      console.log("    all three are needed to verify the token.");
+      continue;
+    }
+
+    // Several seconds of silence with no cursor is indistinguishable from a hang, and
+    // this is the one prompt that goes to the network before answering.
+    console.log("  Wait while the token is verified…");
+    const probe = await probeProxmox({
+      url: proxmoxUrl,
+      tokenId: proxmoxTokenId,
+      tokenSecret: proxmoxTokenSecret,
+    });
+    console.log(formatProbe(probe.checks));
+    if (probe.ok) {
+      survey = probe.survey;
+      break;
+    }
+    const again = await ask("  → fix the above and retry, or `skip` to go on unverified", "retry");
+    if (again.toLowerCase().startsWith("s")) {
+      console.log("  → going on unverified; re-run `fh-toolkit doctor --check-proxmox` once it is fixed.");
+      break;
+    }
+  }
+
+  return { proxmoxUrl, proxmoxTokenId, proxmoxTokenSecret, survey };
+}
+
+/**
+ * A VM name is typed as the part AFTER the prefix, so this validates the suffix on its
+ * own (no leading hyphen — the prefix already ends in one) and the composed name as a
+ * hostname, against every slot already placed.
+ */
+function vmSuffixProblemFor(prefix: string) {
+  return (suffix: string, slots: SlotAnswer[], hosts: HostAnswer[]): string | undefined => {
+    if (!suffix) return "a VM name is required.";
+    if (suffix.startsWith("-")) return `the prefix "${prefix}" already ends in "-" — type only what comes after it.`;
+    const full = composeVmName(prefix, suffix);
+    if (slots.some((s) => s.vmName === full) || hosts.some((h) => h.slots.some((s) => s.vmName === full))) {
+      return `"${full}" is already used by another slot.`;
+    }
+    return vmNameProblem(full);
+  };
+}
+
+/**
+ * The inventory block: hosts, their storage, and the slots on each — one host at a time.
+ *
+ * `tiers` is the priced list when the operator is selling (so a slot picks from what is
+ * for sale) and empty for a Supporter, where every tier the hub knows is allowed.
+ */
+export async function askHosts(
+  ask: Ask,
+  askUntil: AskUntil,
+  input: {
+    prefix: string;
+    tiers: string[];
+    minimums: Record<string, number>;
+    survey: ProxmoxSurvey | undefined;
+    hub: HubNames;
+  }
+): Promise<HostAnswer[]> {
+  const { prefix, tiers, minimums, survey, hub } = input;
+  const vmSuffixProblem = vmSuffixProblemFor(prefix);
+  console.log("\nNow your hardware. Everything above was about you; this is a stock-take.");
+  const hosts: HostAnswer[] = [];
+  // Defaulted to what the cluster actually reports, so the names cannot be mistyped
+  // and an operator who forgot a node sees it listed.
+  const hostNames = (await ask("Proxmox host name(s), comma-separated", survey?.nodes.join(",")))
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  // A host name is unique per PROVIDER on the hub, so "taken" here can only mean this
+  // operator already registered it — worth a line, not a re-prompt.
+  if (hostNames.length > 0) hub.advise(await hub.check({ hostNames }));
+
+  // Ports are a property of the WAN IP, not of the host — one public address can front
+  // slots on two different hypervisors, and those slots share the one block. Tracked
+  // across the whole scaffold so a WAN IP reused on a second host resumes where it left
+  // off instead of handing out 16127 twice.
+  const usedPorts = new Map<string, Set<number>>();
+
+  // Asked once and carried forward: hosts usually share a LAN, and re-typing it per
+  // host is how one of them ends up on a different prefix by accident.
+  let lastNetwork: string | undefined;
+
+  for (const name of hostNames) {
+    console.log(`\n— host ${name} —`);
+    // The highest-value question in the list: a spinning-disk default wastes an entire
+    // provision + benchmark cycle and reports NO cause. When the probe answered, the
+    // safe options are printed and the default is one of them — the operator has to go
+    // out of their way to pick a spinning disk instead of having to know not to.
+    const options = survey?.storages[name] ?? [];
+    const ssd = ssdImageStorages(options);
+    const iso = isoStorages(options);
+    if (options.length > 0) {
+      // Only what this host can actually use is listed as a choice. A cluster defines
+      // storages globally, so every host's storage list also carries the per-host VGs of
+      // every OTHER host — printing those as "?" made the useful two lines hard to find.
+      const here = options.filter((o) => o.active);
+      const elsewhere = options.filter((o) => !o.active);
+      console.log(`  storages on ${name}: ` + here.map((o) => `${o.id}(${describeStorage(o)})`).join(" "));
+      if (elsewhere.length > 0) {
+        console.log(`    (${elsewhere.length} more defined in the cluster but not usable here: ` +
+          `${elsewhere.map((o) => o.id).join(", ")})`);
       }
-      const again = await ask("  → fix the above and retry, or `skip` to go on unverified", "retry");
-      if (again.toLowerCase().startsWith("s")) {
-        console.log("  → going on unverified; re-run `fh-toolkit doctor --check-proxmox` once it is fixed.");
-        break;
+      if (ssd.length === 0) {
+        console.log("  ⚠ no storage on this host resolved to solid state — check the answer you give below.");
       }
     }
+    // `askUntil` rather than `ask`: when the probe answered, a storage that cannot hold the
+    // content it is being named for is PROVABLY wrong, and the prompt is the only place the
+    // operator is still holding the context to fix it. With no survey the rule is inert and
+    // this behaves exactly as `ask` did — silence means "not disproved", never "checked".
+    const storageImages = await askUntil(
+      `  storage pool for VM images on ${name} (must be SSD)`,
+      (v) => storageContentProblem(v, options, "images"),
+      ssd[0]?.id
+    );
+    const chosen = options.find((o) => o.id === storageImages);
+    if (chosen?.rotational === true) {
+      console.log(`  ⚠ ${storageImages} is ROTATIONAL: ${chosen.why}`);
+      console.log("    Nodes on it provision fine and then fail every benchmark, with no visible cause.");
+    }
+    // Shared is the recommendation, and it is worth one line of why: the agent refreshes
+    // the ArcaneOS ISO onto whatever each host names, so a shared target is staged ONCE
+    // for the cluster while per-host storage is a copy per host to keep current.
+    if (iso[0]?.shared) {
+      console.log(`  ${iso[0].id} is shared — one ISO for the whole cluster, refreshed in one place.`);
+    }
+    // The default is `iso[0]` when the probe answered. The bare fallback is deliberately NOT
+    // a storage name any more: `pve55-shared` was one operator's NFS mount, meaningless to
+    // everyone else, and it read as a recommendation. With no survey there is no honest
+    // default, so ask for one rather than suggest a stranger's.
+    const storageIso = await askUntil(
+      `  storage holding the ArcaneOS ISO on ${name}`,
+      (v) => (v ? storageContentProblem(v, options, "iso") : "name the storage that holds the ArcaneOS ISO."),
+      iso[0]?.id
+    );
+
+    const capacity = Math.max(1, Math.trunc(Number(await ask(`  how many node slots does ${name} support?`, "1"))) || 1);
+
+    // ── Slots, grouped by WAN IP ────────────────────────────────────────────────
+    // A host is not one public address. pve40 fronts several, and each WAN IP carries
+    // its own LAN — so WAN IP is the OUTER loop and the LAN network is asked once per
+    // WAN IP, not once per host and not once per slot. Asked per slot (the old shape),
+    // the same address got retyped for every node on it, and Flux refuses a duplicated
+    // WAN IP + port pair with an error that names neither.
+    const slots: SlotAnswer[] = [];
+    while (slots.length < capacity) {
+      const ipAddress = await askUntil(
+        `  WAN IP (blank when done — ${slots.length}/${capacity} placed)`,
+        (v) => (v === "" || isIPv4(v) ? undefined : `"${v}" is not an IPv4 address. Flux needs the address itself, not a hostname.`),
+        ""
+      );
+      if (!ipAddress) break;
+
+      // ⭐ ONE answer for the whole LAN: gateway AND prefix. Asked separately, the prefix
+      // is what gets left off a lanIp — and a bare lanIp silently becomes /32, so the
+      // node boots with no route out and is reachable by nobody.
+      let net: LanNetwork | undefined;
+      while (!net) {
+        const answer = await ask("    LAN gateway WITH prefix, e.g. 192.168.87.1/24", lastNetwork);
+        try {
+          net = parseLanNetwork(answer);
+          lastNetwork = answer;
+        } catch (e) {
+          console.log(`      ${(e as Error).message}`);
+        }
+      }
+      console.log(`    → VMs on ${net.base}x/${net.prefix}, gateway ${net.gateway}`);
+
+      // ⭐ Ports restart at 16127 for every WAN IP. Two nodes on 16127 collide only when
+      // they share a public address.
+      const used = usedPorts.get(ipAddress) ?? new Set<number>();
+      usedPorts.set(ipAddress, used);
+      const firstFree = (): number => {
+        let p = DEFAULT_API_PORT;
+        while (used.has(p)) p += API_PORT_STRIDE;
+        return p;
+      };
+      let nextPort = firstFree();
+
+      while (slots.length < capacity) {
+        // The block runs out at 16197 — that is WHY a WAN IP carries at most eight
+        // slots. Rather than let the operator type a ninth port that Flux will not
+        // serve, the loop moves itself on to the next WAN IP and says so.
+        if (nextPort > MAX_API_PORT) {
+          console.log(
+            `    no port left on ${ipAddress}: ${DEFAULT_API_PORT}–${MAX_API_PORT} is the whole ` +
+              `block (${API_PORTS_PER_WAN} slots). More capacity needs another WAN IP.`
+          );
+          break;
+        }
+        // The port prompt doubles as the "another node behind this WAN IP?" question, so
+        // the common answer — Enter, take the next port — costs one keystroke, and moving
+        // on costs one word.
+        const portAnswer = await ask(`    Flux API port (Enter, or 'next' for the next WAN IP)`, String(nextPort));
+        if (portAnswer.toLowerCase() === "next") break;
+        const apiPort = Number(portAnswer);
+        if (!isFluxApiPort(apiPort)) {
+          // Named precisely, because both halves are load-bearing and neither is
+          // guessable: Flux serves this block only, and a port off the stride overlaps
+          // the previous node's ports — which surfaces as THAT node going unreachable.
+          console.log(
+            `      ${portAnswer} is not usable: Flux API ports run ${DEFAULT_API_PORT}–${MAX_API_PORT} ` +
+              `in steps of ${API_PORT_STRIDE}, so they all end in ${DEFAULT_API_PORT % 10}.`
+          );
+          continue;
+        }
+        if (used.has(apiPort)) {
+          console.log(`      ${apiPort} is already taken on ${ipAddress}.`);
+          continue;
+        }
+
+        console.log(`    · slot ${slots.length + 1} of ${capacity}`);
+        // Offered tiers when the operator priced some; otherwise every tier FH knows.
+        // A tier that is not on the list is not a tier — it used to be accepted here and
+        // rejected by validateAnswers after the last question.
+        const allowed = tiers.length > 0 ? tiers : Object.keys(minimums);
+        const tier = await askUntil(
+          `      tier (${allowed.join("/")})`,
+          (v) => (allowed.includes(v) ? undefined : `"${v}" is not one of: ${allowed.join(", ")}.`),
+          allowed[0]
+        );
+        // Only the part after the prefix is typed: the namespace is fixed, so a name
+        // outside it is not a mistake the prompt can make. Validated on the WHOLE name.
+        const vmName = await askUntil(
+          `      VM name suffix (after "${prefix}")`,
+          (v) => vmSuffixProblem(v, slots, hosts),
+          defaultVmNameSuffix(name, slots.length + 1)
+        ).then((v) => composeVmName(prefix, v));
+        let lanIp = "";
+        while (!lanIp) {
+          const answer = await ask(`      LAN address — host number (e.g. 5 for ${net.base}5) or a full IP`);
+          try {
+            lanIp = slotLanIp(answer, net);
+          } catch (e) {
+            console.log(`        ${(e as Error).message}`);
+          }
+        }
+        // Per slot, defaulted to the host's pool. Almost always the default — but a host
+        // with two SSD pools has no other way to say which node lands where, and the
+        // agent already honours `slot.storagePool ?? host.storageImages`.
+        const storagePool = await ask("      storage pool (SSD)", storageImages);
+        console.log(
+          `    → ${lanIp}, gateway ${net.gateway}, WAN ${ipAddress}, API port ${apiPort}, storage ${storagePool}`
+        );
+        slots.push({
+          tier,
+          vmName,
+          ipAddress,
+          lanIp,
+          gateway: net.gateway,
+          apiPort,
+          ...(storagePool && storagePool !== storageImages ? { storagePool } : {}),
+        });
+        // Advance from the port that was USED, not from a running count: an operator who
+        // types 16157 to leave room for something else gets 16167 next, still on stride
+        // and still inside the block.
+        used.add(apiPort);
+        nextPort = Math.max(apiPort + API_PORT_STRIDE, firstFree());
+      }
+    }
+    hosts.push({ name, storageImages, storageIso, slots });
+  }
+
+  // Printed as WAN IP → ports, because that is the shape of the port-forward the
+  // operator has to go and create. A flat range is not actionable when the slots sit
+  // behind more than one public address.
+  const byWan = new Map<string, number[]>();
+  for (const h of hosts) for (const s of h.slots) byWan.set(s.ipAddress, [...(byWan.get(s.ipAddress) ?? []), s.apiPort]);
+  if (byWan.size > 0) {
+    console.log("\nThese must be reachable from outside your LAN, or Flux Hub cannot pull stats:");
+    for (const [wan, ports] of byWan) console.log(`  ${wan} → ${ports.join(", ")}`);
+  }
+
+  // One round trip for every VM name at once, then only the taken ones are re-asked.
+  // A name is taken when ANOTHER provider's slot has it — the hub's names are global —
+  // which the prefix makes rare, but a prefix is only pinned at ingest and two wizards
+  // can be running at once.
+  const resp = await hub.check({ vmNames: hosts.flatMap((h) => h.slots.map((s) => s.vmName)) });
+  for (const verdict of resp?.vmNames ?? []) {
+    if (verdict.available) continue;
+    for (const h of hosts) {
+      const slot = h.slots.find((s) => s.vmName === verdict.value);
+      if (!slot) continue;
+      console.log(`  ${describeNameFindings({ advisory: true, vmNames: [verdict] }).blocking[0]}`);
+      slot.vmName = await askUntil(
+        `    new VM name suffix for the slot on ${h.name} (after "${prefix}")`,
+        async (v) =>
+          vmSuffixProblem(v, [], hosts) ?? (await hub.blocking({ vmNames: [composeVmName(prefix, v)] }))
+      ).then((v) => composeVmName(prefix, v));
+    }
+  }
+  hub.advise(resp);
+  return hosts;
+}
+
+async function askAnswers(ctx: Ctx): Promise<Answers> {
+  return withPrompts(ctx, async (ask, askUntil) => {
+    console.log("fh-toolkit init — this writes every onboarding file from your answers.\n");
+
+    const id = await askIdentity(ctx, ask, askUntil);
+    const { level, mtBaseUrl } = id;
+
+    // Same rule as doctor: ask the hub for the live minimums, fall back to the bundled
+    // table. AFTER the environment answer, so the wizard quotes the floors of the hub it
+    // will onboard against.
+    const liveMinimums = await cachedTierMinimums(ctx, mtBaseUrl);
+    if (!liveMinimums) {
+      console.log("  note: could not reach Flux Hub for live tier minimums — using this tool's bundled copy.");
+    }
+    const minimums = liveMinimums ?? TIER_FLOORS_CENTS;
+
+    const proxmox = await askProxmox(ask);
 
     // ── Pricing, before inventory ────────────────────────────────────────────────
     // What you SELL is a business decision; what hardware you have is a stock-take.
@@ -593,218 +1067,27 @@ async function askAnswers(
     const tiers = Object.keys(tierPricesCents);
 
     // ── Inventory, last, one host at a time ──────────────────────────────────────
-    console.log("\nNow your hardware. Everything above was about you; this is a stock-take.");
-    const hosts: HostAnswer[] = [];
-    // Defaulted to what the cluster actually reports, so the names cannot be mistyped
-    // and an operator who forgot a node sees it listed.
-    const hostNames = (await ask("Proxmox host name(s), comma-separated", survey?.nodes.join(",")))
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean);
-
-    // Ports are a property of the WAN IP, not of the host — one public address can front
-    // slots on two different hypervisors, and those slots share the one block. Tracked
-    // across the whole scaffold so a WAN IP reused on a second host resumes where it left
-    // off instead of handing out 16127 twice.
-    const usedPorts = new Map<string, Set<number>>();
-
-    // Asked once and carried forward: hosts usually share a LAN, and re-typing it per
-    // host is how one of them ends up on a different prefix by accident.
-    let lastNetwork: string | undefined;
-
-    for (const name of hostNames) {
-      console.log(`\n— host ${name} —`);
-      // The highest-value question in the list: a spinning-disk default wastes an entire
-      // provision + benchmark cycle and reports NO cause. When the probe answered, the
-      // safe options are printed and the default is one of them — the operator has to go
-      // out of their way to pick a spinning disk instead of having to know not to.
-      const options = survey?.storages[name] ?? [];
-      const ssd = ssdImageStorages(options);
-      const iso = isoStorages(options);
-      if (options.length > 0) {
-        // Only what this host can actually use is listed as a choice. A cluster defines
-        // storages globally, so every host's storage list also carries the per-host VGs of
-        // every OTHER host — printing those as "?" made the useful two lines hard to find.
-        const here = options.filter((o) => o.active);
-        const elsewhere = options.filter((o) => !o.active);
-        console.log(`  storages on ${name}: ` + here.map((o) => `${o.id}(${describeStorage(o)})`).join(" "));
-        if (elsewhere.length > 0) {
-          console.log(`    (${elsewhere.length} more defined in the cluster but not usable here: ` +
-            `${elsewhere.map((o) => o.id).join(", ")})`);
-        }
-        if (ssd.length === 0) {
-          console.log("  ⚠ no storage on this host resolved to solid state — check the answer you give below.");
-        }
-      }
-      // `askUntil` rather than `ask`: when the probe answered, a storage that cannot hold the
-      // content it is being named for is PROVABLY wrong, and the prompt is the only place the
-      // operator is still holding the context to fix it. With no survey the rule is inert and
-      // this behaves exactly as `ask` did — silence means "not disproved", never "checked".
-      const storageImages = await askUntil(
-        `  storage pool for VM images on ${name} (must be SSD)`,
-        (v) => storageContentProblem(v, options, "images"),
-        ssd[0]?.id
-      );
-      const chosen = options.find((o) => o.id === storageImages);
-      if (chosen?.rotational === true) {
-        console.log(`  ⚠ ${storageImages} is ROTATIONAL: ${chosen.why}`);
-        console.log("    Nodes on it provision fine and then fail every benchmark, with no visible cause.");
-      }
-      // Shared is the recommendation, and it is worth one line of why: the agent refreshes
-      // the ArcaneOS ISO onto whatever each host names, so a shared target is staged ONCE
-      // for the cluster while per-host storage is a copy per host to keep current.
-      if (iso[0]?.shared) {
-        console.log(`  ${iso[0].id} is shared — one ISO for the whole cluster, refreshed in one place.`);
-      }
-      // The default is `iso[0]` when the probe answered. The bare fallback is deliberately NOT
-      // a storage name any more: `pve55-shared` was one operator's NFS mount, meaningless to
-      // everyone else, and it read as a recommendation. With no survey there is no honest
-      // default, so ask for one rather than suggest a stranger's.
-      const storageIso = await askUntil(
-        `  storage holding the ArcaneOS ISO on ${name}`,
-        (v) => (v ? storageContentProblem(v, options, "iso") : "name the storage that holds the ArcaneOS ISO."),
-        iso[0]?.id
-      );
-
-      const capacity = Math.max(1, Math.trunc(Number(await ask(`  how many node slots does ${name} support?`, "1"))) || 1);
-
-      // ── Slots, grouped by WAN IP ────────────────────────────────────────────────
-      // A host is not one public address. pve40 fronts several, and each WAN IP carries
-      // its own LAN — so WAN IP is the OUTER loop and the LAN network is asked once per
-      // WAN IP, not once per host and not once per slot. Asked per slot (the old shape),
-      // the same address got retyped for every node on it, and Flux refuses a duplicated
-      // WAN IP + port pair with an error that names neither.
-      const slots: SlotAnswer[] = [];
-      while (slots.length < capacity) {
-        const ipAddress = await askUntil(
-          `  WAN IP (blank when done — ${slots.length}/${capacity} placed)`,
-          (v) => (v === "" || isIPv4(v) ? undefined : `"${v}" is not an IPv4 address. Flux needs the address itself, not a hostname.`),
-          ""
-        );
-        if (!ipAddress) break;
-
-        // ⭐ ONE answer for the whole LAN: gateway AND prefix. Asked separately, the prefix
-        // is what gets left off a lanIp — and a bare lanIp silently becomes /32, so the
-        // node boots with no route out and is reachable by nobody.
-        let net: LanNetwork | undefined;
-        while (!net) {
-          const answer = await ask("    LAN gateway WITH prefix, e.g. 192.168.87.1/24", lastNetwork);
-          try {
-            net = parseLanNetwork(answer);
-            lastNetwork = answer;
-          } catch (e) {
-            console.log(`      ${(e as Error).message}`);
-          }
-        }
-        console.log(`    → VMs on ${net.base}x/${net.prefix}, gateway ${net.gateway}`);
-
-        // ⭐ Ports restart at 16127 for every WAN IP. Two nodes on 16127 collide only when
-        // they share a public address.
-        const used = usedPorts.get(ipAddress) ?? new Set<number>();
-        usedPorts.set(ipAddress, used);
-        const firstFree = (): number => {
-          let p = DEFAULT_API_PORT;
-          while (used.has(p)) p += API_PORT_STRIDE;
-          return p;
-        };
-        let nextPort = firstFree();
-
-        while (slots.length < capacity) {
-          // The block runs out at 16197 — that is WHY a WAN IP carries at most eight
-          // slots. Rather than let the operator type a ninth port that Flux will not
-          // serve, the loop moves itself on to the next WAN IP and says so.
-          if (nextPort > MAX_API_PORT) {
-            console.log(
-              `    no port left on ${ipAddress}: ${DEFAULT_API_PORT}–${MAX_API_PORT} is the whole ` +
-                `block (${API_PORTS_PER_WAN} slots). More capacity needs another WAN IP.`
-            );
-            break;
-          }
-          // The port prompt doubles as the "another node behind this WAN IP?" question, so
-          // the common answer — Enter, take the next port — costs one keystroke, and moving
-          // on costs one word.
-          const portAnswer = await ask(`    Flux API port (Enter, or 'next' for the next WAN IP)`, String(nextPort));
-          if (portAnswer.toLowerCase() === "next") break;
-          const apiPort = Number(portAnswer);
-          if (!isFluxApiPort(apiPort)) {
-            // Named precisely, because both halves are load-bearing and neither is
-            // guessable: Flux serves this block only, and a port off the stride overlaps
-            // the previous node's ports — which surfaces as THAT node going unreachable.
-            console.log(
-              `      ${portAnswer} is not usable: Flux API ports run ${DEFAULT_API_PORT}–${MAX_API_PORT} ` +
-                `in steps of ${API_PORT_STRIDE}, so they all end in ${DEFAULT_API_PORT % 10}.`
-            );
-            continue;
-          }
-          if (used.has(apiPort)) {
-            console.log(`      ${apiPort} is already taken on ${ipAddress}.`);
-            continue;
-          }
-
-          console.log(`    · slot ${slots.length + 1} of ${capacity}`);
-          // Offered tiers when the operator priced some; otherwise every tier FH knows.
-          // A tier that is not on the list is not a tier — it used to be accepted here and
-          // rejected by validateAnswers after the last question.
-          const allowed = tiers.length > 0 ? tiers : Object.keys(minimums);
-          const tier = await askUntil(
-            `      tier (${allowed.join("/")})`,
-            (v) => (allowed.includes(v) ? undefined : `"${v}" is not one of: ${allowed.join(", ")}.`),
-            allowed[0]
-          );
-          const vmName = await askUntil("      VM name", (v) =>
-            slots.some((s) => s.vmName === v) || hosts.some((h) => h.slots.some((s) => s.vmName === v))
-              ? `"${v}" is already used by another slot.`
-              : vmNameProblem(v)
-          );
-          let lanIp = "";
-          while (!lanIp) {
-            const answer = await ask(`      LAN address — host number (e.g. 5 for ${net.base}5) or a full IP`);
-            try {
-              lanIp = slotLanIp(answer, net);
-            } catch (e) {
-              console.log(`        ${(e as Error).message}`);
-            }
-          }
-          // Per slot, defaulted to the host's pool. Almost always the default — but a host
-          // with two SSD pools has no other way to say which node lands where, and the
-          // agent already honours `slot.storagePool ?? host.storageImages`.
-          const storagePool = await ask("      storage pool (SSD)", storageImages);
-          console.log(
-            `    → ${lanIp}, gateway ${net.gateway}, WAN ${ipAddress}, API port ${apiPort}, storage ${storagePool}`
-          );
-          slots.push({
-            tier,
-            vmName,
-            ipAddress,
-            lanIp,
-            gateway: net.gateway,
-            apiPort,
-            ...(storagePool && storagePool !== storageImages ? { storagePool } : {}),
-          });
-          // Advance from the port that was USED, not from a running count: an operator who
-          // types 16157 to leave room for something else gets 16167 next, still on stride
-          // and still inside the block.
-          used.add(apiPort);
-          nextPort = Math.max(apiPort + API_PORT_STRIDE, firstFree());
-        }
-      }
-      hosts.push({ name, storageImages, storageIso, slots });
-    }
-
-    // Printed as WAN IP → ports, because that is the shape of the port-forward the
-    // operator has to go and create. A flat range is not actionable when the slots sit
-    // behind more than one public address.
-    const byWan = new Map<string, number[]>();
-    for (const h of hosts) for (const s of h.slots) byWan.set(s.ipAddress, [...(byWan.get(s.ipAddress) ?? []), s.apiPort]);
-    if (byWan.size > 0) {
-      console.log("\nThese must be reachable from outside your LAN, or Flux Hub cannot pull stats:");
-      for (const [wan, ports] of byWan) console.log(`  ${wan} → ${ports.join(", ")}`);
-    }
+    const hosts = await askHosts(ask, askUntil, {
+      prefix: id.vmNamePrefix,
+      tiers,
+      minimums,
+      survey: proxmox.survey,
+      hub: hubNames(ctx, mtBaseUrl),
+    });
 
     // A Supporter lists nothing, so `tiers` is empty above and no price was asked.
     // Selling nothing is an EMPTY price list, never a tier priced at zero: FH enforces a
     // per-tier minimum and 422s anything under it, so a 0 is not even expressible.
-    const draft: Answers = { providerSlug, providerName, ownerAddress, mtBaseUrl, fluxAppName, hosts, level };
+    const draft: Answers = {
+      providerSlug: id.providerSlug,
+      vmNamePrefix: id.vmNamePrefix,
+      providerName: id.providerName,
+      ownerAddress: id.ownerAddress,
+      mtBaseUrl,
+      fluxAppName: id.fluxAppName,
+      hosts,
+      level,
+    };
 
     // DERIVED from the level, not asked. An Operator offers everything they declared; a
     // Supporter offers nothing. Holding slots back is a real thing to want, but it is a
@@ -824,19 +1107,20 @@ async function askAnswers(
 
     return {
       ...draft,
-      providerLocation: providerLocation || undefined,
-      providerContact: providerContact || undefined,
+      providerLocation: id.providerLocation || undefined,
+      providerContact: id.providerContact || undefined,
       selling: level === "operator",
       tierPricesCents,
       availableSlots,
-      proxmoxUrl: proxmoxUrl || undefined,
-      proxmoxTokenId: proxmoxTokenId || undefined,
-      proxmoxTokenSecret: proxmoxTokenSecret || undefined,
+      proxmoxUrl: proxmox.proxmoxUrl || undefined,
+      proxmoxTokenId: proxmox.proxmoxTokenId || undefined,
+      proxmoxTokenSecret: proxmox.proxmoxTokenSecret || undefined,
       stripeSecretKey: stripeSecretKey || undefined,
       stripeWebhookSecret: stripeWebhookSecret || undefined,
     };
   });
 }
+
 
 /**
  * Render + sign a manifest from config.env. Shared by `sign` and by `init`, which now
@@ -955,6 +1239,127 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
       }
       return 0;
     }
+    case "slug": {
+      // Who you are and which hub you are on — the identity block of `init`, on its own.
+      // Two uses: BEFORE `init` (a fresh directory gets a config.env with the identity
+      // filled in and the rest blank, so the slug and VM prefix can be settled with the
+      // hub before any hardware is typed in), and AFTER it (re-check the names, move
+      // between staging and production, fix a display name — without re-answering the
+      // whole wizard). The hub checks are the same ones `init` makes.
+      rejectUnknownFlags("slug", args, ["--dir"], ["--force"]);
+      const dir = dirFlag(args);
+      const force = args.includes("--force");
+      const configPath = join(dir, "config.env");
+      const existing = existsSync(configPath) ? readFileSync(configPath, "utf8") : undefined;
+      const env = existing ? parseConfigEnv(existing) : {};
+      const defaults: IdentityDefaults = existing
+        ? {
+            slugLocked: !force,
+            mtBaseUrl: env.MT_BASE_URL,
+            level: readLevel(existing),
+            providerSlug: env.PROVIDER_SLUG,
+            vmNamePrefix: env.PROVIDER_VM_PREFIX,
+            providerName: env.PROVIDER_NAME,
+            // Present = skipped. These are not this command's business once set; an
+            // empty location/contact is a real answer, so "" counts as present.
+            providerLocation: env.PROVIDER_LOCATION ?? "",
+            providerContact: env.PROVIDER_CONTACT ?? "",
+            ownerAddress: env.OWNER_ADDRESS,
+            // COALITION_URL is never rewritten here; any non-empty value skips the question.
+            fluxAppName: env.COALITION_URL ? (env.COALITION_URL.match(/^https:\/\/([^.]+)\.app\.runonflux\.io/)?.[1] ?? "kept") : undefined,
+          }
+        : {};
+
+      console.log(
+        existing
+          ? `fh-toolkit slug — ${configPath} exists; Enter keeps each current value.\n`
+          : "fh-toolkit slug — settles who you are with Flux Hub; `init` fills in the rest.\n"
+      );
+      const id = await withPrompts(ctx, (ask, askUntil) => askIdentity(ctx, ask, askUntil, defaults));
+
+      if (!existing) {
+        // A config.env with the identity in it and the stock-take blank. `doctor` reads
+        // the blanks as "not yet filled"; `init --force` or the per-file commands finish it.
+        const mtPubkey = await fetchMtPubkey(id.mtBaseUrl, ctx.fetch ?? fetch);
+        const text = renderConfigEnv({
+          providerSlug: id.providerSlug,
+          vmNamePrefix: id.vmNamePrefix,
+          providerName: id.providerName,
+          providerLocation: id.providerLocation || undefined,
+          providerContact: id.providerContact || undefined,
+          ownerAddress: id.ownerAddress,
+          mtBaseUrl: id.mtBaseUrl,
+          fluxAppName: id.fluxAppName,
+          mtPubkey,
+          hosts: [],
+          level: id.level,
+          tierPricesCents: {},
+        });
+        mkdirSync(dir, { recursive: true });
+        writeFileSync(configPath, text, { mode: 0o600 });
+        console.log(`\nWrote ${configPath} (identity only — HOSTS and TIER_PRICES_JSON are blank).`);
+        console.log("Next: fh-toolkit keygen (if not done), then fh-toolkit init --force to fill in the rest.");
+        return 0;
+      }
+
+      // Existing: patch the four identity keys in place, nothing else.
+      const changes: Array<[key: string, from: string | undefined, to: string]> = [];
+      const want = (key: string, to: string): void => {
+        if ((env[key] ?? "") !== to) changes.push([key, env[key], to]);
+      };
+      want("MT_BASE_URL", id.mtBaseUrl);
+      want("PROVIDER_SLUG", id.providerSlug);
+      want("PROVIDER_VM_PREFIX", id.vmNamePrefix);
+      want("PROVIDER_NAME", id.providerName);
+      if (changes.length === 0) {
+        console.log("\nNothing to change — config.env already says exactly this.");
+        return 0;
+      }
+      const manifestPath = join(dir, "manifest.json");
+      if (changes.some(([k, from]) => k === "PROVIDER_VM_PREFIX" && from) && existsSync(manifestPath)) {
+        console.log(
+          "\n⚠ PROVIDER_VM_PREFIX is pinned by the hub at first ingest. If this manifest was already\n" +
+            "  ingested, the hub will refuse the new prefix — changing a pinned prefix is a support request."
+        );
+      }
+      let text = existing;
+      for (const [key, , to] of changes) {
+        text = upsertEnvLine(text, key, to, key === "PROVIDER_VM_PREFIX"
+          ? ["PROVIDER_VM_PREFIX — every VM name you declare starts with this (e.g. mt-). Pinned by",
+             "Flux Hub at first ingest; changing it later is a support request."]
+          : []);
+      }
+      // MT_PUBKEY is per-hub: a move between staging and production needs the other hub's
+      // key, or checkout returns 401 forever with nothing else saying why.
+      if (changes.some(([k]) => k === "MT_BASE_URL")) {
+        text = upsertEnvLine(text, "MT_PUBKEY", await fetchMtPubkey(id.mtBaseUrl, ctx.fetch ?? fetch));
+      }
+      writeFileSync(`${configPath}.bak`, existing, { mode: 0o600 });
+      writeFileSync(configPath, text, { mode: 0o600 });
+      const wrote = ["config.env"];
+
+      // The slug, prefix and name are manifest fields, so a signed manifest is stale the
+      // moment they change. Re-sign in place when the key is here; `doctor` names it
+      // otherwise. (A hub move changes no manifest field — it is not signed over.)
+      const manifestFields = changes.some(([k]) => k !== "MT_BASE_URL");
+      const keyPath = join(dir, "manifest-key.pem");
+      if (manifestFields && existsSync(manifestPath)) {
+        if (existsSync(keyPath)) {
+          const manifest = signManifestFromConfig(text, readFileSync(keyPath, "utf8"));
+          writeFileSync(`${manifestPath}.bak`, readFileSync(manifestPath, "utf8"), { mode: 0o600 });
+          writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + "\n", { mode: 0o600 });
+          wrote.push("manifest.json (re-signed)");
+        } else {
+          console.log(`\n⚠ ${manifestPath} is now stale and ${keyPath} is not here to re-sign it — run \`fh-toolkit sign\` where the key is.`);
+        }
+      }
+      console.log(`\nWrote ${wrote.join(", ")} (previous versions kept as *.bak)`);
+      for (const [key, from, to] of changes) console.log(`  ${key}: ${from ?? "(unset)"} → ${to}`);
+      if (manifestFields) {
+        console.log(`\nNext: paste manifest.json at ${id.mtBaseUrl}/onboard and sign with your owner wallet.`);
+      }
+      return 0;
+    }
     case "init": {
       // Replaces the vestigial body-template init: `sign --from-config` superseded
       // that flow, the rewritten runbook never mentions it, and BODY_TEMPLATE had
@@ -996,18 +1401,22 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
         );
       }
 
-      // Same rule as doctor: ask MT for the live minimums, fall back to the bundled
-      // table. Done before the prompts so the wizard quotes the real floor.
-      const liveMinimums = await cachedTierMinimums(
-        ctx,
-        process.env.MT_BASE_URL ?? "https://fluxhub.moltentech.us"
-      );
-      if (!liveMinimums) {
-        console.error("note: could not reach Flux Hub for live tier minimums — using this tool's bundled copy.");
-      }
-      const minimums = liveMinimums ?? TIER_FLOORS_CENTS;
+      // Same rule as doctor: ask the hub for the live minimums, fall back to the bundled
+      // table. The hub is the one the ANSWERS name — the wizard asks for it first, and the
+      // answers file carries it — never `process.env.MT_BASE_URL`, which is whatever the
+      // wrapper happened to export and quoted production's floors to staging operators.
+      const minimumsFor = async (mtBaseUrl: string): Promise<Record<string, number>> => {
+        // Not fetched from a URL validateAnswers is about to reject; the clear validation
+        // error should come first, not a network warning about a garbage address.
+        const live = /^https:\/\//.test(mtBaseUrl) ? await cachedTierMinimums(ctx, mtBaseUrl) : null;
+        if (!live) {
+          console.error("note: could not reach Flux Hub for live tier minimums — using this tool's bundled copy.");
+        }
+        return live ?? TIER_FLOORS_CENTS;
+      };
 
       let answers: Answers;
+      let minimums: Record<string, number>;
       if (answersPath) {
         // The non-interactive path is what makes this testable and re-runnable after
         // a typo. It drives the SAME generator as the prompts — there is no second
@@ -1017,12 +1426,30 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
         } catch (e) {
           die(`${answersPath}: ${(e as Error).message}`);
         }
+        minimums = await minimumsFor(String(answers.mtBaseUrl ?? ""));
       } else {
-        answers = await askAnswers(ctx, minimums);
+        // The wizard fetches its own floors once it knows the hub (see `askAnswers`);
+        // the copy for validation comes from the same cache.
+        answers = await askAnswers(ctx);
+        minimums = (await cachedTierMinimums(ctx, answers.mtBaseUrl)) ?? TIER_FLOORS_CENTS;
       }
 
       const problems = validateAnswers(answers, minimums);
       if (problems.length > 0) die(`answers are not usable:\n  - ${problems.join("\n  - ")}`);
+
+      // The scripted path gets one composite name check, printed and never fatal: an
+      // answers file is the re-runnable, CI-driven route, and ingest is the authority.
+      // The wizard checked each answer at its prompt and has nothing left to ask.
+      if (answersPath) {
+        const resp = await checkNames(answers.mtBaseUrl, nameCheckRequestFor(answers), ctx.fetch ?? fetch);
+        if (resp) {
+          const { blocking, advisory } = describeNameFindings(resp);
+          for (const line of blocking) console.error(`⚠ ${line} — ingest will refuse this.`);
+          for (const line of advisory) console.error(`⚠ ${line}`);
+        } else {
+          console.error(`note: could not reach ${answers.mtBaseUrl} to check names — they are checked again at ingest.`);
+        }
+      }
 
       // DERIVED, never asked: MT publishes its signing pubkey, so making the operator
       // fetch and paste it only adds a step they can skip. Skipping it is a DELAYED
@@ -1038,7 +1465,7 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
       // it is fetched: a garbage URL should produce the clear validation error, not a
       // confusing network warning ahead of it.
       if (needsMtPubkey(answers)) {
-        answers.mtPubkey = await fetchMtPubkey(answers.mtBaseUrl);
+        answers.mtPubkey = await fetchMtPubkey(answers.mtBaseUrl, ctx.fetch ?? fetch);
       }
 
       const keyPem = readFileSync(keyPath, "utf8");
@@ -1181,6 +1608,11 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
       // operator's own config so no flag is needed.
       const mtBaseUrl = configText ? parseConfigEnv(configText).MT_BASE_URL : undefined;
       const tierMinimums = mtBaseUrl ? ((await cachedTierMinimums(ctx, mtBaseUrl)) ?? undefined) : undefined;
+      // Same bargain as the tier fetch: one credential-free GET-shaped call to the hub
+      // named in config.env, fail-soft. Asked with `self` so the provider's own registered
+      // names do not come back as "taken"; what does come back is a collision with someone
+      // else — the one thing no file on this disk can know.
+      const nameCheck = mtBaseUrl && configText ? await checkNames(mtBaseUrl, nameCheckRequestForConfig(configText, inventory), ctx.fetch ?? fetch) : undefined;
       const report = runDoctor({
         configEnv: configText,
         secretsEnv: read("secrets.env"),
@@ -1188,7 +1620,11 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
         inventoryJson: inventory,
         manifestJson: read("manifest.json"),
         tierMinimums,
+        nameCheck,
       });
+      if (mtBaseUrl && configText && nameCheck === null) {
+        report.unproven = [...(report.unproven ?? []), `name check: could not reach ${mtBaseUrl} — slug, prefix and VM names unchecked against the hub`];
+      }
       // Opt-in, because it is the only check that puts a secret in memory and the only
       // one that talks to a third party. Everything it does is a read-only GET. It
       // catches what no file can: a well-formed config wired to the WRONG Stripe
@@ -1355,10 +1791,11 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
       const operatorPath = join(dir, ".env.operator");
       const operatorText = existsSync(operatorPath) ? readFileSync(operatorPath, "utf8") : undefined;
       const inventoryPath = join(dir, "data", "inventory.json");
+      const inventoryText = existsSync(inventoryPath) ? readFileSync(inventoryPath, "utf8") : undefined;
       const slotCounts: Record<string, number> = {};
-      if (existsSync(inventoryPath)) {
+      if (inventoryText !== undefined) {
         try {
-          const hosts = normalizeInventory(JSON.parse(readFileSync(inventoryPath, "utf8"))) ?? [];
+          const hosts = normalizeInventory(JSON.parse(inventoryText)) ?? [];
           for (const h of hosts) {
             for (const sl of (h.slots ?? []) as Array<{ tier?: unknown }>) {
               if (typeof sl.tier === "string") slotCounts[sl.tier] = (slotCounts[sl.tier] ?? 0) + 1;
@@ -1511,9 +1948,33 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
       for (const e of plan.operatorEdits) console.log(`  .env.operator ${e}`);
       for (const w of plan.warnings) console.log(`\n  ⚠️  ${w}`);
 
+      // The names, checked BEFORE anything is written. A supporter who onboarded before
+      // the VM prefix existed reaches the operator level through exactly this command,
+      // and the re-ingest it ends with is where the hub pins the prefix — so this is the
+      // last moment a wrong one is cheap. Fail-soft like the floors: an unreachable hub
+      // is a note, not a refusal.
+      let nameBlocking: string[] = [];
+      if (hubBaseUrl) {
+        const resp = await checkNames(hubBaseUrl, nameCheckRequestForConfig(configText, inventoryText), ctx.fetch ?? fetch);
+        if (resp) {
+          const found = describeNameFindings(resp);
+          nameBlocking = found.blocking;
+          for (const line of found.blocking) console.log(`\n  ✗ ${line}`);
+          for (const line of found.advisory) console.log(`\n  ⚠️  ${line}`);
+        } else {
+          console.log(`\n  note: could not reach ${hubBaseUrl} to check your names — they are checked again at ingest.`);
+        }
+      }
+
       if (dryRun) {
         console.log("\n--dry-run: nothing written.");
         return 0;
+      }
+      if (nameBlocking.length > 0 && !yes) {
+        die(
+          `the hub refuses ${nameBlocking.length} of your names (above) — nothing written.\n` +
+            "  Fix them (`fh-toolkit slug` for the slug/prefix, data/inventory.json for VM names), or pass --yes to write anyway."
+        );
       }
       if (!yes && process.stdin.isTTY === true) {
         const answer = await withPrompts(ctx, async (ask) => (await ask("\nApply these changes? [y/N]")).toLowerCase());
@@ -1825,11 +2286,13 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
     case "-h":
     default:
       console.log(
-        "usage: fh-toolkit <keygen|coalition-keygen|init|level|doctor|sign|env|verify|wrapper|version> [options]\n"
+        "usage: fh-toolkit <keygen|coalition-keygen|init|slug|level|doctor|sign|env|verify|wrapper|version> [options]\n"
       );
       console.log("  keygen           [--out <dir>]");
       console.log("  coalition-keygen [--out <dir>]   Phase D signing key (operator-held custody)");
       console.log("  init      [--out <dir>] [--answers <answers.json>] [--force]");
+      console.log("  slug      [--dir <dir>] [--force]              your slug, VM name prefix and hub, checked");
+      console.log("            against Flux Hub; before init, or later to re-check or move hubs");
       console.log("  level     [--dir <dir>]                      show your level, tiers and Stripe state");
       console.log("            --set <supporter|operator> [--price <tier>=<usd>] [--stripe-key <k>]");
       console.log("            [--stripe-webhook <k>] [--dry-run] [--yes]");

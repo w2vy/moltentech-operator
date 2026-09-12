@@ -219,6 +219,7 @@ jobs:
           cat > "$work/answers.json" <<'ANSWERS'
           {
             "providerSlug": "ci-generated",
+            "vmNamePrefix": "ci-",
             "providerName": "CI Generated Operator",
             "providerContact": "ci@example.com",
             "ownerAddress": "t1exampleOwnerWalletAddress",
@@ -289,6 +290,8 @@ jobs:
           m = json.load(open(work / "manifest.json"))
           assert m["schemaVersion"] == 2, m["schemaVersion"]
           assert [h["name"] for h in m["hardware"]] == ["pve-01"], m["hardware"]
+          # The VM-name namespace rides config.env -> manifest; the hub pins it at ingest.
+          assert m["provider"]["vmNamePrefix"] == "ci-", m["provider"]
           # COALITION_URL is DERIVED from the Flux app name; if that derivation ever
           # drifts, onboarding silently points at a URL that does not exist.
           assert m["coalitionUrl"] == "https://coalition-ci-generated.app.runonflux.io", m["coalitionUrl"]
@@ -363,6 +366,7 @@ jobs:
           cat > "$work/answers.json" <<'ANSWERS'
           {
             "providerSlug": "ci-selfhost",
+            "vmNamePrefix": "ci-",
             "providerName": "CI Self Host",
             "ownerAddress": "t1exampleOwnerWalletAddress",
             "mtBaseUrl": "https://fluxhub.moltentech.us",

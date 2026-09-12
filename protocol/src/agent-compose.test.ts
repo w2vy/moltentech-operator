@@ -27,6 +27,7 @@ import {
 
 const ANSWERS: Answers = {
   providerSlug: "acme-nodes",
+  vmNamePrefix: "ac-",
   providerName: "Acme Nodes",
   ownerAddress: "t1owner",
   mtBaseUrl: "https://fluxhub.moltentech.us",
