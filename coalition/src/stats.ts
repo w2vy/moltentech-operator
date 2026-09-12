@@ -1,6 +1,7 @@
 import {
   SCHEMA_VERSION,
   AgentNode,
+  type NodeSample,
   type StatsSnapshot,
   type StatsTier,
   type TierKey,
@@ -8,6 +9,7 @@ import {
 } from "@moltentech/protocol";
 import type { CoalitionConfig } from "./config";
 import { mtAuthHeaders } from "./coalition-signing";
+import { diffReachability, postEvents } from "./events";
 
 // In-memory only — stats are regenerable, never persisted (the Coalition is stateless
 // and runs on a Syncthing-replicated data partition where mutable files conflict).
@@ -17,6 +19,9 @@ export function getStatsSnapshot(): StatsSnapshot | null {
 }
 
 const NODE_TIMEOUT_MS = 10_000;
+
+// Last pass's `reachable` per vmName for the edge detector; empty after a restart on purpose.
+let prevReachable: ReadonlyMap<string, boolean> = new Map();
 
 /** Fetch the provider's live node list from MT (authoritative). */
 async function fetchNodes(cfg: CoalitionConfig, fetchImpl: typeof fetch): Promise<AgentNode[]> {
@@ -28,31 +33,53 @@ async function fetchNodes(cfg: CoalitionConfig, fetchImpl: typeof fetch): Promis
   return (body.nodes ?? []).map((n) => AgentNode.parse(n));
 }
 
-type NodeSample = { reachable: boolean; epsPerCore?: number; ddwrite?: number };
-
-/** Poll one node's Flux benchmark API from outside the operator LAN (hairpin-proof). */
+/**
+ * Poll one node's Flux benchmark API from outside the operator LAN (hairpin-proof) and keep
+ * the RAW reading (protocol/TELEMETRY.md, Decision 2): the hub derives epsPerCore and the
+ * tier pass itself, so nothing is computed here beyond `epsMultithread ?? eps`.
+ */
 async function pollNode(node: AgentNode, fetchImpl: typeof fetch): Promise<NodeSample> {
   const url = `http://${node.host}:${node.apiPort}/benchmark/getbenchmarks`;
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), NODE_TIMEOUT_MS);
   try {
     const res = await fetchImpl(url, { signal: ctrl.signal });
-    if (!res.ok) return { reachable: false };
+    if (!res.ok) return { vmName: node.vmName, reachable: false };
     const json = (await res.json()) as { data?: Record<string, unknown> };
-    const d = json.data ?? {};
-    const cores = Number(d.cores) || null;
-    const epsMt = Number(d.eps_multithread ?? d.eps) || null; // legacy: multithread/cores
-    const ddwrite = Number(d.ddwrite) || null;
-    return {
-      reachable: true,
-      epsPerCore: epsMt && cores ? epsMt / cores : undefined,
-      ddwrite: ddwrite ?? undefined,
-    };
+    return sampleFromBenchmarks(node.vmName, json.data ?? {});
   } catch {
-    return { reachable: false };
+    return { vmName: node.vmName, reachable: false };
   } finally {
     clearTimeout(timer);
   }
+}
+
+/** `getbenchmarks` `data` → NodeSample. Exported for tests; numeric garbage becomes "absent". */
+export function sampleFromBenchmarks(vmName: string, d: Record<string, unknown>): NodeSample {
+  const num = (v: unknown): number | undefined => {
+    const n = Number(v);
+    return Number.isFinite(n) && n !== 0 ? n : undefined;
+  };
+  const int = (v: unknown): number | undefined => {
+    const n = num(v);
+    return n !== undefined && Number.isInteger(n) ? n : undefined;
+  };
+  const cores = int(d.cores);
+  const s: NodeSample = {
+    vmName,
+    reachable: true,
+    status: typeof d.status === "string" && d.status ? d.status : undefined,
+    epsMultithread: num(d.eps_multithread ?? d.eps),
+    cores: cores !== undefined && cores > 0 ? cores : undefined,
+    ddwrite: num(d.ddwrite),
+    benchmarkTime: int(d.time),
+    downloadSpeed: num(d.download_speed),
+    uploadSpeed: num(d.upload_speed),
+    ping: num(d.ping),
+  };
+  // Optional fields are OMITTED, not `undefined`, so JSON.stringify and the Zod schema agree.
+  for (const k of Object.keys(s) as (keyof NodeSample)[]) if (s[k] === undefined) delete s[k];
+  return s;
 }
 
 const avg = (xs: number[]): number | null => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null);
@@ -74,7 +101,10 @@ export async function collectStats(cfg: CoalitionConfig, fetchImpl: typeof fetch
   const tiers: StatsTier[] = [...offered].map((tier) => {
     const mine = samples.filter((x) => x.node.tier === tier);
     const reachable = mine.filter((x) => x.s.reachable);
-    const eps = reachable.map((x) => x.s.epsPerCore).filter((v): v is number => v != null);
+    // Same legacy convention as before this kept raw samples: multithread / cores.
+    const eps = reachable
+      .map((x) => (x.s.epsMultithread && x.s.cores ? x.s.epsMultithread / x.s.cores : undefined))
+      .filter((v): v is number => v != null);
     const dd = reachable.map((x) => x.s.ddwrite).filter((v): v is number => v != null);
     return {
       tier: tier as TierKey,
@@ -88,12 +118,21 @@ export async function collectStats(cfg: CoalitionConfig, fetchImpl: typeof fetch
     };
   });
 
+  const nodeSamples = samples.map((x) => x.s);
+  const collectedAt = new Date().toISOString();
   latest = {
     schemaVersion: SCHEMA_VERSION,
     providerSlug: cfg.providerSlug,
-    collectedAt: new Date().toISOString(),
+    collectedAt,
     windowDays: cfg.statsWindowDays,
     tiers,
+    nodes: nodeSamples,
   };
+
+  // Edge-triggered reachability hints (events.ts). Baseline on the first pass.
+  const events = diffReachability(prevReachable, nodeSamples, collectedAt);
+  prevReachable = new Map(nodeSamples.map((s) => [s.vmName, s.reachable]));
+  await postEvents(cfg, events, fetchImpl);
+
   return latest;
 }

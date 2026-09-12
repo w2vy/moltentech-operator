@@ -7,6 +7,7 @@ import {
 } from "@moltentech/protocol";
 import type { CoalitionConfig } from "./config";
 import { mtAuthHeaders } from "./coalition-signing";
+import { diffLifecycle, postEvents, type LifecycleFacts } from "./events";
 
 /**
  * Collateral-confirmation guard, operator side. Flux rejects a fluxnode START
@@ -34,6 +35,9 @@ let latest: LifecycleNodeStatus[] = [];
 export function getCollateralSnapshot(): LifecycleNodeStatus[] {
   return latest;
 }
+// Last pass's facts per vmName, for the edge detector in events.ts. Empty after a restart
+// on purpose: the first pass is a baseline and emits nothing.
+let prevLifecycle: ReadonlyMap<string, LifecycleFacts> = new Map();
 
 /**
  * Fetch the nodes MT wants measured (authoritative). Everything with a collateral txid,
@@ -255,6 +259,13 @@ export async function checkCollateralOnce(cfg: CoalitionConfig, fetchImpl: typeo
       return { vmName: node.vmName, benchmarkPassed, collateralConfs, onDeterministicList };
     })
   );
+  // Edge-triggered hints (events.ts): a node that left the list or stopped passing since
+  // the LAST pass. The lifecycle report below still carries the full raw state — the hub
+  // verifies from that and its own reads; the event only makes it look sooner.
+  const observedAt = new Date().toISOString();
+  const events = diffLifecycle(prevLifecycle, results, observedAt);
+  prevLifecycle = new Map(results.map((r) => [r.vmName, { benchmarkPassed: r.benchmarkPassed, onDeterministicList: r.onDeterministicList }]));
   latest = results;
   await postLifecycleReport(cfg, results, fetchImpl);
+  await postEvents(cfg, events, fetchImpl);
 }

@@ -543,11 +543,50 @@ export const LifecycleReport = Envelope.extend({
 });
 export type LifecycleReport = z.infer<typeof LifecycleReport>;
 
+/**
+ * One node's raw `getbenchmarks` reading from the Coalition's stats pass — the sample that
+ * used to be averaged into `StatsTier` and thrown away (protocol/TELEMETRY.md, Decision 2).
+ *
+ * RAW, NOT DERIVED: `epsPerCore`/`thresholdPass` are hub derivations (the tier thresholds
+ * live in the hub), so the Coalition ships exactly what the node said, field for field as
+ * the hub's own `collect` reads them. Every measurement is optional because an unreachable
+ * node has none; `reachable` is the only fact always present.
+ */
+export const NodeSample = z.object({
+  vmName: z.string().min(1),
+  /** The Coalition reached the node's benchmark API this pass. */
+  reachable: z.boolean(),
+  /** `data.status` — the node's own tier-pass string. */
+  status: z.string().min(1).optional(),
+  /** `data.eps_multithread ?? data.eps`. */
+  epsMultithread: z.number().optional(),
+  cores: z.number().int().positive().optional(),
+  /** `data.ddwrite`, MB/s. */
+  ddwrite: z.number().optional(),
+  /** `data.time` — unix seconds of the node's last benchmark run. */
+  benchmarkTime: z.number().int().optional(),
+  /** Mbit/s. */
+  downloadSpeed: z.number().optional(),
+  /** Mbit/s. */
+  uploadSpeed: z.number().optional(),
+  /** ms. */
+  ping: z.number().optional(),
+});
+export type NodeSample = z.infer<typeof NodeSample>;
+
 export const StatsSnapshot = Envelope.extend({
   providerSlug: ProviderSlug,
   collectedAt: Timestamp,
   windowDays: z.number().int().positive().default(90),
   tiers: z.array(StatsTier),
+  /**
+   * Per-node samples behind `tiers[]`. OPTIONAL and `SCHEMA_VERSION` deliberately does NOT
+   * change (same reasoning as `failureClass`): a pre-Phase-7 Coalition omits it and the hub
+   * keeps polling that provider's nodes itself; an old hub strips it as an unknown key.
+   * `reachable` here is operator-asserted and feeds a public uptime number, so the hub keeps
+   * an independent audit sample — see TELEMETRY.md.
+   */
+  nodes: z.array(NodeSample).optional(),
 });
 export type StatsSnapshot = z.infer<typeof StatsSnapshot>;
 
@@ -593,3 +632,42 @@ export const HealthReport = Envelope.extend({
   nodes: z.array(NodeHealth),
 });
 export type HealthReport = z.infer<typeof HealthReport>;
+
+// ───────────────────────────────────────────────────────────────────────────
+// 9. events  —  operator Coalition → MT  (edge-triggered hints)
+//    The Coalition already measures every node every couple of minutes and sees a
+//    transition (expired, stopped passing, went dark, came back) long before the hub's
+//    periodic sweep does. It reports the TRANSITION here. Events are hints, never facts:
+//    the hub's only response is to schedule its own verification and record the verdict.
+//    Nothing broadcasts, demotes or emails on an event alone. Best-effort delivery — a
+//    failed POST is logged and dropped; the hub sweep remains authoritative.
+//    Auth: per-provider agent key or the Coalition signing identity (like /lifecycle).
+//    See protocol/TELEMETRY.md, Decision 3.
+// ───────────────────────────────────────────────────────────────────────────
+export const AgentEventKind = z.enum([
+  /** `onDeterministicList` true → false between two lifecycle passes. */
+  "node_expired",
+  /** false → true on the det-list, or unreachable → reachable. */
+  "node_recovered",
+  /** `benchmarkPassed` true → false. */
+  "benchmark_failed",
+  /** `reachable` true → false between two stats passes. */
+  "node_unreachable",
+]);
+export type AgentEventKind = z.infer<typeof AgentEventKind>;
+
+export const AgentEvent = z.object({
+  kind: AgentEventKind,
+  vmName: z.string().min(1),
+  observedAt: Timestamp,
+  /** One line of operator-side context; the hub displays it and never parses it. */
+  detail: NoCtrl.pipe(z.string().max(200)).optional(),
+});
+export type AgentEvent = z.infer<typeof AgentEvent>;
+
+export const EventReport = Envelope.extend({
+  providerSlug: ProviderSlug,
+  reportedAt: Timestamp,
+  events: z.array(AgentEvent).min(1).max(200),
+});
+export type EventReport = z.infer<typeof EventReport>;
