@@ -20,6 +20,8 @@ on:
       - "protocol/**"
       - "arcane-mage/**"
       - ".github/workflows/publish-fh-agent.yml"
+      # Markdown never reaches the image; keep in step with the bump gate in ci.yml.
+      - "!**/*.md"
   workflow_dispatch:
     inputs:
       promote:
