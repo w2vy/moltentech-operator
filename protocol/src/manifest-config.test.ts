@@ -81,3 +81,21 @@ test("clear errors on malformed input", () => {
     /HOSTS must list/
   );
 });
+
+test("PROVIDER_VM_PREFIX maps to provider.vmNamePrefix (key absent when unset or empty)", () => {
+  // Unset (SAMPLE) → the provider object has no such key, so an old config.env renders the
+  // byte-identical body it always did.
+  assert.equal("vmNamePrefix" in (renderManifestBodyFromConfig(SAMPLE).provider as object), false);
+  assert.equal(
+    "vmNamePrefix" in (renderManifestBodyFromConfig(SAMPLE + "\nPROVIDER_VM_PREFIX=").provider as object),
+    false
+  );
+  const body = renderManifestBodyFromConfig(SAMPLE + "\nPROVIDER_VM_PREFIX=ac-");
+  assert.equal((body.provider as { vmNamePrefix?: string }).vmNamePrefix, "ac-");
+  const stamped = { ...body, pubkey: "x", publishedAt: new Date().toISOString() };
+  assert.equal(ProviderManifestBody.safeParse(stamped).success, true);
+  // A malformed prefix is passed through by the renderer and refused by the schema, the
+  // way every other config.env value is: render is a mapping, the schema is the gate.
+  const bad = renderManifestBodyFromConfig(SAMPLE + "\nPROVIDER_VM_PREFIX=mt");
+  assert.equal(ProviderManifestBody.safeParse({ ...bad, pubkey: "x", publishedAt: new Date().toISOString() }).success, false);
+});

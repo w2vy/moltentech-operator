@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { Envelope, ProviderSlug, Timestamp } from "./common";
+import { Envelope, ProviderSlug, Timestamp, VmNamePrefix } from "./common";
 
 /**
  * Provider Manifest — the operator's signed self-description, published as a
@@ -30,14 +30,17 @@ export const ProviderManifestBody = Envelope.extend({
      * MT rejects any inventory slot whose `vmName` falls outside it, which is what keeps the
      * Foundation's reserved `fh-` namespace unreachable by structure rather than by blacklist.
      *
-     * ⚠️ NOT derivable from `slug` — on the live fleet `moltentech` uses `mt` while
-     * `moltentech-test2` uses `test`.
+     * ⚠️ NOT derivable from `slug` — on the live fleet `moltentech` uses `mt-` while
+     * `moltentech-test1` uses `mt1-`. Chosen by the operator at `fh-toolkit init`/`slug`,
+     * pinned by the hub at first ingest.
      *
-     * Optional, and adding it does not break existing manifests: the body signature covers the
-     * canonical JSON of every field except `signature`, so a manifest that OMITS this field
-     * serializes and verifies exactly as before.
+     * Optional on the wire, and adding it does not break existing manifests: the body
+     * signature covers the canonical JSON of every field except `signature`, so a manifest
+     * that OMITS this field serializes and verifies exactly as before. When present it must
+     * be a well-formed namespace (`VmNamePrefix`); the hub refuses to ACTIVATE a provider
+     * without one.
      */
-    vmNamePrefix: z.string().min(1).max(32).optional(),
+    vmNamePrefix: VmNamePrefix.optional(),
     name: z.string().min(1),
     location: z.string().optional(),
     description: z.string().optional(),
