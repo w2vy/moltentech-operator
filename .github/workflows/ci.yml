@@ -190,7 +190,7 @@ jobs:
           # Lowest listable price per tier, in CENTS. The LIVE values come from
           # GET /api/tiers; this literal is only the offline fallback, and the
           # "bundled tier minimums are current" job below fails if the two diverge.
-          FLOORS = {"cumulus": 700, "nimbus": 2000, "stratus": 4000}  # = minPriceCents
+          FLOORS = {"cumulus": 250, "nimbus": 700, "stratus": 1400}  # = minPriceCents
           for tier, cents in prices.items():
               floor = FLOORS.get(tier)
               assert floor is not None, f"unknown tier in the doc's TIER_PRICES_JSON: {tier}"
@@ -346,7 +346,7 @@ jobs:
 
           # Every price must clear the floor, same rule as the doc fixture.
           pairs = dict(p.split("=", 1) for p in json.load(open(work / "env.json")))
-          FLOORS = {"cumulus": 700, "nimbus": 2000, "stratus": 4000}  # = minPriceCents
+          FLOORS = {"cumulus": 250, "nimbus": 700, "stratus": 1400}  # = minPriceCents
           for tier, cents in json.loads(pairs["TIER_PRICES_JSON"]).items():
               assert cents >= FLOORS[tier], f"{tier}: {cents} below floor {FLOORS[tier]}"
           print("generated config OK:", pairs["TIER_PRICES_JSON"])

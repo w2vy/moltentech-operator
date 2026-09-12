@@ -125,7 +125,7 @@ test("inventory.json is a top-level array, matching the live known-good file", (
 });
 
 test("prices default to the platform floor for every tier in use", () => {
-  assert.deepEqual(resolvedPrices(ANSWERS), { cumulus: 700 });
+  assert.deepEqual(resolvedPrices(ANSWERS), { cumulus: 250 });
 });
 
 test("an explicit price above the floor is kept", () => {
@@ -157,9 +157,9 @@ test("validateAnswers rejects a price below the minimum", () => {
 test("validateAnswers honours LIVE minimums over the bundled table", () => {
   // If MT lowers a minimum, the wizard must accept the new price without anyone
   // editing this repo — that is the entire point of GET /api/tiers.
-  assert.deepEqual(validateAnswers({ ...ANSWERS, tierPricesCents: { cumulus: 400 } }, { cumulus: 400 }), []);
+  assert.deepEqual(validateAnswers({ ...ANSWERS, tierPricesCents: { cumulus: 100 } }, { cumulus: 100 }), []);
   assert.match(
-    validateAnswers({ ...ANSWERS, tierPricesCents: { cumulus: 400 } }).join("\n"),
+    validateAnswers({ ...ANSWERS, tierPricesCents: { cumulus: 100 } }).join("\n"),
     /below the platform minimum/
   );
 });
@@ -191,7 +191,7 @@ test("selling:false writes an EMPTY price list, not a zero price", () => {
 });
 
 test("selling (the default) prices every tier in use at the floor", () => {
-  assert.match(generateAll(ANSWERS)["config.env"], /^TIER_PRICES_JSON=\{"cumulus":700\}$/m);
+  assert.match(generateAll(ANSWERS)["config.env"], /^TIER_PRICES_JSON=\{"cumulus":250\}$/m);
 });
 
 test("a paid listing includes Stripe AND warns that whsec is endpoint-bound", () => {
@@ -357,7 +357,7 @@ test("AGENT_LISTING_JSON is an ARRAY the agent can parse, not the price map", ()
   const value = parseConfigEnv(generateAll(ANSWERS)[".env.operator"]).AGENT_LISTING_JSON!;
   const listing = JSON.parse(value);
   assert.ok(Array.isArray(listing), `AGENT_LISTING_JSON is not an array: ${value}`);
-  assert.deepEqual(listing, [{ tier: "cumulus", priceCents: 700, availableSlots: 1 }]);
+  assert.deepEqual(listing, [{ tier: "cumulus", priceCents: 250, availableSlots: 1 }]);
 
   const ListingTierConfig = z.object({
     tier: z.string(),
@@ -378,8 +378,8 @@ test("availableSlots defaults to every slot of that tier, across hosts", () => {
   });
   assert.deepEqual(slotCountsByTier(two), { cumulus: 2, nimbus: 1 });
   assert.deepEqual(resolvedListing(two), [
-    { tier: "cumulus", priceCents: 700, availableSlots: 2 },
-    { tier: "nimbus", priceCents: 2000, availableSlots: 1 },
+    { tier: "cumulus", priceCents: 250, availableSlots: 2 },
+    { tier: "nimbus", priceCents: 700, availableSlots: 1 },
   ]);
 });
 
@@ -387,7 +387,7 @@ test("an operator can hold slots back by offering fewer than they declared", () 
   const held = structuredClone(ANSWERS);
   held.hosts[0]!.slots.push({ ...held.hosts[0]!.slots[0]!, vmName: "mt-187-c3" });
   held.availableSlots = { cumulus: 1 };
-  assert.deepEqual(resolvedListing(held), [{ tier: "cumulus", priceCents: 700, availableSlots: 1 }]);
+  assert.deepEqual(resolvedListing(held), [{ tier: "cumulus", priceCents: 250, availableSlots: 1 }]);
   assert.deepEqual(validateAnswers(held), []);
 });
 

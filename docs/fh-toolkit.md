@@ -457,7 +457,7 @@ lists anything. A supporter who later adds a tier changes `selling` without re-d
 who they are. Changing `level` needs a re-sign and a re-paste.
 
 ⚠️ **Selling nothing is an EMPTY price list, never a tier priced at 0.** FH enforces a
-per-tier minimum (`minPriceCents`, 700 at the lowest) and 422s anything under it, so 0 is
+per-tier minimum (`minPriceCents`, 250 at the lowest) and 422s anything under it, so 0 is
 not expressible. This is unrelated to a *free rental*, which is a rental an admin
 **assigns** — it needs no Stripe account whatever the tier costs.
 
