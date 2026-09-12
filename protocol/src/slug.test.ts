@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync, readFileSync, existsSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { writeFileSync, readFileSync, existsSync } from "node:fs";
+import { tmpDir } from "./test-tmp";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { createInterface } from "node:readline/promises";
@@ -75,7 +75,7 @@ const quiet = async <T>(fn: () => Promise<T>): Promise<{ result: T; log: string 
 };
 
 test("fresh directory: writes a config.env with the identity filled and the stock-take blank", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "fh-slug-"));
+  const dir = tmpDir("fh-slug-");
   const seen: NameCheckRequest[] = [];
   // env=staging, level=operator, slug, prefix (default), name (default), location, contact, owner, confirm, app name
   const { ctx } = ctxFor(dir, ["2", "2", "acme-cloud", "", "", "Berlin", "ops@acme.example", "1OwnerAddr", "y", ""], allFree, seen);
@@ -98,7 +98,7 @@ test("fresh directory: writes a config.env with the identity filled and the stoc
 });
 
 test("a taken slug and a taken prefix are re-asked at the prompt, not discovered at ingest", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "fh-slug-"));
+  const dir = tmpDir("fh-slug-");
   const hub: Hub = (req) => {
     const r = allFree(req);
     if (req.slug === "moltentech") r.slug = { value: "moltentech", available: false, reason: "taken" };
@@ -125,7 +125,7 @@ test("a taken slug and a taken prefix are re-asked at the prompt, not discovered
 });
 
 test("an unreachable hub is one note, and the scaffold still completes", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "fh-slug-"));
+  const dir = tmpDir("fh-slug-");
   const { rl } = scriptedRl(["1", "1", "lonely-op", "", "", "", "", "1Owner", "y", ""]);
   const down = (async () => {
     throw new Error("ECONNREFUSED");
@@ -162,7 +162,7 @@ function scaffolded(dir: string, extra = ""): void {
 }
 
 test("existing config.env: only slug, prefix, name and hub are asked; the rest is kept", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "fh-slug-"));
+  const dir = tmpDir("fh-slug-");
   scaffolded(dir);
   const seen: NameCheckRequest[] = [];
   // env (Enter = keep prod), slug (Enter), prefix (no default in the file → suggested "ac-"; type "acm-"), name (Enter)
@@ -187,7 +187,7 @@ test("existing config.env: only slug, prefix, name and hub are asked; the rest i
 });
 
 test("existing config.env, same answers: nothing written", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "fh-slug-"));
+  const dir = tmpDir("fh-slug-");
   scaffolded(dir, "PROVIDER_VM_PREFIX=ac-");
   const before = readFileSync(join(dir, "config.env"), "utf8");
   const { ctx } = ctxFor(dir, ["", "", "", ""], allFree);
@@ -199,7 +199,7 @@ test("existing config.env, same answers: nothing written", async () => {
 });
 
 test("changing the slug is refused at the prompt without --force — it is a new provider, not a rename", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "fh-slug-"));
+  const dir = tmpDir("fh-slug-");
   scaffolded(dir, "PROVIDER_VM_PREFIX=ac-");
   // env, slug (try to change → refused → Enter keeps), prefix, name
   const { ctx, transcript } = ctxFor(dir, ["", "acme-two", "", "", ""], allFree);
@@ -211,7 +211,7 @@ test("changing the slug is refused at the prompt without --force — it is a new
 });
 
 test("--force allows the slug change, re-signs manifest.json, and a hub move refreshes MT_PUBKEY", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "fh-slug-"));
+  const dir = tmpDir("fh-slug-");
   scaffolded(dir, "PROVIDER_VM_PREFIX=ac-");
   const { privateKey } = generateEd25519();
   writeFileSync(join(dir, "manifest-key.pem"), exportPrivateKeyPem(privateKey));
@@ -235,7 +235,7 @@ test("--force allows the slug change, re-signs manifest.json, and a hub move ref
 });
 
 test("a pinned prefix change is warned about when a manifest already exists", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "fh-slug-"));
+  const dir = tmpDir("fh-slug-");
   scaffolded(dir, "PROVIDER_VM_PREFIX=ac-");
   writeFileSync(join(dir, "manifest.json"), JSON.stringify({ stale: true }));
   const { ctx } = ctxFor(dir, ["", "", "acm-", ""], allFree);
@@ -253,7 +253,7 @@ test("unknown flags are refused like every other command", async () => {
 // ── doctor and init --answers use the same check ─────────────────────────────
 
 test("doctor asks the hub as `self` and reports its verdicts; an unreachable hub is an unproven line", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "fh-slug-"));
+  const dir = tmpDir("fh-slug-");
   scaffolded(dir, "PROVIDER_VM_PREFIX=ac-");
   writeFileSync(join(dir, "inventory.json"), JSON.stringify([{ name: "pve-01", slots: [{ vmName: "ac-c1", lanIp: "10.0.0.1/24" }] }]));
   const seen: NameCheckRequest[] = [];
@@ -279,7 +279,7 @@ test("doctor asks the hub as `self` and reports its verdicts; an unreachable hub
 });
 
 test("init --answers: one composite check, printed as warnings, never fatal", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "fh-slug-"));
+  const dir = tmpDir("fh-slug-");
   const { privateKey } = generateEd25519();
   writeFileSync(join(dir, "manifest-key.pem"), exportPrivateKeyPem(privateKey));
   const answers = {

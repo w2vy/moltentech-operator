@@ -8,8 +8,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, writeFileSync, readFileSync, chmodSync, existsSync, mkdirSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { writeFileSync, readFileSync, chmodSync, existsSync, mkdirSync } from "node:fs";
+import { tmpDir } from "./test-tmp";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -33,7 +33,7 @@ const script = (): string => wrapperScript();
  * emitted text looks right" into "the emitted text CALLS the right thing".
  */
 function shellBox(): { dir: string; run: (cmds: string, extra?: Record<string, string>) => string; argv: () => string[][] } {
-  const dir = mkdtempSync(join(tmpdir(), "fh-wrapper-"));
+  const dir = tmpDir("fh-wrapper-");
   const bin = join(dir, "bin");
   mkdirSync(bin);
   const log = join(dir, "docker.log");
@@ -64,7 +64,7 @@ function shellBox(): { dir: string; run: (cmds: string, extra?: Record<string, s
 // ---------------------------------------------------------------- shape
 
 test("the emitted file is valid bash", () => {
-  const dir = mkdtempSync(join(tmpdir(), "fh-syntax-"));
+  const dir = tmpDir("fh-syntax-");
   const p = join(dir, "w.sh");
   writeFileSync(p, script());
   // Throws with the parse error attached if it is not.
@@ -93,7 +93,7 @@ test("both functions are emitted, and either alone on request", () => {
   // Each half must still stand alone as bash — `--toolkit` output is what a docs snippet
   // shows, and half a case statement would not parse.
   for (const s of [toolkitFunction(), agentFunction()]) {
-    const p = join(mkdtempSync(join(tmpdir(), "fh-half-")), "w.sh");
+    const p = join(tmpDir("fh-half-"), "w.sh");
     writeFileSync(p, s);
     execFileSync("bash", ["-n", p]);
   }
@@ -419,7 +419,7 @@ test("⭐ the docs show the same bytes the image emits", () => {
 test("⭐ doctor reports a wrapper predating the handshake, and stays quiet about a current one", () => {
   // Driven through the real CLI: the failure being guarded is that the finding is built in
   // `doctor`'s case and could easily be pushed after the report is formatted.
-  const dir = mkdtempSync(join(tmpdir(), "fh-doctor-"));
+  const dir = tmpDir("fh-doctor-");
   writeFileSync(
     join(dir, "config.env"),
     "PROVIDER_SLUG=demo-co\nPROVIDER_LEVEL=supporter\nMT_BASE_URL=https://fluxhub.moltentech.us\n"

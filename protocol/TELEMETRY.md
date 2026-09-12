@@ -70,7 +70,10 @@ Rules:
   pulled snapshot carried `nodes[]` **and** `collectedAt` is younger than 2 × the pull
   interval. Anything older, or a snapshot without `nodes[]`, and the hub polls that
   provider's nodes exactly as it does today. This is the mixed-version fallback and the
-  "Coalition down" fallback in one rule.
+  "Coalition down" fallback in one rule. The skip covers **active** slots only: bring-up
+  (`bootstrap`/`benchmark`/`awaiting_start`) stays hub-polled, because that pass needs a
+  `benchmarkTime` the hub read itself and the node's `data.error` text, which a
+  `NodeSample` does not carry (hub #311, `lib/coalition-samples.ts`).
 - Hub side: `[pull-stats]` (web, `lib/provider-stats.ts`) upserts the samples into
   `SlotBenchmark` with a new `source = 'coalition'` + `sampledAt`; the provisioner's
   `[collect]` stays the **only Influx writer** — for a slot with a fresh Coalition sample it

@@ -1,8 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, writeFileSync, readFileSync, existsSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { writeFileSync, readFileSync, existsSync } from "node:fs";
+import { tmpDir } from "./test-tmp";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { runDoctor } from "./config-lint";
@@ -55,7 +55,7 @@ function cli(args: string[]): string {
 }
 
 function scaffold(): string {
-  const dir = mkdtempSync(join(tmpdir(), "mt-fresh-"));
+  const dir = tmpDir("mt-fresh-");
   writeFileSync(join(dir, "answers.json"), JSON.stringify(ANSWERS));
   cli(["keygen", "--out", dir]);
   cli(["init", "--out", dir, "--answers", join(dir, "answers.json")]);
@@ -167,7 +167,7 @@ test("⭐ `env` needs no arguments in a scaffold directory", () => {
 });
 
 test("a missing file names WHICH file and where env expected it", () => {
-  const dir = mkdtempSync(join(tmpdir(), "mt-env-empty-"));
+  const dir = tmpDir("mt-env-empty-");
   assert.throws(
     () => cli(["env", "--dir", dir]),
     (err: Error & { stderr?: string }) => {
