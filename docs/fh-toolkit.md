@@ -63,7 +63,7 @@ block below stays honest — a test asserts these are the same bytes the image e
 fh-toolkit() {
   local img=ghcr.io/w2vy/fh-toolkit:latest
   local stamp="${XDG_CACHE_HOME:-$HOME/.cache}/fh-toolkit.pulled"
-  # `--refresh`, `--update-wrapper` and `--update-agent` are consumed HERE, never passed on: the CLI runs
+  # `--refresh` and `--update-wrapper` are consumed HERE, never passed on: the CLI runs
   # inside the container and can neither replace its own image nor write to your home
   # directory. Alone each does its job and stops; followed by a command it runs that too.
   if [ "$1" = "--refresh" ]; then
@@ -94,18 +94,6 @@ fh-toolkit() {
     . "$rc" || return 1
     [ $# -eq 0 ] && return 0
   fi
-  # `--update-agent` is the agent's counterpart: pull ITS tag and recreate the compose loop.
-  # Shell-side for the same reason — a container cannot restart a sibling container's
-  # compose project. Defined with the fh-agent functions, so a toolkit-only wrapper says so.
-  if [ "$1" = "--update-agent" ]; then
-    shift
-    if ! command -v fh-agent-update >/dev/null 2>&1; then
-      echo "error: the fh-agent functions are not installed — run: fh-toolkit --update-wrapper" >&2
-      return 1
-    fi
-    fh-agent-update || return $?
-    [ $# -eq 0 ] && return 0
-  fi
   # Refresh the image at most once every 15 minutes, tracked by a stamp file.
   if [ ! -e "$stamp" ] || [ -n "$(find "$stamp" -mmin +15 2>/dev/null)" ]; then
     if docker pull -q "$img" >/dev/null 2>&1; then
@@ -123,7 +111,7 @@ fh-toolkit() {
   # FH_WRAPPER lets the container tell a current wrapper from a stale one; `doctor`
   # reports the mismatch. /etc/hosts read-only so hostnames resolve inside the container
   # as they do at your prompt — see operator-onboarding.md Step 0.5 for the loopback edge.
-  docker run --rm -i $tty -e FH_WRAPPER=4 -v "$PWD:/work" \
+  docker run --rm -i $tty -e FH_WRAPPER=5 -v "$PWD:/work" \
     -v /etc/hosts:/etc/hosts:ro -u "$(id -u):$(id -g)" "$img" "$@"
 }
 ```
@@ -134,9 +122,9 @@ and then runs it. `fh-toolkit --update-wrapper` does the same for the wrapper it
 pulls, regenerates, and re-sources. Both have to live in the wrapper, because the CLI runs
 *inside* the container and can neither replace its own image nor write to your home
 directory. (Reaching the CLI with either flag is itself the diagnosis, and it says so.)
-`fh-toolkit --update-agent` is the third of the family: it pulls the *agent's* tag and
-recreates its compose loop (`fh-agent update` is the same act under the other name) — see
-[`fh-agent`](#fh-agent--compose-written-for-you) below for what it prints.
+The agent's counterpart is `fh-agent update`: it pulls the *agent's* tag and restarts the
+loop onto it — see [`fh-agent`](#fh-agent--compose-written-for-you) below for what it
+prints. (`fh-toolkit --update-agent` was an alias for it; retired with wrapper v5.)
 
 Five things in that wrapper are load-bearing:
 
@@ -181,44 +169,44 @@ Five things in that wrapper are load-bearing:
 ### `fh-agent` — compose, written for you
 
 `fh-toolkit init` writes `compose.yaml` (pinned image, `./data` mounted read-only, its
-own project name, no published ports):
+own project name, no published ports), and the same `~/.fh-toolkit.sh` that defines
+`fh-toolkit` defines an `fh-agent` function that drives it. Run everything from your
+operator directory:
 
 ```sh
-docker compose up -d          # start
-docker compose logs -f        # watch
-docker compose down           # stop and remove
+fh-agent doctor      # the credentialed preflight — run it before the first start
+fh-agent dry-run     # Flux Hub connectivity and auth, without touching Proxmox
+fh-agent start       # run the loop in the background
+fh-agent status      # is it running, which version, and is a newer one waiting
+fh-agent logs        # follow the log (Ctrl-C stops watching, not the agent)
+fh-agent logs --tail 50
+fh-agent restart     # APPLY a change to .env.operator or data/inventory.json
+fh-agent stop        # stop and remove the container
+fh-agent update      # pull the newest build and restart onto it
+fh-agent version     # running vs pulled vs published, no credentials needed
 ```
 
-⚠️ **After editing `.env.operator`, use `docker compose up -d --force-recreate`.**
-`docker compose restart` re-reads nothing, and whether a plain `up -d` notices a changed
-`env_file`'s *contents* varies by compose version. This is the single most common reason
-a corrected key keeps returning 401.
+Each verb is one `docker compose` command underneath (`start` = `up -d`, `stop` = `down`,
+`status` = `ps`, `restart` = `up -d --force-recreate`, `update` = `pull` then that), so
+`docker compose …` in the directory does the same thing if you prefer it. The verbs exist
+so you never have to remember which compose command re-reads your settings:
+
+⚠️ **After editing `.env.operator`, `fh-agent restart`.** The agent reads its settings only
+when the container is *created*, and `docker compose restart` (like `docker restart`)
+re-reads nothing — the agent comes back on the old values and the fix "doesn't work".
+`fh-agent restart` is deliberately `up -d --force-recreate`, so the obvious word does the
+right thing. This is the single most common reason a corrected key keeps returning 401.
 
 ⚠️ **All three images track `:latest`, and nothing re-pulls on its own.** `docker run` and
 `docker compose up -d` both use the image already on the host, so you keep running whatever
-you first pulled — indefinitely. To take a newer build:
+you first pulled — indefinitely. `fh-agent update` takes the newer build; the `fh-toolkit`
+function above does the same for itself with its 15-minute stamp file; the Coalition does
+neither. Because the tag moves, **your files no longer record which build is live** —
+`fh-toolkit doctor --check-hub` reports the deployed Coalition build, and that is what
+replaces a version pin. For a run you need to reproduce byte-for-byte, deploy a digest
+(`w2vy/coalition@sha256:…`) instead of a tag.
 
-```sh
-docker compose pull && docker compose up -d --force-recreate
-```
-
-The `fh-toolkit` function above does this for you with its 48-hour stamp file; the agent
-and the Coalition do not. Because the tag moves, **your files no longer record which build
-is live** — `fh-toolkit doctor --check-hub` reports the deployed Coalition build, and that
-is what replaces a version pin. For a run you need to reproduce byte-for-byte, deploy a
-digest (`w2vy/coalition@sha256:…`) instead of a tag.
-
-One-shot invocations (`doctor`, dry runs) have a wrapper too — the same
-`~/.fh-toolkit.sh` defines an `fh-agent` function:
-
-```sh
-fh-agent doctor      # the credentialed preflight
-fh-agent dry-run     # Flux Hub connectivity and auth, without touching Proxmox
-fh-agent version     # running vs pulled vs published, no credentials needed
-fh-agent update      # = fh-toolkit --update-agent: compose pull && up -d --force-recreate
-```
-
-or go direct, which is all the function does:
+The one-shot checks can also go direct, which is all the function does for them:
 
 ```sh
 docker run --rm --env-file .env.operator -v "$PWD/data:/data:ro" \
@@ -235,7 +223,7 @@ you, and picks the tag out of your `compose.yaml`.
 image's own CLI reads `fh-agent [doctor]`, where no argument means *run the main loop in
 the foreground*. Through the function that is a footgun — compose is already running one,
 and a second agent for one provider is a real failure mode — so the function refuses and
-points you back at compose. Run the loop with `docker compose up -d`, never through this.
+lists its verbs. Run the loop with `fh-agent start`, never through the bare function.
 
 ⚠️ **The function never pulls the agent.** `fh-toolkit` refreshes itself because it is the
 thing you are invoking; pulling the *agent* would mean `fh-agent doctor` validated a build
@@ -245,17 +233,17 @@ host against what is **published**, and tells you:
 
 ```
 note: a newer ghcr.io/w2vy/fh-agent:latest is ON THIS HOST than the one your agent is running.
-  take it with:  docker compose up -d --force-recreate
+  take it with:  fh-agent update
 ```
 
 It reports; it never acts, and it says nothing at all when it cannot tell. The first of
 those two comparisons is the one that catches `docker compose pull` without
 `--force-recreate` — a build downloaded and never run.
 
-Acting is a separate, explicit verb, in the shape `--update-wrapper` already has:
+Acting is a separate, explicit verb:
 
 ```sh
-fh-toolkit --update-agent     # or: fh-agent update
+fh-agent update
 ```
 
 runs `docker compose pull && docker compose up -d --force-recreate` in your operator
@@ -614,7 +602,7 @@ is taken from the file; a failed probe writes nothing unless `--yes`; `--no-prob
 Fresh (no `.env.operator`): renders the whole file from `config.env`'s identity, with
 `MANIFEST_KEY`/`MANIFEST_PUBKEY` from the key when it is here and the storage lines blank
 until `inventory` fills them. Existing: the three lines, in place — then
-`docker compose up -d --force-recreate` (the agent reads its env only at start).
+`fh-agent restart` (the agent reads its env only at start).
 
 ### `stripe`
 
@@ -632,7 +620,7 @@ No `secrets.env` yet → the `init` skeleton is written first (`MANIFEST_KEY` fr
 a generated `SESSION_SECRET`) and the Stripe block added to it.
 
 `TIER_PRICES_JSON` is a manifest field, so the closing steps are `sign` → re-paste at
-`/onboard`, then `docker compose up -d --force-recreate` when the listing changed. On a
+`/onboard`, then `fh-agent restart` when the listing changed. On a
 Supporter it writes the prices and says so: nothing is for sale until `level --set operator`.
 
 ### `inventory`
@@ -658,7 +646,7 @@ hub keeps the record until you retire it in the console. `--hosts <file>` takes 
 `HOSTS` is `hardware[]` in the signed manifest, so when it changes the manifest is re-signed
 in place (key present) and you re-paste it at `/onboard`. The agent re-reads
 `data/inventory.json` on its next cycle; only a changed `.env.operator` (storage lines,
-listing counts) needs `docker compose up -d --force-recreate`.
+listing counts) needs `fh-agent restart`.
 
 ---
 
@@ -723,8 +711,7 @@ The `.env.operator` line is `AGENT_LISTING_JSON` — the half of "for sale" your
 asserts to Flux Hub, and the only thing that puts a card on `/providers`. It is derived the
 way `init` derives it: every priced tier, offering every slot you declared (a tier you had
 already listed keeps its hold-back). The agent reads it **only at start**, so the command
-tells you to `docker compose up -d --force-recreate` — a `docker restart` does not reload
-it. Before 2026-09-10 this line was left at `[]`, and an upgrade could finish with a signed
+tells you to `fh-agent restart` — a `docker restart` does not reload it. Before 2026-09-10 this line was left at `[]`, and an upgrade could finish with a signed
 operator manifest, a priced config, a green `doctor` and nothing for sale; `doctor` now
 reports that state as `TIER_PRICED_BUT_NOT_LISTED`.
 
@@ -742,8 +729,8 @@ you re-sign and re-submit. The command prints the steps; they are also here:
 3. register a Stripe webhook endpoint at `<your coalition>/webhook`, then
    `fh-toolkit doctor --check-stripe` (which catches a key from the wrong account)
 4. `fh-toolkit env`, re-import `env.json` into the Flux app, redeploy
-5. `docker compose up -d --force-recreate` in your operator directory, so the agent
-   starts asserting the new listing
+5. `fh-agent restart` in your operator directory, so the agent starts asserting the
+   new listing
 
 The command performs no network writes and signs nothing. Only your browser can complete
 step 2, so it reports what it *wrote* — never what the hub now believes.
@@ -1043,27 +1030,28 @@ receive authorization requests, and deletes and reprovisions sit forever.
 
 ## Operating the agent
 
-`init` writes `compose.yaml`, so day-to-day operation is plain compose in your operator
+`init` writes `compose.yaml`, and the `fh-agent` shell function drives it, in your operator
 directory. There is no `fh-toolkit start` — and deliberately so: `fh-toolkit` runs as a
 container with only your working directory mounted, and giving it control of the host's
 Docker would mean handing `/var/run/docker.sock` to the one tool that holds your signing
-key. Compose is already the right interface.
+key. `fh-agent` is a shell function on the host, so it can.
 
-| Want to | Run |
-|---|---|
-| start it | `docker compose up -d` |
-| is it running? | `docker compose ps` |
-| watch it | `docker compose logs -f` (Ctrl-C stops watching, not the agent) |
-| recent logs only | `docker compose logs --tail 50` |
-| stop it | `docker compose down` |
-| **apply a settings change** | `docker compose up -d --force-recreate` |
-| take a newer build | `docker compose pull && docker compose up -d --force-recreate` |
-| run a one-off check | `docker compose run --rm agent doctor` |
+| Want to | Run | which is |
+|---|---|---|
+| start it | `fh-agent start` | `docker compose up -d` |
+| is it running? | `fh-agent status` | `docker compose ps` + running version + drift note |
+| watch it | `fh-agent logs` (Ctrl-C stops watching, not the agent) | `docker compose logs -f` |
+| recent logs only | `fh-agent logs --tail 50` | `docker compose logs --tail 50` |
+| stop it | `fh-agent stop` | `docker compose down` |
+| **apply a settings change** | `fh-agent restart` | `docker compose up -d --force-recreate` |
+| take a newer build | `fh-agent update` | `docker compose pull` + the line above |
+| run a one-off check | `fh-agent doctor` | `docker run … npm run doctor` |
 
-⚠️ **`restart` is not on that list, and its absence is the point.** `docker compose
-restart` re-reads nothing; neither does `docker restart`. The agent comes back on the old
-values and fails in exactly the same way, which reads as "my fix didn't work". Always
-`--force-recreate` after touching `.env.operator`.
+⚠️ **`fh-agent restart` is `up -d --force-recreate`, not `compose restart` — on purpose.**
+`docker compose restart` re-reads nothing; neither does `docker restart`. The agent comes
+back on the old values and fails in exactly the same way, which reads as "my fix didn't
+work". If you drive compose by hand, always `--force-recreate` after touching
+`.env.operator`.
 
 ### Reading the startup banner
 
@@ -1087,7 +1075,7 @@ configuration. Read it before anything else:
 1. `fh-toolkit doctor` — do the files still agree? Changes nothing; its last line is
    usually the command to run next.
 2. `fh-toolkit doctor --check-proxmox --check-hub` — do the credentials still work?
-3. `docker compose logs --tail 50` — and read the banner above.
+3. `fh-agent logs --tail 50` — and read the banner above.
 
 | Symptom | Cause |
 |---|---|
@@ -1152,12 +1140,12 @@ store. It is not a middlebox on your network and not a Proxmox certificate probl
 | I changed a price | `stripe --price <tier>=<usd>` → `sign` → re-paste at `/onboard` → `env` → re-import |
 | Stripe minted my webhook secret | `stripe --stripe-webhook whsec_…` |
 | I added a Proxmox host or slot | `inventory` (Enter through the rest) → **re-paste at `/onboard`** → `env` → re-import |
-| I rotated the Proxmox token | `proxmox`, then `docker compose up -d --force-recreate` |
+| I rotated the Proxmox token | `proxmox`, then `fh-agent restart` |
 | Build the directory without the wizard | `keygen` → `slug` → `proxmox` → `stripe` → `inventory` → `sign` |
 | Ready to deploy the Coalition | `env` → import `env.json` into the Flux app (**enterprise**) |
-| Ready to start the agent | `fh-agent doctor`, then `docker compose up -d` |
+| Ready to start the agent | `fh-agent doctor`, then `fh-agent start` |
 | Checkout is failing and nothing looks wrong | `doctor --check-hub --check-stripe` |
-| I changed `.env.operator` | `docker compose up -d --force-recreate` |
+| I changed `.env.operator` | `fh-agent restart` |
 | Someone handed me a manifest | `verify --in <file>` |
 | I want to start selling hardware | `level --set operator` → `sign` → re-paste at `/onboard` |
 | I want to stop selling | `level --set supporter` → `sign` → re-paste at `/onboard` |

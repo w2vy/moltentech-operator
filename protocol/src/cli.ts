@@ -1711,7 +1711,7 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
       console.log("\nWrote .env.operator (previous version kept as .env.operator.bak)");
       for (const c of changes) console.log(`  ${c}`);
       console.log("\nThe agent reads .env.operator ONLY at start:");
-      console.log("  docker compose up -d --force-recreate    ← `docker restart` does NOT reload it");
+      console.log("  fh-agent restart    (= docker compose up -d --force-recreate; `docker restart` does NOT reload it)");
       return 0;
     }
     case "stripe": {
@@ -1912,7 +1912,7 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
       }
       if (wrote.includes(".env.operator")) {
         console.log("\n.env.operator changed, which the agent reads ONLY at start:");
-        console.log("  docker compose up -d --force-recreate    ← `docker restart` does NOT reload it");
+        console.log("  fh-agent restart    (= docker compose up -d --force-recreate; `docker restart` does NOT reload it)");
       } else if (wrote.includes("data/inventory.json")) {
         console.log("\nThe agent re-reads data/inventory.json on its next cycle — nothing to restart.");
       }
@@ -2134,7 +2134,7 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
       console.log("  3. `fh-toolkit doctor`   ← run it here; it checks every file agrees");
       console.log("  4. `fh-toolkit env`      → env.json, the Flux \"Import Environment Variables\" blob");
       console.log("     built from config.env + secrets.env + manifest.json. CONTAINS SECRETS.");
-      console.log("     then `docker compose up -d` here to start the agent (compose.yaml is written)");
+      console.log("     then `fh-agent start` here to run the agent (compose.yaml is written)");
       console.log(`  5. deploy Flux app "${answers.fluxAppName}" as an ENTERPRISE app, import env.json`);
       console.log(`     → ${coalitionUrlFor(answers.fluxAppName)}`);
       console.log("     ⚠️  enterprise, not standard: a standard Flux app's environment is");
@@ -2807,13 +2807,13 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
       );
       return 1;
     case "--update-agent":
-      console.log(
-        "`--update-agent` is handled by the fh-toolkit SHELL FUNCTION, not by this CLI —\n" +
-          "the CLI runs inside a container and cannot restart the agent's compose project.\n" +
-          "Reaching me means your wrapper predates it (fh-toolkit --update-wrapper), or you\n" +
-          "are not using the wrapper. By hand, in your operator directory:\n" +
-          "  docker compose pull && docker compose up -d --force-recreate"
-      );
+      // Retired 2026-09-13 (wrapper v5): it was an alias for `fh-agent update`, and two
+      // names for one act meant every doc had to explain both. A v4 wrapper still consumes
+      // it shell-side; a v5 wrapper hands it here.
+      console.log("`fh-toolkit --update-agent` is retired — the agent has its own verbs now:\n" +
+        "  fh-agent update      pull the newest build and restart onto it\n" +
+        "  fh-agent start | stop | restart | status | logs\n" +
+        "(missing? fh-toolkit --update-wrapper)");
       return 1;
     case "--refresh":
       console.log(
@@ -2873,11 +2873,11 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
       console.log("  fh-toolkit --refresh          pull the newest image, then stop");
       console.log("  fh-toolkit --refresh <cmd>    pull, then run <cmd>");
       console.log("  fh-toolkit --update-wrapper   reinstall the shell functions themselves");
-      console.log("  fh-toolkit --update-agent     pull the agent image and recreate its compose loop");
       console.log("Handled by the shell function, not by this CLI — a container can neither");
       console.log("replace its own image nor write to your home directory. Left alone the");
       console.log("wrapper re-pulls every 15 minutes, so `version` above is what is RUNNING.\n");
-      console.log("The agent is a separate command; `fh-agent doctor` is its preflight.");
+      console.log("The agent is a separate command: `fh-agent doctor` is its preflight, and");
+      console.log("`fh-agent start|stop|restart|status|logs|update` run its loop.");
       console.log("Full reference: docs/fh-toolkit.md in the moltentech-operator repo.");
       // `help` asked for this; an unknown subcommand got it as an error message.
       const asked = cmd === undefined || cmd === "help" || cmd === "--help" || cmd === "-h";

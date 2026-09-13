@@ -184,8 +184,8 @@ What matters *about the file*:
 
 - ⚠️ **Editing it is not enough.** `docker compose restart` re-reads nothing, and whether
   a plain `up -d` notices changed `env_file` *contents* varies by compose version. Use
-  `docker compose up -d --force-recreate`. This is the single most common reason a
-  corrected key keeps returning 401.
+  `fh-agent restart` (= `docker compose up -d --force-recreate`). This is the single most
+  common reason a corrected key keeps returning 401.
 - ⚠️ **`MANIFEST_KEY` here is a genuine second copy**, not a duplicate to be tidied away:
   the agent and the Coalition each read their own environment. `doctor` knows this pair is
   legitimate; `ENV_DUPLICATED_ACROSS_FILES` is about values that can *drift*.
@@ -322,7 +322,8 @@ Hub on 443 and your Proxmox on 8006. Nothing reaches it from the internet, which
 makes it safe for it to hold Proxmox credentials at all.
 
 ⚠️ **`:latest` does not re-pull.** `docker compose up -d` runs the image already on the
-host. Take a newer build with `docker compose pull && docker compose up -d --force-recreate`.
+host. Take a newer build with `fh-agent update` (= `docker compose pull && docker compose
+up -d --force-recreate`); `fh-agent status` says when one is waiting.
 
 ## `README.txt`
 
@@ -364,7 +365,7 @@ and check the owner signature too.
 | `MT_BASE_URL` or `MT_PUBKEY` | `env` → re-import. **No re-sign** (neither is in the manifest). |
 | `HOSTS`, `OWNER_ADDRESS`, `PROVIDER_LEVEL`, `COALITION_URL`, trial/approval | `sign` → **re-paste at `/onboard`** → `env` → re-import |
 | a slot, an IP, a storage pool | edit `data/inventory.json`; the agent picks it up |
-| anything in `.env.operator` | `docker compose up -d --force-recreate` |
+| anything in `.env.operator` | `fh-agent restart` |
 | a secret in `secrets.env` | `env` → re-import → verify downstream (the spec may be byte-identical) |
 | `SESSION_SECRET` | everyone is logged out of the console. That is all. |
 | `manifest-key.pem` | you are re-onboarding. FH holds the old public half. |

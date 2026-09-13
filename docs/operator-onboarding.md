@@ -790,8 +790,9 @@ it names.
 
 ⚠️ **Getting a newer `latest` takes an explicit pull.** Neither `docker run` nor `docker
 compose up -d` re-pulls on its own — both use the image already on the host. Run `docker
-compose pull` (or `docker pull`) first, then `docker compose up -d --force-recreate`. The
-`fh-toolkit` shell function in Step 0.5 handles this itself with a 48-hour stamp file.
+compose pull` (or `docker pull`) first, then `docker compose up -d --force-recreate` —
+which is exactly what `fh-agent update` runs. The `fh-toolkit` shell function in Step 0.5
+handles this itself with a 15-minute stamp file.
 
 If you need byte-level reproducibility for a specific run, pin a **digest**
 (`w2vy/coalition@sha256:…`) rather than a version tag — a digest cannot go stale
@@ -1006,20 +1007,27 @@ owner-authorization courier is live.
 never receive authorization requests, and deletes/reprovisions sit forever.
 
 Then run it for real. **`init` wrote `compose.yaml` for you** — pinned image, `./data`
-mounted as a read-only directory, its own project name, no published ports:
+mounted as a read-only directory, its own project name, no published ports — and the
+`fh-agent` function from Step 0.5 drives it:
 
 ```sh
-docker compose up -d          # start
-docker compose logs -f        # watch
-docker compose down           # stop and remove
+fh-agent start                # run the loop in the background
+fh-agent status               # is it running, which version
+fh-agent logs                 # watch (Ctrl-C stops watching, not the agent)
+fh-agent stop                 # stop and remove
+fh-agent update               # take a newer build (nothing re-pulls on its own)
 ```
 
-⚠️ **After editing `.env.operator`, use `docker compose up -d --force-recreate`.**
-`docker compose restart` re-reads nothing, and whether plain `up -d` notices a changed
-`env_file`'s *contents* varies by compose version. Same trap as `docker restart` with
-`--env-file`, and the single most common reason a corrected key keeps returning 401.
+⚠️ **After editing `.env.operator`, `fh-agent restart`.** The agent reads its settings only
+when the container is created. `fh-agent restart` is `docker compose up -d
+--force-recreate`, on purpose: `docker compose restart` re-reads nothing, and whether a
+plain `up -d` notices a changed `env_file`'s *contents* varies by compose version. Same
+trap as `docker restart` with `--env-file`, and the single most common reason a corrected
+key keeps returning 401.
 
-The equivalent without compose, if you prefer:
+Each verb is one compose command in the directory (`start`=`up -d`, `stop`=`down`,
+`status`=`ps`, `logs`=`logs -f`), so plain `docker compose …` works too. The equivalent
+without compose, if you prefer:
 
 ```sh
 docker run -d --name fh-agent --restart unless-stopped \
@@ -1241,8 +1249,8 @@ Proxmox credentials, and never the private half of anything you generated.
   offered). Nothing else in your directory is touched: not `manifest.json`, not
   `SESSION_SECRET`, not your issued keys, not `data/inventory.json`. (`init --force` would
   rewrite all of those; that is why this exists.) Previous versions are kept as `*.bak`.
-  The agent reads `.env.operator` only at start: **`docker compose up -d --force-recreate`**
-  afterwards, or it keeps asserting the old (empty) listing and you get no card.
+  The agent reads `.env.operator` only at start: **`fh-agent restart`** afterwards, or it
+  keeps asserting the old (empty) listing and you get no card.
 
   `PROVIDER_LEVEL` is in your **signed manifest**, so this is a re-sign, not a config
   edit: `fh-toolkit sign` → re-paste `manifest.json` at `/onboard` and sign with your

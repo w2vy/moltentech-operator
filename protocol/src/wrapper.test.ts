@@ -224,7 +224,7 @@ test("⭐ bare `fh-agent` refuses and points at compose", () => {
     box.run("fh-agent");
   } catch (e) {
     threw = true;
-    assert.match(String((e as { stderr?: string }).stderr), /docker compose up -d/);
+    assert.match(String((e as { stderr?: string }).stderr), /usage: fh-agent/);
   }
   assert.ok(threw, "bare fh-agent must exit non-zero");
   assert.deepEqual(box.argv(), [], "and must not run anything");
@@ -364,19 +364,95 @@ test("⭐ fh-agent update is the ONE verb that pulls, and it recreates the loop"
   assert.match(out, /after: +not running/);
 });
 
-test("⭐ fh-toolkit --update-agent is the same act, in the shape --update-wrapper has", () => {
+test("fh-toolkit --update-agent is retired: the wrapper no longer consumes it", () => {
+  // It was an alias for `fh-agent update`. A v5 wrapper hands it to the CLI like any
+  // other argument, where a signpost answers; the wrapper itself must not touch compose.
   const box = shellBox();
   writeFileSync(join(box.dir, ".env.operator"), "x=1\n");
   writeFileSync(join(box.dir, "compose.yaml"), `services:\n  agent:\n    image: ${AGENT_IMAGE}\n`);
-  const out = box.run("fh-toolkit --update-agent 2>&1");
+  box.run("fh-toolkit --update-agent 2>&1");
   const argv = box.argv();
-  assert.deepEqual(argv.filter((a) => a[0] === "compose").map((a) => a.slice(1).join(" ")), [
-    "pull",
-    "up -d --force-recreate",
-  ]);
-  // Alone it stops: no toolkit container run, no toolkit image pull.
-  assert.deepEqual(argv.filter((a) => a[0] === "run" || a[0] === "pull"), []);
-  assert.match(out, /before: not running/);
+  assert.deepEqual(argv.filter((a) => a[0] === "compose"), []);
+  const run = argv.find((a) => a[0] === "run")!;
+  assert.equal(run[run.length - 1], "--update-agent", "passed through to the CLI");
+});
+
+// ---------------------------------------------------------------- lifecycle verbs (wrapper v5)
+
+function composeCalls(box: ReturnType<typeof shellBox>): string[] {
+  return box
+    .argv()
+    .filter((a) => a[0] === "compose")
+    .map((a) => a.slice(1).join(" "));
+}
+
+function operatorDir(box: ReturnType<typeof shellBox>): void {
+  writeFileSync(join(box.dir, ".env.operator"), "x=1\n");
+  writeFileSync(join(box.dir, "compose.yaml"), `services:\n  agent:\n    image: ${AGENT_IMAGE}\n`);
+}
+
+test("⭐ fh-agent start/stop/status/logs are the compose lifecycle, by name", () => {
+  const box = shellBox();
+  operatorDir(box);
+  box.run("fh-agent start");
+  assert.deepEqual(composeCalls(box), ["up -d"]);
+
+  const b2 = shellBox();
+  operatorDir(b2);
+  b2.run("fh-agent stop");
+  assert.deepEqual(composeCalls(b2), ["down"]);
+
+  const b3 = shellBox();
+  operatorDir(b3);
+  b3.run("fh-agent status");
+  assert.deepEqual(composeCalls(b3), ["ps"]);
+
+  const b4 = shellBox();
+  operatorDir(b4);
+  b4.run("fh-agent logs");
+  assert.deepEqual(composeCalls(b4), ["logs -f"]);
+
+  const b5 = shellBox();
+  operatorDir(b5);
+  b5.run("fh-agent logs --tail 50");
+  assert.deepEqual(composeCalls(b5), ["logs --tail 50"], "arguments pass through, and bare -f is dropped");
+});
+
+test("⭐ fh-agent restart is `up -d --force-recreate`, never `compose restart`", () => {
+  // The verb people reach for after editing .env.operator. `docker compose restart`
+  // re-reads nothing; giving the obvious word the right meaning is the whole point.
+  const box = shellBox();
+  operatorDir(box);
+  box.run("fh-agent restart");
+  assert.deepEqual(composeCalls(box), ["up -d --force-recreate"]);
+  const code = script()
+    .split("\n")
+    .filter((l) => !l.trim().startsWith("#"))
+    .join("\n");
+  assert.doesNotMatch(code, /compose restart/);
+});
+
+test("the lifecycle verbs refuse a directory compose does not run", () => {
+  for (const verb of ["start", "stop", "restart", "status", "logs"]) {
+    const box = shellBox();
+    writeFileSync(join(box.dir, ".env.operator"), "x=1\n");
+    assert.throws(() => box.run(`fh-agent ${verb}`), /no compose.yaml here/, verb);
+    assert.deepEqual(composeCalls(box), [], verb);
+  }
+});
+
+test("bare `fh-agent` lists its own verbs, not compose", () => {
+  const box = shellBox();
+  let err = "";
+  try {
+    box.run("fh-agent");
+  } catch (e) {
+    err = String((e as { stderr?: string }).stderr);
+  }
+  for (const verb of ["start", "stop", "restart", "status", "logs", "update", "doctor"]) {
+    assert.match(err, new RegExp(`^  ${verb} `, "m"), verb);
+  }
+  assert.doesNotMatch(err, /^  docker compose/m);
 });
 
 test("fh-agent update refuses a directory compose does not run", () => {
