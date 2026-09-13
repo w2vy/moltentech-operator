@@ -1580,14 +1580,14 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
       if (changes.some(([k, from]) => k === "PROVIDER_VM_PREFIX" && from) && existsSync(manifestPath)) {
         console.log(
           "\n⚠ PROVIDER_VM_PREFIX is pinned by the hub at first ingest. If this manifest was already\n" +
-            "  ingested, the hub will refuse the new prefix — changing a pinned prefix is a support request."
+            "  ingested, the hub will refuse the new prefix — a pinned prefix cannot be changed."
         );
       }
       let text = existing;
       for (const [key, , to] of changes) {
         text = upsertEnvLine(text, key, to, key === "PROVIDER_VM_PREFIX"
           ? ["PROVIDER_VM_PREFIX — every VM name you declare starts with this (e.g. mt-). Pinned by",
-             "Flux Hub at first ingest; changing it later is a support request."]
+             "Flux Hub at first ingest and cannot be changed afterwards."]
           : []);
       }
       // MT_PUBKEY is per-hub: a move between staging and production needs the other hub's

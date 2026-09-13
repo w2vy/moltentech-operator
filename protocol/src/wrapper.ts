@@ -29,7 +29,7 @@ export const TOOLKIT_IMAGE = "ghcr.io/w2vy/fh-toolkit:latest";
  * from a stale one from one predating the handshake entirely (`undefined`). That is the
  * whole point of the exercise — a stale wrapper used to be undetectable from either side.
  */
-export const WRAPPER_VERSION = 5;
+export const WRAPPER_VERSION = 6;
 
 /** Where `--update-wrapper` installs, unless the operator overrides it. */
 export const WRAPPER_RC = "${FH_TOOLKIT_RC:-$HOME/.fh-toolkit.sh}";
@@ -274,11 +274,28 @@ fh-agent() {
   esac
 }
 
+# THIS directory's agent container, by compose project — not the first container on the
+# image. Two stacks on one tag (a staging pair on :staging, a prod pair on :latest) each
+# have their own project, and matching on the image alone reported whichever came first:
+# on 2026-09-13 the second directory's \`fh-agent update\` printed the sibling's version as
+# its own "before". \`init\` writes \`name:\` into compose.yaml; a file without one gets
+# compose's directory-derived project, which the working_dir label still identifies.
+fh-agent-cid() {
+  local img project filter
+  img="$(fh-agent-image)"
+  project="$(awk '$1 == "name:" { print $2; exit }' compose.yaml 2>/dev/null)"
+  if [ -n "$project" ]; then
+    filter="label=com.docker.compose.project=$project"
+  else
+    filter="label=com.docker.compose.project.working_dir=$(pwd -P)"
+  fi
+  docker ps --format '{{.ID}} {{.Image}}' --filter "$filter" 2>/dev/null | awk -v i="$img" '$2 == i { print $1; exit }'
+}
+
 # The version of the agent container compose is running for this directory, or "not running".
 fh-agent-running-version() {
-  local img cid
-  img="$(fh-agent-image)"
-  cid="$(docker ps --format '{{.ID}} {{.Image}}' 2>/dev/null | awk -v i="$img" '$2 == i { print $1; exit }')"
+  local cid
+  cid="$(fh-agent-cid)"
   if [ -z "$cid" ]; then
     echo "not running"
     return 0
@@ -327,10 +344,10 @@ fh-agent-image-drift() {
   local img
   img="$(fh-agent-image)"
   local cid running_id local_id local_digest remote_digest
-  # Match on the image NAME as recorded at creation, not \`--filter ancestor=\`: that filter
-  # resolves the tag to its CURRENT id, so a container left behind by a pull — exactly the
-  # case worth reporting — would not match it.
-  cid="$(docker ps --format '{{.ID}} {{.Image}}' 2>/dev/null | awk -v i="$img" '$2 == i { print $1; exit }')"
+  # fh-agent-cid matches on the image NAME as recorded at creation, not \`--filter
+  # ancestor=\`: that filter resolves the tag to its CURRENT id, so a container left behind
+  # by a pull — exactly the case worth reporting — would not match it.
+  cid="$(fh-agent-cid)"
   [ -z "$cid" ] && return 0
   running_id="$(docker inspect --format '{{.Image}}' "$cid" 2>/dev/null)"
   local_id="$(docker image inspect --format '{{.Id}}' "$img" 2>/dev/null)"
