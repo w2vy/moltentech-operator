@@ -193,14 +193,14 @@ export async function probeHub(
           file: "secrets.env",
           summary:
             "Flux Hub rejects your signature — the agent cannot report or take work. Re-run " +
-            "`fh-toolkit keygen`, re-ingest the manifest, then `docker compose up -d --force-recreate`",
+            "`fh-toolkit keygen`, re-ingest the manifest, then `fh-agent restart` (docker compose up -d --force-recreate)",
           message:
             `Flux Hub returned 401 for a MANIFEST_KEY signature at ${url}. Either the key in ` +
             "secrets.env is not the private half of the pubkey Flux Hub pinned as " +
             "`Provider.manifestPubkey`, or the manifest was never re-ingested after a keygen. " +
             "Nothing else shows this: the stats pull Flux Hub uses to set lastSyncedAt is " +
             "unauthenticated, so the provider page stays green.",
-          fix: "re-ingest manifest.json at /onboard, then `docker compose up -d --force-recreate`",
+          fix: "re-ingest manifest.json at /onboard, then `fh-agent restart` (docker compose up -d --force-recreate)",
         });
       } else if (res.status === 200) {
         checks.push({

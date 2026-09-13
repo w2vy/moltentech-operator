@@ -118,7 +118,7 @@ Next, in order:
   3. `fh-toolkit doctor`   ← run it here; it checks every file agrees
   4. `fh-toolkit env`      → env.json, the Flux "Import Environment Variables" blob
      built from config.env + secrets.env + manifest.json. CONTAINS SECRETS.
-     then `docker compose up -d` here to start the agent (compose.yaml is written)
+     then `fh-agent start` here to run the agent (compose.yaml is written)
   5. deploy Flux app "coalition-romeo-sierra" as an ENTERPRISE app, import env.json
      → https://coalition-romeo-sierra.app.runonflux.io
      ⚠️  enterprise, not standard: a standard Flux app's environment is
@@ -244,7 +244,7 @@ user@host:~/fh-agent$
 > ⚠️ Recorded on build `341c44f`, which wrote only `config.env` and `secrets.env`. The
 > current build also rewrites the `AGENT_LISTING_JSON` line of `.env.operator` — shown as a
 > third `.env.operator …` line in the diff — and adds a step telling you to recreate the
-> agent (`docker compose up -d --force-recreate`). It does that because this very run
+> agent (`fh-agent restart`). It does that because this very run
 > finished with the agent still asserting `[]` and no card on `/providers` until that line
 > was edited by hand; `doctor` now reports that state as `TIER_PRICED_BUT_NOT_LISTED`.
 

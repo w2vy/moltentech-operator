@@ -29,7 +29,7 @@ export const TOOLKIT_IMAGE = "ghcr.io/w2vy/fh-toolkit:latest";
  * from a stale one from one predating the handshake entirely (`undefined`). That is the
  * whole point of the exercise — a stale wrapper used to be undetectable from either side.
  */
-export const WRAPPER_VERSION = 4;
+export const WRAPPER_VERSION = 5;
 
 /** Where `--update-wrapper` installs, unless the operator overrides it. */
 export const WRAPPER_RC = "${FH_TOOLKIT_RC:-$HOME/.fh-toolkit.sh}";
@@ -83,7 +83,7 @@ export function toolkitFunction(): string {
   return `fh-toolkit() {
   local img=${TOOLKIT_IMAGE}
   local stamp="\${XDG_CACHE_HOME:-$HOME/.cache}/fh-toolkit.pulled"
-  # \`--refresh\`, \`--update-wrapper\` and \`--update-agent\` are consumed HERE, never passed on: the CLI runs
+  # \`--refresh\` and \`--update-wrapper\` are consumed HERE, never passed on: the CLI runs
   # inside the container and can neither replace its own image nor write to your home
   # directory. Alone each does its job and stops; followed by a command it runs that too.
   if [ "$1" = "--refresh" ]; then
@@ -114,18 +114,6 @@ export function toolkitFunction(): string {
     . "$rc" || return 1
     [ $# -eq 0 ] && return 0
   fi
-  # \`--update-agent\` is the agent's counterpart: pull ITS tag and recreate the compose loop.
-  # Shell-side for the same reason — a container cannot restart a sibling container's
-  # compose project. Defined with the fh-agent functions, so a toolkit-only wrapper says so.
-  if [ "$1" = "--update-agent" ]; then
-    shift
-    if ! command -v fh-agent-update >/dev/null 2>&1; then
-      echo "error: the fh-agent functions are not installed — run: fh-toolkit --update-wrapper" >&2
-      return 1
-    fi
-    fh-agent-update || return $?
-    [ $# -eq 0 ] && return 0
-  fi
   # Refresh the image at most once every ${REFRESH_MINUTES} minutes, tracked by a stamp file.
   if [ ! -e "$stamp" ] || [ -n "$(find "$stamp" -mmin +${STALE_MMIN} 2>/dev/null)" ]; then
     if docker pull -q "$img" >/dev/null 2>&1; then
@@ -149,13 +137,19 @@ export function toolkitFunction(): string {
 }
 
 /**
- * The `fh-agent` function — the ONE-SHOT invocations only.
+ * The `fh-agent` function — one-shot checks, plus the loop's lifecycle as named verbs.
  *
  * ⚠️ This is the one place a wrapper deliberately disagrees with the tool it wraps. The
  * image's own CLI is \`fh-agent [doctor]\`, where bare means "run the main loop in the
  * foreground". Through a wrapper that is a footgun: a loop is already running under
  * compose, and a second agent for one provider is a real failure mode. So bare refuses and
- * points at compose.
+ * lists the verbs; \`start\` is compose's \`up -d\`, which is idempotent.
+ *
+ * The lifecycle verbs (v5) exist so the operator docs speak ONE vocabulary. Before them the
+ * docs said \`fh-agent doctor\` and then switched to raw compose for start/stop/logs, and
+ * \`docker restart\` — the obvious word, which re-reads nothing — cost four separate
+ * afternoons. \`fh-agent restart\` IS \`up -d --force-recreate\`, so the obvious word now
+ * does the right thing.
  *
  * It also never pulls. The toolkit's stamp is safe because the toolkit is the thing you are
  * invoking; pulling the agent would mean \`fh-agent doctor\` validates a build your running
@@ -198,14 +192,17 @@ fh-agent() {
     # Deliberate divergence from the image's own CLI, where bare means "run the main loop".
     # Through a wrapper that would start a SECOND agent for this provider, alongside the one
     # compose is already running.
-    echo "the long-running agent runs under compose, not through this function:" >&2
-    echo "  docker compose up -d              # start" >&2
-    echo "  docker compose logs -f            # watch" >&2
-    echo "  docker compose down               # stop" >&2
-    echo "  docker compose pull && docker compose up -d --force-recreate   # take a new build" >&2
-    echo "" >&2
-    echo "one-shot checks:  fh-agent doctor   fh-agent dry-run   fh-agent version" >&2
-    echo "take a new build: fh-agent update" >&2
+    echo "usage: fh-agent <doctor|dry-run|version|start|stop|restart|status|logs|update>" >&2
+    echo "  doctor     the credentialed preflight (run before the first start)" >&2
+    echo "  dry-run    Flux Hub connectivity and auth, without touching Proxmox" >&2
+    echo "  version    running vs pulled vs published" >&2
+    echo "  start      run the agent loop in the background   (docker compose up -d)" >&2
+    echo "  stop       stop and remove it                       (docker compose down)" >&2
+    echo "  restart    APPLY a settings change                  (up -d --force-recreate)" >&2
+    echo "  status     is it running, and which version        (docker compose ps)" >&2
+    echo "  logs       follow the log; 'logs --tail 50' for the recent lines" >&2
+    echo "  update     pull the newest build and restart onto it" >&2
+    echo "the loop itself runs under compose; this function never runs it in the foreground." >&2
     return 1
   fi
   if [ ! -f .env.operator ]; then
@@ -231,8 +228,38 @@ fh-agent() {
       fh-agent-image-drift
       ;;
     update)
-      # Same as \`fh-toolkit --update-agent\`; both names land in fh-agent-update.
       fh-agent-update
+      ;;
+    start)
+      fh-agent-compose-dir || return 1
+      docker compose up -d
+      ;;
+    stop)
+      fh-agent-compose-dir || return 1
+      docker compose down
+      ;;
+    restart)
+      # NOT \`docker compose restart\`: that re-reads nothing, and neither does
+      # \`docker restart\`. The agent reads .env.operator only at container creation, so
+      # the verb people reach for after editing it has to recreate.
+      fh-agent-compose-dir || return 1
+      docker compose up -d --force-recreate
+      ;;
+    status)
+      fh-agent-compose-dir || return 1
+      docker compose ps
+      echo "running: $(fh-agent-running-version)"
+      fh-agent-image-drift
+      ;;
+    logs)
+      shift
+      fh-agent-compose-dir || return 1
+      # Bare follows; any argument is passed through as given (\`logs --tail 50\`).
+      if [ $# -eq 0 ]; then
+        docker compose logs -f
+      else
+        docker compose logs "$@"
+      fi
       ;;
     dry-run)
       shift
@@ -259,16 +286,20 @@ fh-agent-running-version() {
   docker exec "$cid" node -p 'require("/app/agent/package.json").version' 2>/dev/null || echo "unknown"
 }
 
-# The one verb that ACTS: pull the tag and recreate the loop on it, printing the running
-# version on either side so you can see whether anything moved. \`fh-agent doctor\` only ever
-# reports (fh-agent-image-drift) — the loop restart is yours to ask for, as
-# \`fh-toolkit --update-agent\` (the shape \`--update-wrapper\` already has) or \`fh-agent update\`.
-fh-agent-update() {
+# Every lifecycle verb drives compose, so every one needs the file compose reads.
+fh-agent-compose-dir() {
   if [ ! -f compose.yaml ]; then
     echo "error: no compose.yaml here — the loop is not run by compose in this directory." >&2
     echo "  (run this from your operator directory; you are in $PWD)" >&2
     return 1
   fi
+}
+
+# The one verb that PULLS: fetch the tag and recreate the loop on it, printing the running
+# version on either side so you can see whether anything moved. \`fh-agent doctor\` only ever
+# reports (fh-agent-image-drift) — taking the build is yours to ask for, as \`fh-agent update\`.
+fh-agent-update() {
+  fh-agent-compose-dir || return 1
   echo "before: $(fh-agent-running-version)"
   docker compose pull && docker compose up -d --force-recreate || return $?
   echo "after:  $(fh-agent-running-version)"

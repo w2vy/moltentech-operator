@@ -354,7 +354,7 @@ function sellingNextSteps(o: { manifestField: boolean; stripe: boolean; listingC
     steps.push(
       "",
       "AGENT_LISTING_JSON changed in .env.operator, which the agent reads ONLY at start:",
-      "  docker compose up -d --force-recreate    ← `docker restart` does NOT reload it"
+      "  fh-agent restart    (= docker compose up -d --force-recreate; `docker restart` does NOT reload it)"
     );
   }
   return steps;
@@ -472,7 +472,7 @@ export function planLevelChange(input: LevelChangeInput): LevelChange {
       nextSteps.push(
         "",
         "AGENT_LISTING_JSON changed in .env.operator, which the agent reads ONLY at start:",
-        "  docker compose up -d --force-recreate    ← `docker restart` does NOT reload it"
+        "  fh-agent restart    (= docker compose up -d --force-recreate; `docker restart` does NOT reload it)"
       );
     }
     nextSteps.push(
