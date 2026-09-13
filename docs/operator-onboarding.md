@@ -959,18 +959,17 @@ keeps serving stale content) until the container is recreated.
 
 ### ⭐ First, the hypervisor preflight: `fh-agent doctor`
 
-Before any VM is created, run the credentialed checks — read-only, creates nothing:
+Before any VM is created, run the credentialed checks — read-only, creates nothing. In
+your operator directory:
 
 ```sh
-docker run --rm --env-file .env.operator -v "$PWD/data:/data:ro" \
-  ghcr.io/w2vy/fh-agent:latest npm run doctor      # :staging if you onboarded against staging
+fh-agent doctor
 ```
 
-⚠️ **`npm run doctor`, not a bare `doctor`.** The image sets `CMD` but no `ENTRYPOINT`, so
-it inherits node's: a bare subcommand is handed to `node` and dies
-`MODULE_NOT_FOUND: /app/agent/doctor`. `doctor` is genuinely the image's CLI — it is only
-unreachable as a bare `docker run` argument. The `fh-agent` shell function does this for
-you, and picks the tag out of your `compose.yaml`.
+(The `fh-agent` function comes from the same `~/.fh-toolkit.sh` as `fh-toolkit`, Step 0.5.
+It picks the image tag out of your `compose.yaml`, so a staging onboarding checks the
+staging build. The raw `docker run` it issues is in
+[`fh-toolkit.md`](fh-toolkit.md#fh-agent--compose-written-for-you), if you need it.)
 
 It exits non-zero if anything fails, so it works as a gate. It checks that Proxmox is
 reachable and your token is accepted, that the CA trust store is present, that each
@@ -994,8 +993,7 @@ the media yourself; an honest "cannot tell" is deliberate rather than a guess.
 Validate connectivity/auth to FH first, **without touching Proxmox**:
 
 ```sh
-docker run --rm --env-file .env.operator -v "$PWD/data:/data:ro" \
-  -e AGENT_DRY_RUN=1 ghcr.io/w2vy/fh-agent:latest
+fh-agent dry-run
 # expect: provider=… mt=… dryRun=true auth=signature ownerAuth=enforced courier=on
 ```
 
@@ -1026,14 +1024,7 @@ trap as `docker restart` with `--env-file`, and the single most common reason a 
 key keeps returning 401.
 
 Each verb is one compose command in the directory (`start`=`up -d`, `stop`=`down`,
-`status`=`ps`, `logs`=`logs -f`), so plain `docker compose …` works too. The equivalent
-without compose, if you prefer:
-
-```sh
-docker run -d --name fh-agent --restart unless-stopped \
-  --env-file .env.operator -v "$PWD/data:/data:ro" ghcr.io/w2vy/fh-agent:latest
-# any env edit then needs: docker rm -f fh-agent && the above again
-```
+`status`=`ps`, `logs`=`logs -f`), so plain `docker compose …` works too.
 
 ⚠️ If you see **"self-signed certificate in certificate chain"**, the image is missing
 its CA store — it is not a middlebox on your network and not a Proxmox cert problem.
@@ -1228,10 +1219,11 @@ Proxmox credentials, and never the private half of anything you generated.
 
 ## Ongoing operations
 
-- **Change price / slots offered**: update `AGENT_LISTING_JSON` and **recreate** the
-  agent container (`docker rm -f` + `docker run` — `restart` does not reload
-  `--env-file`), and update `TIER_PRICES_JSON` in `config.env` → re-run `fh-toolkit
-  env` → re-import `env.json` (free) so the Coalition's prices match. No re-signing.
+- **Change price / slots offered**: `fh-toolkit stripe --price <tier>=<usd>` rewrites
+  `TIER_PRICES_JSON` and `AGENT_LISTING_JSON` together, then `fh-agent restart` (the agent
+  reads its listing only at start) → `fh-toolkit env` → re-import `env.json` (free) so the
+  Coalition's prices match. `sign` → re-paste at `/onboard`, since the prices are in the
+  manifest.
 - **Add or remove a host**: add its `ProxmoxHost.name` to `HOSTS` in `config.env`,
   re-`sign`, re-paste at `/onboard` and sign with your pinned owner wallet, then re-run
   `fh-toolkit env` and re-import `env.json`. Until FH re-ingests, it **rejects the
