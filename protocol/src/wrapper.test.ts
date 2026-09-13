@@ -342,8 +342,72 @@ exit 0
   chmodSync(join(box.dir, "bin", "docker"), 0o755);
   const out = box.run("fh-agent doctor 2>&1");
   assert.match(out, /ON THIS HOST than the one your agent is running/);
-  assert.match(out, /--force-recreate/);
+  assert.match(out, /fh-agent update/);
   assert.match(out, /1111111111111111/);
+});
+
+// ---------------------------------------------------------------- version / update (wrapper v4)
+
+test("⭐ fh-agent update is the ONE verb that pulls, and it recreates the loop", () => {
+  // The drift check reports and never acts (above). Acting is this verb, asked for by name:
+  // pull, then up -d --force-recreate, with the running version printed on either side.
+  const box = shellBox();
+  writeFileSync(join(box.dir, ".env.operator"), "x=1\n");
+  writeFileSync(join(box.dir, "compose.yaml"), `services:\n  agent:\n    image: ${AGENT_IMAGE}\n`);
+  const out = box.run("fh-agent update 2>&1");
+  const argv = box.argv();
+  assert.deepEqual(argv.filter((a) => a[0] === "compose").map((a) => a.slice(1).join(" ")), [
+    "pull",
+    "up -d --force-recreate",
+  ]);
+  assert.match(out, /before: not running/); // the stub's `docker ps` prints nothing
+  assert.match(out, /after: +not running/);
+});
+
+test("⭐ fh-toolkit --update-agent is the same act, in the shape --update-wrapper has", () => {
+  const box = shellBox();
+  writeFileSync(join(box.dir, ".env.operator"), "x=1\n");
+  writeFileSync(join(box.dir, "compose.yaml"), `services:\n  agent:\n    image: ${AGENT_IMAGE}\n`);
+  const out = box.run("fh-toolkit --update-agent 2>&1");
+  const argv = box.argv();
+  assert.deepEqual(argv.filter((a) => a[0] === "compose").map((a) => a.slice(1).join(" ")), [
+    "pull",
+    "up -d --force-recreate",
+  ]);
+  // Alone it stops: no toolkit container run, no toolkit image pull.
+  assert.deepEqual(argv.filter((a) => a[0] === "run" || a[0] === "pull"), []);
+  assert.match(out, /before: not running/);
+});
+
+test("fh-agent update refuses a directory compose does not run", () => {
+  const box = shellBox();
+  writeFileSync(join(box.dir, ".env.operator"), "x=1\n");
+  assert.throws(() => box.run("fh-agent update"), /no compose.yaml here/);
+  assert.deepEqual(box.argv().filter((a) => a[0] === "compose"), []);
+});
+
+test("fh-agent version reports running vs pulled and never pulls", () => {
+  const box = shellBox();
+  writeFileSync(join(box.dir, ".env.operator"), "x=1\n");
+  writeFileSync(
+    join(box.dir, "bin", "docker"),
+    `#!/bin/bash
+case "$1 $2" in
+  "ps --format") echo "c0ffee ${AGENT_IMAGE}" ;;
+  "exec c0ffee") echo "0.11.11" ;;
+  "run --rm") echo "0.11.12" ;;
+  "inspect --format") echo "sha256:1111111111111111" ;;
+  "image inspect") echo "sha256:1111111111111111" ;;
+  *) : ;;
+esac
+exit 0
+`
+  );
+  chmodSync(join(box.dir, "bin", "docker"), 0o755);
+  const out = box.run("fh-agent version 2>&1");
+  assert.match(out, /running: 0\.11\.11/);
+  assert.match(out, /pulled: +0\.11\.12/);
+  assert.doesNotMatch(out, /pull &&/);
 });
 
 test("the drift check does NOT use `--filter ancestor`", () => {

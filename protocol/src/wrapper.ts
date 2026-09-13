@@ -29,7 +29,7 @@ export const TOOLKIT_IMAGE = "ghcr.io/w2vy/fh-toolkit:latest";
  * from a stale one from one predating the handshake entirely (`undefined`). That is the
  * whole point of the exercise — a stale wrapper used to be undetectable from either side.
  */
-export const WRAPPER_VERSION = 3;
+export const WRAPPER_VERSION = 4;
 
 /** Where `--update-wrapper` installs, unless the operator overrides it. */
 export const WRAPPER_RC = "${FH_TOOLKIT_RC:-$HOME/.fh-toolkit.sh}";
@@ -83,7 +83,7 @@ export function toolkitFunction(): string {
   return `fh-toolkit() {
   local img=${TOOLKIT_IMAGE}
   local stamp="\${XDG_CACHE_HOME:-$HOME/.cache}/fh-toolkit.pulled"
-  # \`--refresh\` and \`--update-wrapper\` are consumed HERE and never passed on: the CLI runs
+  # \`--refresh\`, \`--update-wrapper\` and \`--update-agent\` are consumed HERE, never passed on: the CLI runs
   # inside the container and can neither replace its own image nor write to your home
   # directory. Alone each does its job and stops; followed by a command it runs that too.
   if [ "$1" = "--refresh" ]; then
@@ -112,6 +112,18 @@ export function toolkitFunction(): string {
     # Redefining a function while it is running is fine: bash already parsed this body.
     # The new definitions take effect from the next call.
     . "$rc" || return 1
+    [ $# -eq 0 ] && return 0
+  fi
+  # \`--update-agent\` is the agent's counterpart: pull ITS tag and recreate the compose loop.
+  # Shell-side for the same reason — a container cannot restart a sibling container's
+  # compose project. Defined with the fh-agent functions, so a toolkit-only wrapper says so.
+  if [ "$1" = "--update-agent" ]; then
+    shift
+    if ! command -v fh-agent-update >/dev/null 2>&1; then
+      echo "error: the fh-agent functions are not installed — run: fh-toolkit --update-wrapper" >&2
+      return 1
+    fi
+    fh-agent-update || return $?
     [ $# -eq 0 ] && return 0
   fi
   # Refresh the image at most once every ${REFRESH_MINUTES} minutes, tracked by a stamp file.
@@ -192,7 +204,8 @@ fh-agent() {
     echo "  docker compose down               # stop" >&2
     echo "  docker compose pull && docker compose up -d --force-recreate   # take a new build" >&2
     echo "" >&2
-    echo "one-shot checks:  fh-agent doctor   fh-agent dry-run" >&2
+    echo "one-shot checks:  fh-agent doctor   fh-agent dry-run   fh-agent version" >&2
+    echo "take a new build: fh-agent update" >&2
     return 1
   fi
   if [ ! -f .env.operator ]; then
@@ -210,6 +223,17 @@ fh-agent() {
       # argv[2]); it is only unreachable as a bare docker argument.
       docker run --rm --env-file .env.operator -v "$PWD/data:/data:ro" "$img" npm run doctor "$@"
       ;;
+    version)
+      # Which agent is running, which is pulled, and whether a newer one is published.
+      # No credentials, no network beyond the registry check. Flux Hub shows the running
+      # version on your listing page (agent >= 0.11.11 reports it on every call).
+      fh-agent-version
+      fh-agent-image-drift
+      ;;
+    update)
+      # Same as \`fh-toolkit --update-agent\`; both names land in fh-agent-update.
+      fh-agent-update
+      ;;
     dry-run)
       shift
       # The image takes this as an env var, not an argument — the whole reason it is worth
@@ -221,6 +245,41 @@ fh-agent() {
       docker run --rm --env-file .env.operator -v "$PWD/data:/data:ro" "$img" "$@"
       ;;
   esac
+}
+
+# The version of the agent container compose is running for this directory, or "not running".
+fh-agent-running-version() {
+  local img cid
+  img="$(fh-agent-image)"
+  cid="$(docker ps --format '{{.ID}} {{.Image}}' 2>/dev/null | awk -v i="$img" '$2 == i { print $1; exit }')"
+  if [ -z "$cid" ]; then
+    echo "not running"
+    return 0
+  fi
+  docker exec "$cid" node -p 'require("/app/agent/package.json").version' 2>/dev/null || echo "unknown"
+}
+
+# The one verb that ACTS: pull the tag and recreate the loop on it, printing the running
+# version on either side so you can see whether anything moved. \`fh-agent doctor\` only ever
+# reports (fh-agent-image-drift) — the loop restart is yours to ask for, as
+# \`fh-toolkit --update-agent\` (the shape \`--update-wrapper\` already has) or \`fh-agent update\`.
+fh-agent-update() {
+  if [ ! -f compose.yaml ]; then
+    echo "error: no compose.yaml here — the loop is not run by compose in this directory." >&2
+    echo "  (run this from your operator directory; you are in $PWD)" >&2
+    return 1
+  fi
+  echo "before: $(fh-agent-running-version)"
+  docker compose pull && docker compose up -d --force-recreate || return $?
+  echo "after:  $(fh-agent-running-version)"
+}
+
+# Running vs pulled, by version. The digests underneath are fh-agent-image-drift's job.
+fh-agent-version() {
+  local img
+  img="$(fh-agent-image)"
+  echo "running: $(fh-agent-running-version)"
+  echo "pulled:  $(docker run --rm --entrypoint node "$img" -p 'require("/app/agent/package.json").version' 2>/dev/null || echo "not pulled")   ($img)"
 }
 
 # Is the agent you are running the newest one? Reports; never acts. All three images track
@@ -248,7 +307,7 @@ fh-agent-image-drift() {
     echo "note: a newer $img is ON THIS HOST than the one your agent is running." >&2
     echo "  running  \${running_id#sha256:}" >&2
     echo "  pulled   \${local_id#sha256:}" >&2
-    echo "  take it with:  docker compose up -d --force-recreate" >&2
+    echo "  take it with:  fh-agent update" >&2
     return 0
   fi
   # \`docker manifest inspect\` is NOT usable here — it refuses an OCI index with
@@ -264,7 +323,7 @@ fh-agent-image-drift() {
   echo "note: a newer $img is PUBLISHED than the one on this host." >&2
   echo "  yours     \${local_digest#*@}" >&2
   echo "  published $remote_digest" >&2
-  echo "  take it with:  docker compose pull && docker compose up -d --force-recreate" >&2
+  echo "  take it with:  fh-agent update" >&2
 }`;
 }
 
