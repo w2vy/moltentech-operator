@@ -29,7 +29,7 @@ export const TOOLKIT_IMAGE = "ghcr.io/w2vy/fh-toolkit:latest";
  * from a stale one from one predating the handshake entirely (`undefined`). That is the
  * whole point of the exercise — a stale wrapper used to be undetectable from either side.
  */
-export const WRAPPER_VERSION = 6;
+export const WRAPPER_VERSION = 7;
 
 /** Where `--update-wrapper` installs, unless the operator overrides it. */
 export const WRAPPER_RC = "${FH_TOOLKIT_RC:-$HOME/.fh-toolkit.sh}";
@@ -280,16 +280,21 @@ fh-agent() {
 # on 2026-09-13 the second directory's \`fh-agent update\` printed the sibling's version as
 # its own "before". \`init\` writes \`name:\` into compose.yaml; a file without one gets
 # compose's directory-derived project, which the working_dir label still identifies.
+#
+# The project + service labels make the container unique, so the image is NOT compared:
+# once a pull has moved the tag, \`docker ps\` shows the still-running container's Image
+# as a bare id rather than the tag, and an image match reports "not running" for a
+# container that is up (the second directory of each pair, same day, wrapper v6).
 fh-agent-cid() {
-  local img project filter
-  img="$(fh-agent-image)"
+  local filter
+  local project
   project="$(awk '$1 == "name:" { print $2; exit }' compose.yaml 2>/dev/null)"
   if [ -n "$project" ]; then
     filter="label=com.docker.compose.project=$project"
   else
     filter="label=com.docker.compose.project.working_dir=$(pwd -P)"
   fi
-  docker ps --format '{{.ID}} {{.Image}}' --filter "$filter" 2>/dev/null | awk -v i="$img" '$2 == i { print $1; exit }'
+  docker ps --format '{{.ID}}' --filter "$filter" --filter label=com.docker.compose.service=agent 2>/dev/null | head -n 1
 }
 
 # The version of the agent container compose is running for this directory, or "not running".

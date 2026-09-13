@@ -331,7 +331,7 @@ test("⭐ the drift check reports a running container older than the pulled imag
     join(box.dir, "bin", "docker"),
     `#!/bin/bash
 case "$1 $2" in
-  "ps --format") echo "c0ffee ${AGENT_IMAGE}" ;;
+  "ps --format") echo "c0ffee" ;;
   "inspect --format") echo "sha256:1111111111111111" ;;
   "image inspect") echo "sha256:2222222222222222" ;;
   *) : ;;
@@ -469,7 +469,7 @@ test("fh-agent version reports running vs pulled and never pulls", () => {
     join(box.dir, "bin", "docker"),
     `#!/bin/bash
 case "$1 $2" in
-  "ps --format") echo "c0ffee ${AGENT_IMAGE}" ;;
+  "ps --format") echo "c0ffee" ;;
   "exec c0ffee") echo "0.11.11" ;;
   "run --rm") echo "0.11.12" ;;
   "inspect --format") echo "sha256:1111111111111111" ;;
@@ -503,6 +503,41 @@ test("⭐ the running container is found by compose PROJECT, not by image alone"
     assert.ok(call.includes("--filter"), "every ps is filtered");
     assert.ok(call.includes("label=com.docker.compose.project=fh-agent-cute-cats"), call.join(" "));
   }
+});
+
+test("⭐ the container is found WITHOUT comparing the image column", () => {
+  // After a pull has moved the tag, `docker ps` shows a still-running container's Image
+  // as a bare id. On 2026-09-13 (wrapper v6) that read as "not running" for the second
+  // directory of each pair. The project + service labels are the identity; the image
+  // is not consulted.
+  const box = shellBox();
+  writeFileSync(join(box.dir, ".env.operator"), "x=1\n");
+  writeFileSync(
+    join(box.dir, "compose.yaml"),
+    `name: fh-agent-cute-cats\n\nservices:\n  agent:\n    image: ${AGENT_IMAGE}\n`
+  );
+  writeFileSync(
+    join(box.dir, "bin", "docker"),
+    `#!/bin/bash
+case "$1 $2" in
+  "ps --format") echo "c0ffee" ;;
+  "exec c0ffee") echo "0.11.13" ;;
+  "run --rm") echo "0.11.14" ;;
+  *) : ;;
+esac
+exit 0
+`
+  );
+  chmodSync(join(box.dir, "bin", "docker"), 0o755);
+  const out = box.run("fh-agent version 2>&1");
+  assert.match(out, /running: 0\.11\.13/, "found by label, image column never read");
+  const code = script()
+    .split("\n")
+    .filter((l) => !l.trim().startsWith("#"))
+    .join("\n");
+  assert.doesNotMatch(code, /docker ps[^\n]*\{\{\.Image\}\}/, "docker ps never reads the Image column");
+  const ps = box.argv().filter((a) => a[0] === "ps");
+  for (const call of ps) assert.ok(call.includes("label=com.docker.compose.service=agent"), call.join(" "));
 });
 
 test("a compose.yaml without `name:` falls back to the working-directory label", () => {
