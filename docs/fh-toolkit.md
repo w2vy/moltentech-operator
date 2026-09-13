@@ -568,7 +568,7 @@ new provider is what you mean.
 
 ⚠️ **The prefix is pinned by the hub at first ingest.** `slug` lets you change it in
 `config.env` and warns you when a manifest already exists: if that manifest was ingested,
-the hub will refuse the new prefix — a pinned prefix is a support request to change.
+the hub will refuse the new prefix — a pinned prefix cannot be changed.
 
 ---
 
