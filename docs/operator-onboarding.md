@@ -44,11 +44,12 @@ Upgrading to an Operator later is a simple process, mostly requiring setting up 
 Stripe account — the second block of that same transcript is exactly what the upgrade
 adds.
 
-fh-toolkit also have commands to test your configuration setting without exposing your keys.
+fh-toolkit also has commands to test your configuration settings without exposing your keys.
 
-Either way you can still deploy your own nodes: the admin can **Assign Free Rental** to you and it
-no payment at all. In the near future an operator will be able to assign free rentals from their fleet.
-Stripe is what lets strangers buy from you.
+Either way you can still deploy your own nodes: **Grants** (`/operator/grants` on Flux Hub)
+put a slot from your fleet under a free rental, no payment involved. A Supporter can grant
+only to their own wallet; an Operator can grant to anyone. Stripe is what lets strangers
+buy from you.
 
 ## What you run
 
@@ -317,8 +318,9 @@ all from the same folder.
 
 ### ⭐ The fast path: `fh-toolkit init`
 
-`init` asks about eight questions and writes **every** file this guide would otherwise
-have you create by hand — `config.env`, a `secrets.env` skeleton, `.env.operator`,
+`init` asks which Flux Hub you are joining, then your **slug** and **VM-name prefix** —
+both checked against that hub and **permanent once ingested** — then about eight more
+questions, and writes **every** file this guide would otherwise have you create by hand — `config.env`, a `secrets.env` skeleton, `.env.operator`,
 `data/inventory.json`, the Flux app spec, `compose.yaml` for the agent, a signed
 `manifest.json`, and a **`README.txt`** that explains the whole directory in plain
 language and lists which command to run after which kind of change:
@@ -509,7 +511,7 @@ the signed manifest and the Coalition's runtime config, so the two can never dri
 ```sh
 PROVIDER_SLUG=your-slug
 # PROVIDER_VM_PREFIX — every VM name you declare starts with this (e.g. mt-). Pinned by
-# Flux Hub at first ingest; changing it later is a support request.
+# Flux Hub at first ingest and cannot be changed afterwards.
 PROVIDER_VM_PREFIX=ys-
 PROVIDER_NAME=Your Operator Name
 PROVIDER_LOCATION=City, Country
@@ -679,6 +681,9 @@ whole of this step in the Stripe dashboard. The summary below is the same proced
 ---
 
 ## Step 4 — Deploy the Coalition on Flux
+
+📸 **Click-by-click with screenshots: [flux-app-registration.md](flux-app-registration.md)**
+— if you would rather follow pictures, start there and come back here for the why.
 
 The Coalition runs as a **published Docker image** (`w2vy/coalition:latest`) deployed as
 a Flux App. Config, secrets, and your signed manifest are all supplied as **Flux
@@ -946,14 +951,6 @@ taken verbatim, quotes included.
 
 To confirm the key is the right one, decode it and compare the derived pubkey with the
 `Provider.manifestPubkey` FH pinned for you at onboarding.
-
-### Mount the directory, not the file
-
-Mount `./data` read-only at `/data`, which is where `AGENT_INVENTORY_PATH`
-resolves inside the container. A **single-file** bind mount pins the container to that
-file's *inode*, and most editors save atomically via write-new-then-rename, which
-detaches the mount — host edits silently stop reaching the container (no error, it just
-keeps serving stale content) until the container is recreated.
 
 ### Dry run, then run
 
