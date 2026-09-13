@@ -1004,8 +1004,9 @@ owner-authorization courier is live.
 `COALITION_URL` **and** `OWNER_ADDRESS` are all set. There is no warning — you simply
 never receive authorization requests, and deletes/reprovisions sit forever.
 
-Then run it for real. **`init` wrote `compose.yaml` for you** — pinned image, `./data`
-mounted as a read-only directory, its own project name, no published ports — and the
+Then run it for real. **`init` wrote `compose.yaml` for you** — pinned image
+(`ghcr.io/w2vy/fh-agent:latest`; the staging build if you onboarded against staging),
+`./data` mounted as a read-only directory, its own project name, no published ports — and the
 `fh-agent` function from Step 0.5 drives it:
 
 ```sh
