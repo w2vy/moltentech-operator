@@ -211,6 +211,8 @@ The one-shot checks can also go direct, which is all the function does for them:
 ```sh
 docker run --rm --env-file .env.operator -v "$PWD/data:/data:ro" \
   ghcr.io/w2vy/fh-agent:latest npm run doctor      # :staging if you onboarded against staging
+docker run --rm --env-file .env.operator -v "$PWD/data:/data:ro" \
+  -e AGENT_DRY_RUN=1 ghcr.io/w2vy/fh-agent:latest  # = fh-agent dry-run
 ```
 
 ⚠️ **`npm run doctor`, not a bare `doctor`.** The image sets `CMD` but no `ENTRYPOINT`, so
@@ -985,15 +987,11 @@ Read-only — no VM is created — and exits non-zero on any failure, so it gate
 before the first provision rather than after a wasted benchmark cycle.
 
 ```sh
-docker run --rm --env-file .env.operator -v "$PWD/data:/data:ro" \
-  ghcr.io/w2vy/fh-agent:latest npm run doctor      # :staging if you onboarded against staging
+fh-agent doctor
 ```
 
-⚠️ **`npm run doctor`, not a bare `doctor`.** The image sets `CMD` but no `ENTRYPOINT`, so
-it inherits node's: a bare subcommand is handed to `node` and dies
-`MODULE_NOT_FOUND: /app/agent/doctor`. `doctor` is genuinely the image's CLI — it is only
-unreachable as a bare `docker run` argument. The `fh-agent` shell function does this for
-you, and picks the tag out of your `compose.yaml`.
+(The `docker run` underneath is under [`fh-agent`](#fh-agent--compose-written-for-you)
+above, with the `npm run doctor` trap.)
 
 It checks that Proxmox is reachable and the token accepted; that the CA trust store is
 present; per declared host, that `storageImages` exists **and is not rotational** and that
@@ -1015,8 +1013,7 @@ the hypervisor-wide checks run and it says so.
 Validates connectivity and auth to Flux Hub **without touching Proxmox**:
 
 ```sh
-docker run --rm --env-file .env.operator -v "$PWD/data:/data:ro" \
-  -e AGENT_DRY_RUN=1 ghcr.io/w2vy/fh-agent:latest
+fh-agent dry-run
 # provider=… mt=… auth=signature ownerAuth=enforced courier=on dryRun=true poll=10000ms
 ```
 
