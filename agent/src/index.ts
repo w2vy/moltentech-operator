@@ -1,6 +1,7 @@
 import { SCHEMA_VERSION } from "@moltentech/protocol";
 import { verifyOwnerAuth } from "@moltentech/protocol/wallet";
 import { loadConfig, reloadInventory } from "./config";
+import { AGENT_VERSION } from "./version";
 import { MtClient, type MtClientAuth } from "./client";
 import { CoalitionClient } from "./coalition-client";
 import { loadManifestKey } from "./signing";
@@ -48,6 +49,10 @@ async function doctor(): Promise<never> {
 
 async function main() {
   if (process.argv[2] === "doctor") return doctor();
+  if (process.argv[2] === "version") {
+    console.log(AGENT_VERSION);
+    return;
+  }
   const cfg = loadConfig();
   const manifestKey = loadManifestKey(cfg.manifestKey);
   // `loadConfig` already refuses to return without a MANIFEST_KEY, so this cannot be

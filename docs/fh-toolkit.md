@@ -63,7 +63,7 @@ block below stays honest — a test asserts these are the same bytes the image e
 fh-toolkit() {
   local img=ghcr.io/w2vy/fh-toolkit:latest
   local stamp="${XDG_CACHE_HOME:-$HOME/.cache}/fh-toolkit.pulled"
-  # `--refresh` and `--update-wrapper` are consumed HERE and never passed on: the CLI runs
+  # `--refresh`, `--update-wrapper` and `--update-agent` are consumed HERE, never passed on: the CLI runs
   # inside the container and can neither replace its own image nor write to your home
   # directory. Alone each does its job and stops; followed by a command it runs that too.
   if [ "$1" = "--refresh" ]; then
@@ -94,6 +94,18 @@ fh-toolkit() {
     . "$rc" || return 1
     [ $# -eq 0 ] && return 0
   fi
+  # `--update-agent` is the agent's counterpart: pull ITS tag and recreate the compose loop.
+  # Shell-side for the same reason — a container cannot restart a sibling container's
+  # compose project. Defined with the fh-agent functions, so a toolkit-only wrapper says so.
+  if [ "$1" = "--update-agent" ]; then
+    shift
+    if ! command -v fh-agent-update >/dev/null 2>&1; then
+      echo "error: the fh-agent functions are not installed — run: fh-toolkit --update-wrapper" >&2
+      return 1
+    fi
+    fh-agent-update || return $?
+    [ $# -eq 0 ] && return 0
+  fi
   # Refresh the image at most once every 15 minutes, tracked by a stamp file.
   if [ ! -e "$stamp" ] || [ -n "$(find "$stamp" -mmin +15 2>/dev/null)" ]; then
     if docker pull -q "$img" >/dev/null 2>&1; then
@@ -111,7 +123,7 @@ fh-toolkit() {
   # FH_WRAPPER lets the container tell a current wrapper from a stale one; `doctor`
   # reports the mismatch. /etc/hosts read-only so hostnames resolve inside the container
   # as they do at your prompt — see operator-onboarding.md Step 0.5 for the loopback edge.
-  docker run --rm -i $tty -e FH_WRAPPER=3 -v "$PWD:/work" \
+  docker run --rm -i $tty -e FH_WRAPPER=4 -v "$PWD:/work" \
     -v /etc/hosts:/etc/hosts:ro -u "$(id -u):$(id -g)" "$img" "$@"
 }
 ```
@@ -122,6 +134,9 @@ and then runs it. `fh-toolkit --update-wrapper` does the same for the wrapper it
 pulls, regenerates, and re-sources. Both have to live in the wrapper, because the CLI runs
 *inside* the container and can neither replace its own image nor write to your home
 directory. (Reaching the CLI with either flag is itself the diagnosis, and it says so.)
+`fh-toolkit --update-agent` is the third of the family: it pulls the *agent's* tag and
+recreates its compose loop (`fh-agent update` is the same act under the other name) — see
+[`fh-agent`](#fh-agent--compose-written-for-you) below for what it prints.
 
 Five things in that wrapper are load-bearing:
 
@@ -136,7 +151,7 @@ Five things in that wrapper are load-bearing:
 - **`-v "$PWD:/work"`** — the container's `/work` *is* your operator directory. Every
   path default below (`.`) resolves there, which is why the commands take no arguments
   when you run them in the right place.
-- **`-e FH_WRAPPER=3`** — how the container tells a current wrapper from a stale one, or
+- **`-e FH_WRAPPER=4`** — how the container tells a current wrapper from a stale one, or
   from none at all. It exists because on 2026-09-06 the tool was renamed, published, and
   changed nothing for its only operator: his shell still defined `mt-manifest()` against
   an image name that no longer publishes, and *neither side could say so*. `fh-toolkit
@@ -199,6 +214,8 @@ One-shot invocations (`doctor`, dry runs) have a wrapper too — the same
 ```sh
 fh-agent doctor      # the credentialed preflight
 fh-agent dry-run     # Flux Hub connectivity and auth, without touching Proxmox
+fh-agent version     # running vs pulled vs published, no credentials needed
+fh-agent update      # = fh-toolkit --update-agent: compose pull && up -d --force-recreate
 ```
 
 or go direct, which is all the function does:
@@ -234,6 +251,18 @@ note: a newer ghcr.io/w2vy/fh-agent:latest is ON THIS HOST than the one your age
 It reports; it never acts, and it says nothing at all when it cannot tell. The first of
 those two comparisons is the one that catches `docker compose pull` without
 `--force-recreate` — a build downloaded and never run.
+
+Acting is a separate, explicit verb, in the shape `--update-wrapper` already has:
+
+```sh
+fh-toolkit --update-agent     # or: fh-agent update
+```
+
+runs `docker compose pull && docker compose up -d --force-recreate` in your operator
+directory and prints the running agent version before and after, so you can see whether
+anything moved. Flux Hub shows the same running version on your listing page (agents ≥ 0.11.11
+report it on every call) and flags one older than the hub was built against — that flag is
+the cue to run this.
 
 ---
 
@@ -950,7 +979,7 @@ one is present. What you submit at `/onboard` is the **bare** `manifest.json`.
 # `fh-agent`
 
 ```
-fh-agent [doctor]
+fh-agent [doctor|version]
 ```
 
 No flags: everything is configured through `.env.operator`. With no argument it runs the

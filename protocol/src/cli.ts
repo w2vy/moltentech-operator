@@ -2806,6 +2806,15 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
           "  [ -f ~/.fh-toolkit.sh ] && . ~/.fh-toolkit.sh"
       );
       return 1;
+    case "--update-agent":
+      console.log(
+        "`--update-agent` is handled by the fh-toolkit SHELL FUNCTION, not by this CLI —\n" +
+          "the CLI runs inside a container and cannot restart the agent's compose project.\n" +
+          "Reaching me means your wrapper predates it (fh-toolkit --update-wrapper), or you\n" +
+          "are not using the wrapper. By hand, in your operator directory:\n" +
+          "  docker compose pull && docker compose up -d --force-recreate"
+      );
+      return 1;
     case "--refresh":
       console.log(
         "`--refresh` is handled by the fh-toolkit SHELL FUNCTION, not by this CLI —\n" +
@@ -2864,6 +2873,7 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
       console.log("  fh-toolkit --refresh          pull the newest image, then stop");
       console.log("  fh-toolkit --refresh <cmd>    pull, then run <cmd>");
       console.log("  fh-toolkit --update-wrapper   reinstall the shell functions themselves");
+      console.log("  fh-toolkit --update-agent     pull the agent image and recreate its compose loop");
       console.log("Handled by the shell function, not by this CLI — a container can neither");
       console.log("replace its own image nor write to your home directory. Left alone the");
       console.log("wrapper re-pulls every 15 minutes, so `version` above is what is RUNNING.\n");
