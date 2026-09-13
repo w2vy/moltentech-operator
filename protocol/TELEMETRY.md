@@ -128,6 +128,17 @@ Rules:
   size the one-fetch det-list makes the full scan cheap, so that switch is **not** part of
   Phase 7; the schema is defined now so the hub side is a pure consumer when it is.
 
+## Running versions on the wire (agent 0.11.11, candid-versioning-lovelace)
+
+Both processes tell the hub what code they run, as HTTP headers and nothing more: the
+Coalition stamps `X-Coalition-Version` on every response (the stats pull records it as
+`Provider.coalitionVersion`), the agent stamps `X-Agent-Version` on every request
+(`Provider.agentVersion`, written in the same update as `agentLastSeenAt`, after the signature
+verifies). Informational and unsigned by design — not an envelope field and not a body field, so
+an older hub ignores it and an older agent never sends it; the hub reads absence as *unknown*,
+never as *outdated*. "Outdated" is judged against the versions the hub was built with (its
+`operator/` submodule pin), and only when the running version is **older** than the pin.
+
 ## Deploy order (hub and agents move together — [[feedback_mt_agent_image_tag_convention]])
 
 1. **Protocol + Coalition** (this repo, one PR train): schema + tests; Coalition keeps its

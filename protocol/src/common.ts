@@ -101,6 +101,19 @@ export const HEADER_COALITION_SIGNATURE = "x-coalition-signature";
 export const HEADER_COALITION_TIMESTAMP = "x-coalition-timestamp";
 export const HEADER_COALITION_NONCE = "x-coalition-nonce";
 export const HEADER_COALITION_SLUG = "x-coalition-slug";
+/**
+ * Running code versions, informational and UNSIGNED. The Coalition stamps its version on
+ * every response it serves the hub (the stats pull records it as `Provider.coalitionVersion`);
+ * the agent stamps its version on every request it makes to the hub (recorded as
+ * `Provider.agentVersion` inside the same update that already writes `agentLastSeenAt`,
+ * i.e. after signature verification). Deliberately NOT part of the signed envelope and NOT a
+ * body field: a header is out-of-band, so an older hub ignores it and an older agent simply
+ * never sends it (the hub reads absence as "unknown", never as "outdated"). Only the holder
+ * of the signing key can get a value past the hub's verifier, and the value only ever drives
+ * a display. See candid-versioning-lovelace.
+ */
+export const HEADER_COALITION_VERSION = "x-coalition-version";
+export const HEADER_AGENT_VERSION = "x-agent-version";
 /** Stripe-style idempotency: dedupe retried deliveries of the same logical event. */
 export const HEADER_IDEMPOTENCY_KEY = "idempotency-key";
 

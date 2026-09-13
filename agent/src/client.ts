@@ -14,9 +14,11 @@ import {
   HealthReport,
   type NodeHealth,
   hubError,
+  HEADER_AGENT_VERSION,
 } from "@moltentech/protocol";
 import { z } from "zod";
 import { signAgentRequest } from "./signing";
+import { AGENT_VERSION } from "./version";
 
 /**
  * How the client authenticates to MT. One way, since Phase E step 4 (2026-09-07): a
@@ -46,7 +48,13 @@ export class MtClient {
   }
 
   private headers(method: string, path: string, rawBody: string): Record<string, string> {
-    return { "Content-Type": "application/json", ...this.authHeaders(method, path, rawBody) };
+    // The version rides every call, outside the signed envelope — informational only; the hub
+    // records it beside `agentLastSeenAt` once the signature has verified.
+    return {
+      "Content-Type": "application/json",
+      [HEADER_AGENT_VERSION]: AGENT_VERSION,
+      ...this.authHeaders(method, path, rawBody),
+    };
   }
 
   /** Claim (lease) any provisioning jobs MT has queued for this provider. */

@@ -1,5 +1,5 @@
 import http from "node:http";
-import { CheckoutInitRequest, ManageRequest } from "@moltentech/protocol";
+import { CheckoutInitRequest, ManageRequest, HEADER_COALITION_VERSION } from "@moltentech/protocol";
 import { readManifest, type CoalitionConfig } from "./config";
 import type { StripeLike } from "./stripe";
 import { handleCheckout, handleManage, handleWebhook } from "./payments";
@@ -53,7 +53,7 @@ export function createServer(stripe: StripeLike | null, cfg: CoalitionConfig): h
     // Stamp every response with the running code version so MT (which pulls the
     // manifest + stats) can detect providers on an outdated coalition. setHeader
     // persists across whichever writeHead runs below.
-    res.setHeader("X-Coalition-Version", COALITION_VERSION);
+    res.setHeader(HEADER_COALITION_VERSION, COALITION_VERSION);
     // Same idea for the Stripe MODE this Coalition charges in, so MT can mark a
     // marketplace listing that is wired to a test key. Omitted entirely when the key
     // is absent or unrecognised — see stripeLiveMode(); an absent header must never
