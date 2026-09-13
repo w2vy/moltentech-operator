@@ -408,7 +408,7 @@ export function renderConfigEnv(a: Answers): string {
     // first ingest; a config.env from before this key existed reads as "not set" and
     // `doctor` says so, rather than the hub refusing to Activate with no local hint.
     "# PROVIDER_VM_PREFIX — every VM name you declare starts with this (e.g. mt-). Pinned by",
-    "# Flux Hub at first ingest; changing it later is a support request.",
+    "# Flux Hub at first ingest and cannot be changed afterwards.",
     `PROVIDER_VM_PREFIX=${a.vmNamePrefix}`,
     `PROVIDER_NAME=${a.providerName}`,
   ];

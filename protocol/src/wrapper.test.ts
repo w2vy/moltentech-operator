@@ -486,6 +486,37 @@ exit 0
   assert.doesNotMatch(out, /pull &&/);
 });
 
+test("⭐ the running container is found by compose PROJECT, not by image alone", () => {
+  // Two stacks on one tag: the staging pair both run :staging. Matching on the image
+  // reported whichever container came first — on 2026-09-13 the second directory's
+  // `fh-agent update` printed its sibling's version as its own "before".
+  const box = shellBox();
+  writeFileSync(join(box.dir, ".env.operator"), "x=1\n");
+  writeFileSync(
+    join(box.dir, "compose.yaml"),
+    `name: fh-agent-cute-cats\n\nservices:\n  agent:\n    image: ${AGENT_IMAGE}\n`
+  );
+  box.run("fh-agent version 2>&1");
+  const ps = box.argv().filter((a) => a[0] === "ps");
+  assert.ok(ps.length > 0, "docker ps was called");
+  for (const call of ps) {
+    assert.ok(call.includes("--filter"), "every ps is filtered");
+    assert.ok(call.includes("label=com.docker.compose.project=fh-agent-cute-cats"), call.join(" "));
+  }
+});
+
+test("a compose.yaml without `name:` falls back to the working-directory label", () => {
+  const box = shellBox();
+  writeFileSync(join(box.dir, ".env.operator"), "x=1\n");
+  writeFileSync(join(box.dir, "compose.yaml"), `services:\n  agent:\n    image: ${AGENT_IMAGE}\n`);
+  box.run("fh-agent version 2>&1");
+  const ps = box.argv().filter((a) => a[0] === "ps");
+  assert.ok(ps.length > 0);
+  for (const call of ps) {
+    assert.ok(call.some((w) => w.startsWith("label=com.docker.compose.project.working_dir=")), call.join(" "));
+  }
+});
+
 test("the drift check does NOT use `--filter ancestor`", () => {
   // That filter resolves the tag to its CURRENT id, so a container left behind by a pull —
   // precisely the case worth reporting — would not match it.
