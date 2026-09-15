@@ -119,7 +119,7 @@ this as `CFG_INLINE_COMMENT`.
 | `OWNER_ADDRESS` | ✅ | the wallet that signs onboarding and every privileged action, forever |
 | `PROVIDER_LEVEL` | ✅ | `supporter` or `operator`; absent means operator |
 | `HOSTS` | ✅ | comma-separated `ProxmoxHost.name` — **the owner-attested hardware list** |
-| `TRIAL_DAYS` | ✅ | 1–7 |
+| `TRIAL_DAYS` | ✅ | 1–30 (1–7 typical); the Coalition refuses to start on 0 — the node is delivered inside the trial, before the first charge |
 | `MANUAL_APPROVAL` | ✅ | require approval before provisioning a trial |
 | `MT_BASE_URL` | ❌ | which Flux Hub instance |
 | `MT_PUBKEY` | ❌ | FH's own signing pubkey, which the Coalition pins |

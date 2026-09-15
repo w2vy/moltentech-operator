@@ -554,6 +554,7 @@ HOSTS=pve-01,pve-02
 # (cumulus $2.50, nimbus $7, stratus $14) — FH rejects a listing below it with a 422.
 # CHECK YOUR ZEROS: these are CENTS, so nimbus at $20 is 2000, not 20000.
 TIER_PRICES_JSON={"cumulus":700,"nimbus":2000}
+# TRIAL_DAYS: at least 1 (up to 30) — the node is delivered inside the trial, before the first charge. 1–7 is typical.
 TRIAL_DAYS=1
 MANUAL_APPROVAL=false
 ```
