@@ -91,6 +91,30 @@ export function readManifest(cfg: CoalitionConfig): string {
   return cfg.manifestJson ?? readFileSync(cfg.manifestPath, "utf8");
 }
 
+/**
+ * `TRIAL_DAYS` is what reaches Stripe as `trial_period_days`, so it is enforced HERE, at
+ * the number that is actually charged — not only in the manifest schema the hub sees.
+ *
+ * ⚠️ The floor is 1, not 0, and it is load-bearing: the whole checkout is built on the
+ * node being provisioned INSIDE the trial, before the first charge (undelivered node =
+ * cancel, nothing charged; the hub's provision → Stripe relay ordering; the Terms A4/B4
+ * promise of "delivered before the first charge"). `TRIAL_DAYS=0` would charge at
+ * checkout for a node that does not exist yet and reopen every trap the trial closed.
+ * Used to be `Number(env.TRIAL_DAYS ?? 1)`, which accepted 0, negatives, and NaN.
+ * The cap of 7 matches `Manifest.trialDays` in @moltentech/protocol.
+ */
+export function parseTrialDays(raw: string | undefined): number {
+  if (raw === undefined || raw === "") return 1;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 1 || n > 7) {
+    throw new Error(
+      `TRIAL_DAYS must be a whole number of days from 1 to 7 (got ${JSON.stringify(raw)}). ` +
+        `A trial of at least one day is required: the node is delivered before the first charge.`
+    );
+  }
+  return n;
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): CoalitionConfig {
   const cfg: CoalitionConfig = {
     port: Number(env.PORT ?? 8088),
@@ -109,7 +133,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CoalitionConfi
     sessionSecret: env.SESSION_SECRET || undefined,
     sessionTtlMs: Number(env.SESSION_TTL_HOURS ?? 24) * 3_600_000,
     tierPrices: TierPrices.parse(JSON.parse(req(env, "TIER_PRICES_JSON"))),
-    trialDays: Number(env.TRIAL_DAYS ?? 1),
+    trialDays: parseTrialDays(env.TRIAL_DAYS),
     statsWindowDays: Number(env.STATS_WINDOW_DAYS ?? 90),
     fluxApiUrl: (env.FLUX_API ?? "https://api.runonflux.io").replace(/\/$/, ""),
   };
