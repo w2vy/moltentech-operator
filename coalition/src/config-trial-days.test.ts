@@ -23,17 +23,17 @@ test("unset or empty TRIAL_DAYS is 1", () => {
   assert.equal(loadConfig({ ...BASE }).trialDays, 1);
 });
 
-test("1 through 7 pass through", () => {
-  for (const d of [1, 2, 7]) assert.equal(parseTrialDays(String(d)), d);
+test("1 through 30 pass through", () => {
+  for (const d of [1, 2, 7, 30]) assert.equal(parseTrialDays(String(d)), d);
   assert.equal(loadConfig({ ...BASE, TRIAL_DAYS: "3" }).trialDays, 3);
 });
 
 test("⭐ 0 refuses to start — the floor is load-bearing", () => {
-  assert.throws(() => loadConfig({ ...BASE, TRIAL_DAYS: "0" }), /TRIAL_DAYS.*1 to 7.*"0"/s);
+  assert.throws(() => loadConfig({ ...BASE, TRIAL_DAYS: "0" }), /TRIAL_DAYS.*1 to 30.*"0"/s);
 });
 
 test("negative, fractional, over the cap and garbage all refuse", () => {
-  for (const bad of ["-1", "1.5", "8", "abc", " "]) {
+  for (const bad of ["-1", "1.5", "31", "abc", " "]) {
     assert.throws(() => parseTrialDays(bad), /TRIAL_DAYS/, `expected refusal for ${JSON.stringify(bad)}`);
   }
 });

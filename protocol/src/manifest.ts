@@ -86,8 +86,8 @@ export const ProviderManifestBody = Envelope.extend({
    * same reasoning as `trustedSelfClaim` below.
    */
   level: z.enum(["supporter", "operator"]).optional(),
-  /** Operator-selectable free-trial window in days (1–7); MT defaults missing to 1. */
-  trialDays: z.number().int().min(1).max(7).default(1),
+  /** Operator-selectable free-trial window in days (1–30); MT defaults missing to 1. */
+  trialDays: z.number().int().min(1).max(30).default(1),
   /** Cautious operators may require manual approval before provisioning a trial. */
   manualApproval: z.boolean().default(false),
   /** Operator-declared service flags (card metadata + marketplace filters). */

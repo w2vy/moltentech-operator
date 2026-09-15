@@ -30,7 +30,7 @@ non-TS consumer.
 
 - **No Stripe Connect.** Each operator processes payments on its own standalone
   Stripe account via its Coalition. FH holds **no** operator Stripe creds.
-- **Free trial → no refunds.** Subscriptions start with a 1–7 day trial; every
+- **Free trial → no refunds.** Subscriptions start with a trial of at least one day (up to 30); every
   failure path is a *cancel*, not a refund (`PaymentEvent` has no refund-on-signup
   path; the restricted key needs `Subscriptions: write`, never `Refunds`).
 - **One price input.** The operator declares `priceCents` once; it flows through

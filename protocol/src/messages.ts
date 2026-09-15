@@ -35,9 +35,9 @@ export const CheckoutInitResponse = Envelope.extend({
   /** The price the Coalition will actually charge (MT confirms == listed before redirect). */
   priceCents: PriceCents,
   currency: Currency,
-  /** Free-trial length applied (operator-selectable 1–7). Never 0: the node is
+  /** Free-trial length applied (operator-selectable 1–30). Never 0: the node is
    *  delivered inside the trial, before the first charge — same rule as `Manifest.trialDays`. */
-  trialDays: z.number().int().min(1).max(7),
+  trialDays: z.number().int().min(1).max(30),
 });
 export type CheckoutInitResponse = z.infer<typeof CheckoutInitResponse>;
 

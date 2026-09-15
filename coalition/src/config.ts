@@ -101,14 +101,14 @@ export function readManifest(cfg: CoalitionConfig): string {
  * promise of "delivered before the first charge"). `TRIAL_DAYS=0` would charge at
  * checkout for a node that does not exist yet and reopen every trap the trial closed.
  * Used to be `Number(env.TRIAL_DAYS ?? 1)`, which accepted 0, negatives, and NaN.
- * The cap of 7 matches `Manifest.trialDays` in @moltentech/protocol.
+ * The cap of 30 matches `Manifest.trialDays` in @moltentech/protocol (1–7 is typical).
  */
 export function parseTrialDays(raw: string | undefined): number {
   if (raw === undefined || raw === "") return 1;
   const n = Number(raw);
-  if (!Number.isInteger(n) || n < 1 || n > 7) {
+  if (!Number.isInteger(n) || n < 1 || n > 30) {
     throw new Error(
-      `TRIAL_DAYS must be a whole number of days from 1 to 7 (got ${JSON.stringify(raw)}). ` +
+      `TRIAL_DAYS must be a whole number of days from 1 to 30 (got ${JSON.stringify(raw)}). ` +
         `A trial of at least one day is required: the node is delivered before the first charge.`
     );
   }
