@@ -51,6 +51,19 @@ export interface HostAnswer {
   slots: SlotAnswer[];
 }
 
+/**
+ * What an operator declares about the premises. Shown as chips on the marketplace card
+ * and nowhere else; the hub never checks them, and Terms B4 makes them the operator's word.
+ * Every field is optional: `undefined`/`false` is "not declared", which the card omits.
+ */
+export interface Facilities {
+  ispSpeedMbps?: number;
+  fiber?: boolean;
+  ups?: boolean;
+  generator?: boolean;
+  dataCenter?: boolean;
+}
+
 export interface Answers {
   providerSlug: string;
   /**
@@ -63,6 +76,8 @@ export interface Answers {
   providerName: string;
   providerLocation?: string;
   providerContact?: string;
+  /** Marketplace card facility chips (signed `serviceFlags`). Absent = not declared. */
+  facilities?: Facilities;
   ownerAddress: string;
   mtBaseUrl: string;
   /** Flux app name; the Coalition URL is DERIVED from it and never asked for. */
@@ -442,6 +457,15 @@ export function renderConfigEnv(a: Answers): string {
     `TIER_PRICES_JSON=${JSON.stringify(resolvedPrices(a))}`,
     `TRIAL_DAYS=${a.trialDays ?? 1}`,
     `MANUAL_APPROVAL=${a.manualApproval ? "true" : "false"}`,
+    "",
+    "# Facilities — shown as chips on your marketplace card, signed in the manifest. Your",
+    "# word under the Operator Terms (B4); Flux Hub does not verify them. Leave a value",
+    "# empty/false to say nothing (the card omits it). Changing one is a re-sign + re-paste.",
+    `ISP_SPEED_MBPS=${a.facilities?.ispSpeedMbps ?? ""}`,
+    `FIBER=${a.facilities?.fiber ? "true" : "false"}`,
+    `UPS=${a.facilities?.ups ? "true" : "false"}`,
+    `GENERATOR=${a.facilities?.generator ? "true" : "false"}`,
+    `DATA_CENTER=${a.facilities?.dataCenter ? "true" : "false"}`,
     ""
   );
   return lines.join("\n");

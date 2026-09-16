@@ -557,6 +557,15 @@ TIER_PRICES_JSON={"cumulus":700,"nimbus":2000}
 # TRIAL_DAYS: at least 1 (up to 30) — the node is delivered inside the trial, before the first charge. 1–7 is typical.
 TRIAL_DAYS=1
 MANUAL_APPROVAL=false
+
+# Facilities — shown as chips on your marketplace card, signed in the manifest. Your
+# word under the Operator Terms (B4); Flux Hub does not verify them. Leave a value
+# empty/false to say nothing (the card omits it). Changing one is a re-sign + re-paste.
+ISP_SPEED_MBPS=1000
+FIBER=true
+UPS=true
+GENERATOR=false
+DATA_CENTER=false
 ```
 
 Sign the manifest from it. **If you used `init`, this is already done** — it wrote a

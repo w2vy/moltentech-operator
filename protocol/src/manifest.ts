@@ -100,6 +100,22 @@ export const ProviderManifestBody = Envelope.extend({
       languages: z.array(z.string()).default([]),
       supportChannels: z.string().optional(),
       dataCenters: z.string().optional(),
+      /**
+       * Facilities (synthetic-launching-bachman). Rendered as marketplace card chips; the
+       * hub never verifies them (truthfulness is the operator's under Terms B4). Every one
+       * is optional and absent means "not declared" — the card omits it, it never reads as
+       * "no". No zod default on purpose: a default is a field the signer never signed.
+       */
+      /** Uplink speed in Mbps, e.g. 1000 for gigabit. */
+      ispSpeedMbps: z.number().int().positive().max(1_000_000).optional(),
+      /** Fiber uplink (as opposed to cable/DSL/wireless). */
+      fiber: z.boolean().optional(),
+      /** Hosts on a UPS. */
+      ups: z.boolean().optional(),
+      /** Backup generator behind the UPS. */
+      generator: z.boolean().optional(),
+      /** Hosted in a data center rather than a home or office. */
+      dataCenter: z.boolean().optional(),
     })
     .default({}),
   /** Ignored by MT — trust is platform-controlled at onboarding. Present so naive operators can't grant themselves trust. */

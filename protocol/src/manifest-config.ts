@@ -21,6 +21,8 @@ import { SCHEMA_VERSION } from "./common";
  *   OWNER_ADDRESS                                   -> ownerAddress (optional; the
  *                                                      wallet that authorizes this
  *                                                      manifest's pubkey — see below)
+ *   ISP_SPEED_MBPS / FIBER / UPS / GENERATOR /      -> serviceFlags facilities (each
+ *   DATA_CENTER ("true"/"false")                       emitted only when set / true)
  *   (fixed)                                         -> serviceFlags defaults,
  *                                                      schemaVersion, trustedSelfClaim
  *
@@ -81,7 +83,7 @@ export function renderManifestBodyFromConfig(configText: string): Record<string,
     hardware,
     trialDays: Number(env.TRIAL_DAYS ?? 1),
     manualApproval: env.MANUAL_APPROVAL === "true",
-    serviceFlags: { delegationAvailable: false, autoRenew: true, whiteLabel: false, languages: ["en"] },
+    serviceFlags: { delegationAvailable: false, autoRenew: true, whiteLabel: false, languages: ["en"], ...facilitiesFromEnv(env) },
     trustedSelfClaim: false,
   };
   // Optional owner wallet that authorizes this manifest's pubkey (proven, not blind,
@@ -98,4 +100,29 @@ export function renderManifestBodyFromConfig(configText: string): Record<string,
     body.level = env.PROVIDER_LEVEL;
   }
   return body;
+}
+
+/** The `config.env` keys that carry the facility flags, in the order `init` writes them. */
+export const FACILITY_KEYS = ["ISP_SPEED_MBPS", "FIBER", "UPS", "GENERATOR", "DATA_CENTER"] as const;
+
+/**
+ * The facility half of `serviceFlags`, from config.env. A key is emitted only when it says
+ * something (`true`, or a positive speed): a `false`/empty/absent key leaves the field out,
+ * so a config.env from before these keys existed still renders the byte-identical manifest
+ * it always did, and "not declared" and "no" are the same absence on the card.
+ */
+export function facilitiesFromEnv(env: Record<string, string>): Record<string, number | boolean> {
+  const out: Record<string, number | boolean> = {};
+  if (env.ISP_SPEED_MBPS) {
+    const n = Number(env.ISP_SPEED_MBPS);
+    if (!Number.isInteger(n) || n <= 0) throw new Error(`config.env: ISP_SPEED_MBPS must be a positive whole number of Mbps, got "${env.ISP_SPEED_MBPS}"`);
+    out.ispSpeedMbps = n;
+  }
+  for (const [key, field] of [["FIBER", "fiber"], ["UPS", "ups"], ["GENERATOR", "generator"], ["DATA_CENTER", "dataCenter"]] as const) {
+    const v = env[key];
+    if (v === undefined || v === "") continue;
+    if (v !== "true" && v !== "false") throw new Error(`config.env: ${key} must be "true" or "false", got "${v}"`);
+    if (v === "true") out[field] = true;
+  }
+  return out;
 }

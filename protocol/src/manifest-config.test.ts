@@ -99,3 +99,26 @@ test("PROVIDER_VM_PREFIX maps to provider.vmNamePrefix (key absent when unset or
   const bad = renderManifestBodyFromConfig(SAMPLE + "\nPROVIDER_VM_PREFIX=mt");
   assert.equal(ProviderManifestBody.safeParse({ ...bad, pubkey: "x", publishedAt: new Date().toISOString() }).success, false);
 });
+
+test("facility keys map to serviceFlags; false/empty/absent leave the field OUT (legacy bytes unchanged)", () => {
+  // The SAMPLE has none of the keys → none of the fields. A pre-facilities config.env must
+  // still render the manifest it always did, or a re-sign changes bytes nobody asked for.
+  const bare = renderManifestBodyFromConfig(SAMPLE).serviceFlags as Record<string, unknown>;
+  assert.deepEqual(bare, { delegationAvailable: false, autoRenew: true, whiteLabel: false, languages: ["en"] });
+
+  const withAll = SAMPLE + "\nISP_SPEED_MBPS=1000\nFIBER=true\nUPS=true\nGENERATOR=false\nDATA_CENTER=\n";
+  const sf = renderManifestBodyFromConfig(withAll).serviceFlags as Record<string, unknown>;
+  assert.equal(sf.ispSpeedMbps, 1000);
+  assert.equal(sf.fiber, true);
+  assert.equal(sf.ups, true);
+  assert.equal("generator" in sf, false, "false is not declared, so it is not emitted");
+  assert.equal("dataCenter" in sf, false, "empty is not declared");
+  const stamped = { ...renderManifestBodyFromConfig(withAll), pubkey: "x", publishedAt: new Date().toISOString() };
+  assert.equal(ProviderManifestBody.safeParse(stamped).success, true);
+});
+
+test("malformed facility values are refused with the key named", () => {
+  assert.throws(() => renderManifestBodyFromConfig(SAMPLE + "\nISP_SPEED_MBPS=fast\n"), /ISP_SPEED_MBPS must be a positive whole number/);
+  assert.throws(() => renderManifestBodyFromConfig(SAMPLE + "\nISP_SPEED_MBPS=0\n"), /ISP_SPEED_MBPS/);
+  assert.throws(() => renderManifestBodyFromConfig(SAMPLE + "\nUPS=yes\n"), /UPS must be "true" or "false"/);
+});
