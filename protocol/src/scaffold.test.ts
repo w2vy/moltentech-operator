@@ -456,3 +456,21 @@ test("config.env always carries PROVIDER_VM_PREFIX, beside the slug, with its co
   const body = renderManifestBodyFromConfig(text);
   assert.equal((body.provider as { vmNamePrefix?: string }).vmNamePrefix, "mt-");
 });
+
+test("config.env carries the facility keys (always present, so an operator can find them) and they round-trip", () => {
+  // No answers → keys present, saying nothing; the manifest gets no facility fields.
+  const plain = renderConfigEnv(ANSWERS);
+  for (const k of ["ISP_SPEED_MBPS=", "FIBER=false", "UPS=false", "GENERATOR=false", "DATA_CENTER=false"]) {
+    assert.ok(plain.split("\n").includes(k), `${k} line present`);
+  }
+  const bareSf = renderManifestBodyFromConfig(plain).serviceFlags as Record<string, unknown>;
+  assert.equal("fiber" in bareSf, false);
+  assert.equal("ispSpeedMbps" in bareSf, false);
+
+  const text = renderConfigEnv({ ...ANSWERS, facilities: { ispSpeedMbps: 2500, fiber: true, dataCenter: true } });
+  const sf = renderManifestBodyFromConfig(text).serviceFlags as Record<string, unknown>;
+  assert.deepEqual(
+    { ispSpeedMbps: sf.ispSpeedMbps, fiber: sf.fiber, ups: sf.ups, generator: sf.generator, dataCenter: sf.dataCenter },
+    { ispSpeedMbps: 2500, fiber: true, ups: undefined, generator: undefined, dataCenter: true }
+  );
+});

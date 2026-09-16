@@ -65,7 +65,7 @@ import {
   type Level,
   type LevelChange,
 } from "./level-change";
-import { renderManifestBodyFromConfig, parseConfigEnv } from "./manifest-config";
+import { renderManifestBodyFromConfig, parseConfigEnv, facilitiesFromEnv } from "./manifest-config";
 import { checkNames, describeNameFindings, type NameCheckRequest, type NameCheckResponse } from "./name-check";
 import { VM_NAME_PREFIX_RULE } from "./common";
 import {
@@ -126,6 +126,7 @@ import {
   STAGING_BASE_URL,
   PRODUCTION_BASE_URL,
   type Answers,
+  type Facilities,
   type HostAnswer,
   type SlotAnswer,
 } from "./scaffold";
@@ -586,6 +587,34 @@ export interface IdentityDefaults {
   providerContact?: string;
   ownerAddress?: string;
   fluxAppName?: string;
+}
+
+/**
+ * The facilities block: what the marketplace card may say about the premises. Asked of
+ * OPERATORS only — a Supporter has no card. Every answer is optional and "no" is the same
+ * as "not asked": the card shows a chip for what is declared and nothing for the rest, so
+ * an operator who skips the whole block loses nothing but the chips.
+ *
+ * ⚠️ These are the operator's word under the Operator Terms (B4) and go in the SIGNED
+ * manifest. The hub never checks them, which is why the prompt says so out loud.
+ */
+export async function askFacilities(ask: Ask, askUntil: AskUntil, defaults: Facilities = {}): Promise<Facilities> {
+  console.log("\nFacilities — shown as chips on your marketplace card. Your word under the Operator");
+  console.log("Terms; Flux Hub does not verify them. Enter skips a question (the card just omits it).");
+  const yn = async (q: string, def: boolean | undefined): Promise<boolean> =>
+    (await ask(`  ${q} (y/N)`, def ? "y" : "N")).trim().toLowerCase().startsWith("y");
+  const speedAnswer = await askUntil(
+    "  uplink speed in Mbps (e.g. 1000 for gigabit; blank to skip)",
+    (v) => (v.trim() === "" || (/^\d+$/.test(v.trim()) && Number(v) > 0) ? undefined : `"${v}" is not a whole number of Mbps.`),
+    defaults.ispSpeedMbps ? String(defaults.ispSpeedMbps) : ""
+  );
+  const out: Facilities = {};
+  if (speedAnswer.trim()) out.ispSpeedMbps = Number(speedAnswer.trim());
+  if (await yn("fiber uplink?", defaults.fiber)) out.fiber = true;
+  if (await yn("hosts on a UPS?", defaults.ups)) out.ups = true;
+  if (await yn("backup generator?", defaults.generator)) out.generator = true;
+  if (await yn("hosted in a data center (not a home/office)?", defaults.dataCenter)) out.dataCenter = true;
+  return out;
 }
 
 /**
@@ -1116,6 +1145,8 @@ async function askAnswers(ctx: Ctx): Promise<Answers> {
       // whether the tool forgot to ask or decided they do not need one.
       console.log("\nStripe — skipped: a Supporter sells nothing and needs no Stripe account.");
     }
+    // Card chips are an operator thing: a Supporter has no card to put them on.
+    const facilities: Facilities = level === "operator" ? await askFacilities(ask, askUntil) : {};
     const tiers = Object.keys(tierPricesCents);
 
     // ── Inventory, last, one host at a time ──────────────────────────────────────
@@ -1161,6 +1192,7 @@ async function askAnswers(ctx: Ctx): Promise<Answers> {
       ...draft,
       providerLocation: id.providerLocation || undefined,
       providerContact: id.providerContact || undefined,
+      facilities,
       selling: level === "operator",
       tierPricesCents,
       availableSlots,
@@ -1220,6 +1252,11 @@ const BODY_TEMPLATE = {
     languages: ["en"],
     supportChannels: "email",
     dataCenters: "City, Country",
+    ispSpeedMbps: 1000,
+    fiber: true,
+    ups: true,
+    generator: false,
+    dataCenter: false,
   },
   trustedSelfClaim: false,
 };
@@ -1321,6 +1358,15 @@ function readOperatorDir(cmd: string, dir: string): OperatorDir {
  * The identity half of `Answers`, read back out of config.env — what the per-file
  * renderers need when they run without the wizard's answers in hand.
  */
+/** `facilitiesFromEnv`, with a malformed value reported the way every config.env fault is. */
+function readFacilities(env: Record<string, string>): Facilities {
+  try {
+    return facilitiesFromEnv(env);
+  } catch (e) {
+    die((e as Error).message);
+  }
+}
+
 function answersFromConfig(od: OperatorDir, hosts: HostAnswer[] = []): Answers {
   const env = od.env;
   const appName = env.COALITION_URL?.match(/^https:\/\/([^./]+)\.app\.runonflux\.io\/?$/)?.[1];
@@ -1330,6 +1376,7 @@ function answersFromConfig(od: OperatorDir, hosts: HostAnswer[] = []): Answers {
     providerName: env.PROVIDER_NAME ?? "",
     providerLocation: env.PROVIDER_LOCATION || undefined,
     providerContact: env.PROVIDER_CONTACT || undefined,
+    facilities: readFacilities(env),
     ownerAddress: env.OWNER_ADDRESS ?? "",
     mtBaseUrl: env.MT_BASE_URL ?? "",
     fluxAppName: appName ?? "",

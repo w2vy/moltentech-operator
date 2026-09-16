@@ -121,6 +121,7 @@ this as `CFG_INLINE_COMMENT`.
 | `HOSTS` | ✅ | comma-separated `ProxmoxHost.name` — **the owner-attested hardware list** |
 | `TRIAL_DAYS` | ✅ | 1–30 (1–7 typical); the Coalition refuses to start on 0 — the node is delivered inside the trial, before the first charge |
 | `MANUAL_APPROVAL` | ✅ | require approval before provisioning a trial |
+| `ISP_SPEED_MBPS` / `FIBER` / `UPS` / `GENERATOR` / `DATA_CENTER` | ✅ | optional facility chips on the marketplace card; a `false`/empty value is omitted from the manifest (not declared ≠ no). Operator's word under Terms B4 — never verified |
 | `MT_BASE_URL` | ❌ | which Flux Hub instance |
 | `MT_PUBKEY` | ❌ | FH's own signing pubkey, which the Coalition pins |
 | `TIER_PRICES_JSON` | ❌ | `{tier: cents}` — **runtime only** |
