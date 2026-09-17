@@ -602,6 +602,116 @@ test("a NEWER wrapper than the image is not a complaint", () => {
   assert.equal(wrapperStatus({ FH_WRAPPER: String(WRAPPER_VERSION + 1) }).state, "current");
 });
 
+// ---------------------------------------------------------------- unknown words (wrapper v8)
+
+test("⭐ an unknown word gets usage, not a node stack trace from inside the image", () => {
+  // 2026-09-13, a live operator directory: the shell still held a wrapper too old to have
+  // a `restart` branch, so `fh-agent restart` fell through to the container. The image
+  // sets CMD and no ENTRYPOINT, so node's docker-entrypoint prepended `node` and it died
+  //   Error: Cannot find module '/app/agent/restart'   MODULE_NOT_FOUND
+  // — which reads like a broken IMAGE. Nothing may reach docker on this path.
+  const box = shellBox();
+  operatorDir(box);
+  let err = "";
+  assert.throws(() => box.run("fh-agent frobnicate"), (e) => {
+    err = String((e as { stderr?: string }).stderr);
+    return true;
+  });
+  assert.match(err, /unknown command 'frobnicate'/);
+  assert.match(err, /^usage: fh-agent /m);
+  assert.match(err, /^  restart /m);
+  assert.deepEqual(box.argv(), [], "an unknown word must not reach docker at all");
+});
+
+test("⭐ an explicit command still passes through to the image", () => {
+  // The fall-through is what makes the wrapper usable for anything the image can run, and
+  // breaking that would be worse than the bug. A program on the image's PATH, a path, and
+  // a flag all still go straight to `docker run`.
+  for (const argv of ["npm run doctor", "node -p 1", "sh -c ls", "/usr/local/bin/arcane-mage --help", "--version"]) {
+    const box = shellBox();
+    operatorDir(box);
+    box.run(`fh-agent ${argv}`);
+    const call = box.argv().find((a) => a[0] === "run");
+    assert.ok(call, `${argv} did not reach docker`);
+    assert.ok(call.join(" ").endsWith(`${AGENT_IMAGE} ${argv}`), call.join(" "));
+  }
+});
+
+test("⭐ a newer wrapper FILE on disk is named as the reason an unknown word is unknown", () => {
+  // The message that would have saved the afternoon. The running function knows the
+  // version it was generated at; the file carries its own in the header, so a function
+  // that has been superseded can notice and say which shell command fixes it.
+  const box = shellBox();
+  operatorDir(box);
+  writeFileSync(
+    join(box.dir, ".fh-toolkit.sh"),
+    `# Emitted by fh-toolkit 9.9.9 (abcdef012345), wrapper format v${WRAPPER_VERSION + 1}.\n`
+  );
+  let err = "";
+  assert.throws(() => box.run("fh-agent frobnicate"), (e) => {
+    err = String((e as { stderr?: string }).stderr);
+    return true;
+  });
+  // HOME is the box dir, so the default ${FH_TOOLKIT_RC:-$HOME/.fh-toolkit.sh} finds it.
+  assert.match(err, new RegExp(`on disk is wrapper v${WRAPPER_VERSION + 1}`));
+  assert.match(err, new RegExp(`your shell has loaded is v${WRAPPER_VERSION}`));
+  assert.match(err, /\. .*\.fh-toolkit\.sh/, "names the command that reloads it");
+});
+
+test("the staleness note is silent when the file on disk is the same version, or absent", () => {
+  // A line that fires when nothing is wrong is a line nobody reads.
+  for (const header of [null, `# Emitted by fh-toolkit 0.3.0, wrapper format v${WRAPPER_VERSION}.`, "not a wrapper at all"]) {
+    const box = shellBox();
+    operatorDir(box);
+    if (header !== null) writeFileSync(join(box.dir, ".fh-toolkit.sh"), `${header}\n`);
+    let err = "";
+    assert.throws(() => box.run("fh-agent frobnicate"), (e) => {
+      err = String((e as { stderr?: string }).stderr);
+      return true;
+    });
+    assert.doesNotMatch(err, /on disk is wrapper/, String(header));
+  }
+});
+
+test("the staleness check costs one local file read: no docker, no network", () => {
+  // It runs on an error path only, but even there it may not shell out to the daemon.
+  const box = shellBox();
+  operatorDir(box);
+  writeFileSync(join(box.dir, ".fh-toolkit.sh"), `# Emitted by x, wrapper format v${WRAPPER_VERSION + 1}.\n`);
+  assert.throws(() => box.run("fh-agent frobnicate"));
+  assert.deepEqual(box.argv(), []);
+  const body = agentFunction();
+  const fn = body.slice(body.indexOf("fh-agent-stale-note() {"));
+  const decl = fn.slice(0, fn.indexOf("\n}"));
+  assert.doesNotMatch(decl, /docker|curl|wget/);
+});
+
+test("FH_TOOLKIT_RC redirects the staleness check, as it redirects --update-wrapper", () => {
+  const box = shellBox();
+  operatorDir(box);
+  const rc = join(box.dir, "elsewhere.sh");
+  writeFileSync(rc, `# Emitted by x, wrapper format v${WRAPPER_VERSION + 1}.\n`);
+  let err = "";
+  assert.throws(() => box.run("fh-agent frobnicate", { FH_TOOLKIT_RC: rc }), (e) => {
+    err = String((e as { stderr?: string }).stderr);
+    return true;
+  });
+  assert.match(err, new RegExp(`elsewhere\\.sh on disk is wrapper v${WRAPPER_VERSION + 1}`));
+});
+
+test("bare `fh-agent` also names a stale wrapper", () => {
+  // Same error path, same question: "why does my shell not have the verb the docs show?"
+  const box = shellBox();
+  operatorDir(box);
+  writeFileSync(join(box.dir, ".fh-toolkit.sh"), `# Emitted by x, wrapper format v${WRAPPER_VERSION + 1}.\n`);
+  let err = "";
+  assert.throws(() => box.run("fh-agent"), (e) => {
+    err = String((e as { stderr?: string }).stderr);
+    return true;
+  });
+  assert.match(err, /on disk is wrapper/);
+});
+
 // ---------------------------------------------------------------- docs agreement
 
 test("⭐ the docs show the same bytes the image emits", () => {

@@ -29,7 +29,7 @@ export const TOOLKIT_IMAGE = "ghcr.io/w2vy/fh-toolkit:latest";
  * from a stale one from one predating the handshake entirely (`undefined`). That is the
  * whole point of the exercise — a stale wrapper used to be undetectable from either side.
  */
-export const WRAPPER_VERSION = 7;
+export const WRAPPER_VERSION = 8;
 
 /** Where `--update-wrapper` installs, unless the operator overrides it. */
 export const WRAPPER_RC = "${FH_TOOLKIT_RC:-$HOME/.fh-toolkit.sh}";
@@ -183,6 +183,44 @@ mt-agent() {
   return 1
 }
 
+# The verb list, in one place: bare \`fh-agent\` and an unknown word print the same thing.
+fh-agent-usage() {
+  echo "usage: fh-agent <doctor|dry-run|version|start|stop|restart|status|logs|update>" >&2
+  echo "  doctor     the credentialed preflight (run before the first start)" >&2
+  echo "  dry-run    Flux Hub connectivity and auth, without touching Proxmox" >&2
+  echo "  version    running vs pulled vs published" >&2
+  echo "  start      run the agent loop in the background   (docker compose up -d)" >&2
+  echo "  stop       stop and remove it                       (docker compose down)" >&2
+  echo "  restart    APPLY a settings change                  (up -d --force-recreate)" >&2
+  echo "  status     is it running, and which version        (docker compose ps)" >&2
+  echo "  logs       follow the log; 'logs --tail 50' for the recent lines" >&2
+  echo "  update     pull the newest build and restart onto it" >&2
+  echo "the loop itself runs under compose; this function never runs it in the foreground." >&2
+}
+
+# Is the wrapper FILE newer than the function bash is running?
+#
+# This is the 2026-09-13 failure, from a live operator directory: \`fh-toolkit
+# --update-wrapper\` had rewritten ~/.fh-toolkit.sh, but the interactive shell had been
+# open since 09-11, so bash still held the PREVIOUS \`fh-agent()\` — one with no
+# \`restart\` branch. A stale function cannot know what it is missing, but it can read
+# the header of the file that superseded it and say so.
+#
+# Only ever called on an error path: one \`sed\` over one local file, never on a good
+# command, no docker and no network.
+fh-agent-stale-note() {
+  local rc="${WRAPPER_RC}"
+  local on_disk
+  [ -f "$rc" ] || return 0
+  on_disk="$(sed -n 's/^# Emitted by .*wrapper format v\\([0-9][0-9]*\\)\\.$/\\1/p' "$rc" | head -n 1)"
+  [ -n "$on_disk" ] || return 0
+  [ "$on_disk" -le ${WRAPPER_VERSION} ] 2>/dev/null && return 0
+  echo "note: $rc on disk is wrapper v$on_disk; the fh-agent() your shell has loaded is v${WRAPPER_VERSION}." >&2
+  echo "  you upgraded fh-toolkit in a shell that was already open, so bash kept the old" >&2
+  echo "  definition. Reload it and try again:" >&2
+  echo "    . $rc          (or just open a new terminal)" >&2
+}
+
 fh-agent() {
   local img
   img="$(fh-agent-image)"
@@ -192,17 +230,8 @@ fh-agent() {
     # Deliberate divergence from the image's own CLI, where bare means "run the main loop".
     # Through a wrapper that would start a SECOND agent for this provider, alongside the one
     # compose is already running.
-    echo "usage: fh-agent <doctor|dry-run|version|start|stop|restart|status|logs|update>" >&2
-    echo "  doctor     the credentialed preflight (run before the first start)" >&2
-    echo "  dry-run    Flux Hub connectivity and auth, without touching Proxmox" >&2
-    echo "  version    running vs pulled vs published" >&2
-    echo "  start      run the agent loop in the background   (docker compose up -d)" >&2
-    echo "  stop       stop and remove it                       (docker compose down)" >&2
-    echo "  restart    APPLY a settings change                  (up -d --force-recreate)" >&2
-    echo "  status     is it running, and which version        (docker compose ps)" >&2
-    echo "  logs       follow the log; 'logs --tail 50' for the recent lines" >&2
-    echo "  update     pull the newest build and restart onto it" >&2
-    echo "the loop itself runs under compose; this function never runs it in the foreground." >&2
+    fh-agent-usage
+    fh-agent-stale-note
     return 1
   fi
   if [ ! -f .env.operator ]; then
@@ -269,7 +298,36 @@ fh-agent() {
         -e AGENT_DRY_RUN=1 "$img" "$@"
       ;;
     *)
-      docker run --rm --env-file .env.operator -v "$PWD/data:/data:ro" "$img" "$@"
+      # An unrecognised bare word is NOT handed to the container.
+      #
+      # The image sets CMD and no ENTRYPOINT, so it inherits node's docker-entrypoint:
+      # a first argument that is not an executable on PATH gets \`node\` prepended. So
+      # \`fh-agent restart\` through a wrapper too old to have a \`restart\` branch did not
+      # say "unknown command" — it printed
+      #   Error: Cannot find module '/app/agent/restart'   MODULE_NOT_FOUND
+      # from inside the container, which reads like a broken IMAGE. That is also why a
+      # bare word can never reach the image's OWN cli (index.ts argv[2]): \`doctor\` is
+      # spelled \`npm run doctor\` above for exactly this reason. Refusing bare words
+      # therefore costs no working invocation.
+      #
+      # What still passes through is an explicit command: a program the image really has
+      # on PATH, a path, or a flag. \`fh-agent npm run <script>\`, \`fh-agent node -p ...\`
+      # and \`fh-agent sh -c '...'\` all work as they always did.
+      case "$1" in
+        npm|npx|node|tsx|sh|bash|env|python3|arcane-mage|/*|./*|*/*|-*)
+          docker run --rm --env-file .env.operator -v "$PWD/data:/data:ro" "$img" "$@"
+          ;;
+        *)
+          echo "fh-agent: unknown command '$1'" >&2
+          fh-agent-usage
+          echo "to run something else inside the image, name the command:" >&2
+          echo "  fh-agent npm run <script>   fh-agent node -p '<expr>'   fh-agent sh -c '<cmd>'" >&2
+          # Last, because the last line is the one that gets read — and when it fires it
+          # is the whole answer.
+          fh-agent-stale-note
+          return 1
+          ;;
+      esac
       ;;
   esac
 }
