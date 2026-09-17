@@ -111,7 +111,7 @@ fh-toolkit() {
   # FH_WRAPPER lets the container tell a current wrapper from a stale one; `doctor`
   # reports the mismatch. /etc/hosts read-only so hostnames resolve inside the container
   # as they do at your prompt — see operator-onboarding.md Step 0.5 for the loopback edge.
-  docker run --rm -i $tty -e FH_WRAPPER=7 -v "$PWD:/work" \
+  docker run --rm -i $tty -e FH_WRAPPER=8 -v "$PWD:/work" \
     -v /etc/hosts:/etc/hosts:ro -u "$(id -u):$(id -g)" "$img" "$@"
 }
 ```
@@ -226,6 +226,33 @@ image's own CLI reads `fh-agent [doctor]`, where no argument means *run the main
 the foreground*. Through the function that is a footgun — compose is already running one,
 and a second agent for one provider is a real failure mode — so the function refuses and
 lists its verbs. Run the loop with `fh-agent start`, never through the bare function.
+
+⚠️ **An unknown word gets usage, not a stack trace** (wrapper v8). For the same reason as
+`npm run doctor` above, a bare word handed to the image gets `node` prepended and dies
+`MODULE_NOT_FOUND: /app/agent/<word>` — which reads like a broken *image*. It was: on
+2026-09-13 an operator who had upgraded `fh-toolkit` in a shell that had been open since
+09-11 typed `fh-agent restart` against the older function still loaded in that shell, which
+had no `restart` branch. The function now prints its verbs instead, and — because the file
+on disk carries its own `wrapper format vN` in the header — says so when the wrapper file
+is newer than the function your shell has loaded:
+
+```console
+$ fh-agent restart
+fh-agent: unknown command 'restart'
+usage: fh-agent <doctor|dry-run|version|start|stop|restart|status|logs|update>
+...
+note: /home/op/.fh-toolkit.sh on disk is wrapper v8; the fh-agent() your shell has loaded is v7.
+  you upgraded fh-toolkit in a shell that was already open, so bash kept the old
+  definition. Reload it and try again:
+    . /home/op/.fh-toolkit.sh          (or just open a new terminal)
+```
+
+That check costs one `sed` over one local file and only ever runs on the error path — no
+`docker`, no network. Running something else *inside* the image still works, spelled as a
+command the image really has: `fh-agent npm run <script>`, `fh-agent node -p '<expr>'`,
+`fh-agent sh -c '<cmd>'`, or any path or `-flag`. (A stale function cannot fix itself, so
+the note only appears from v8 forward — a shell still holding a v7 `fh-agent()` gets the
+old stack trace until it is re-sourced.)
 
 ⚠️ **The function never pulls the agent.** `fh-toolkit` refreshes itself because it is the
 thing you are invoking; pulling the *agent* would mean `fh-agent doctor` validated a build
