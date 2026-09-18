@@ -141,6 +141,30 @@ export function normalizeEvent(event: StripeEvent, providerSlug: string): Paymen
       return { ...base, type: "invoice.payment_failed", stripeSubscriptionId: invoiceSubscriptionId(o)! } as PaymentEvent;
     case "customer.subscription.deleted":
       return { ...base, type: "subscription.cancelled", stripeSubscriptionId: o.id } as PaymentEvent;
+    case "customer.subscription.updated": {
+      // `updated` fires for every attribute change (renewals roll the period, plan edits,
+      // metadata…). The ONLY change relayed is a cancel being scheduled or revoked — the billing
+      // portal's default "cancel at period end" used to land here and be dropped, leaving the
+      // rental un-cancelled on MT for up to a month. Keyed on `previous_attributes`, which Stripe
+      // fills with the fields that changed, so a period roll on an already-scheduled cancel does
+      // not re-announce it.
+      const prev = ((event as { data: { previous_attributes?: Record<string, unknown> } }).data
+        .previous_attributes ?? {}) as Record<string, unknown>;
+      if (!("cancel_at_period_end" in prev) && !("cancel_at" in prev)) return null;
+      const cancelAtPeriodEnd = Boolean(o.cancel_at_period_end) || o.cancel_at != null;
+      const item0 = (o.items?.data?.[0] ?? {}) as Record<string, any>;
+      return {
+        ...base,
+        type: "subscription.updated",
+        stripeSubscriptionId: o.id,
+        cancelAtPeriodEnd,
+        // `cancel_at` is what Stripe sets for both a period-end cancel and a dated one; the
+        // period end is the fallback for API versions that leave it null on period-end cancels.
+        cancelsAt: cancelAtPeriodEnd
+          ? iso(o.cancel_at ?? item0.current_period_end ?? o.current_period_end)
+          : undefined,
+      } as PaymentEvent;
+    }
     case "charge.refunded":
       // ⚠️ KNOWN GAP, not an oversight: a Charge object carries no subscription pointer at all
       // (it has `invoice`, not `subscription`), so this is undefined in practice and MT answers

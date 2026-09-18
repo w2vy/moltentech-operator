@@ -74,11 +74,14 @@ Still under **Developers**, find **Webhooks** and click **Create a webhook**.
 
 ![customer.subscription events](images/stripe/7_WH_CustSub.png)
 
-Select **Your account**. You will add **five** events. In the search box type
-`customer.sub` and enable both:
+Select **Your account**. You will add **six** events. In the search box type
+`customer.sub` and enable all three:
 
 - `customer.subscription.created`
 - `customer.subscription.deleted`
+- `customer.subscription.updated` — this is how a customer's *cancel at period end* (the
+  billing portal's default) reaches the hub as "cancels on <date>"; without it the rental
+  reads un-cancelled until the period actually ends.
 
 ![invoice.payment events](images/stripe/8_WH_InvoicePayment.png)
 

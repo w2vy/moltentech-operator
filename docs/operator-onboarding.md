@@ -669,8 +669,10 @@ whole of this step in the Stripe dashboard. The summary below is the same proced
    Flux app environment, and how you deploy that app decides who can read it (Step 4).
 
 2. Create a **webhook endpoint** pointing at `<COALITION_URL>/webhook`, subscribed to:
-   `customer.subscription.created`, `customer.subscription.deleted`,
-   `invoice.payment_succeeded`, `invoice.payment_failed`, `charge.refunded`.
+   `customer.subscription.created`, `customer.subscription.updated`,
+   `customer.subscription.deleted`, `invoice.payment_succeeded`, `invoice.payment_failed`,
+   `charge.refunded`. (`updated` carries a customer's *cancel at period end* — without it
+   the hub shows the rental un-cancelled until the period actually ends.)
    Copy its **signing secret** (`whsec_…`).
 
    ⚠️ **A `whsec_` is bound to the endpoint URL it was created for.** Never copy one

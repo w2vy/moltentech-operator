@@ -277,7 +277,7 @@ the upgrade does not create one for you.
 Captured 2026-09-11 on an earlier build (`341c44f`); only the output shown has been
 checked against the current one. The webhook endpoint was created in the
 Stripe dashboard (Developers → Webhooks) pointing at `<COALITION_URL>/webhook` with the
-five events from onboarding Step 3, and its `whsec_` is the one the upgrade above already
+six events from onboarding Step 3, and its `whsec_` is the one the upgrade above already
 asked for. After `fh-toolkit env` and a redeploy of the Coalition with the new `env.json`:
 
 ```console

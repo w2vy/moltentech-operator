@@ -90,6 +90,19 @@ export const PaymentEvent = z.discriminatedUnion("type", [
     type: z.literal("subscription.cancelled"),
     stripeSubscriptionId: z.string().min(1),
   }),
+  // A cancellation SCHEDULED (or un-scheduled) — Stripe's `cancel_at_period_end` /
+  // `cancel_at`, the billing portal's default cancel. The subscription stays live and
+  // `subscription.cancelled` still follows when the period ends; this only lets MT show
+  // "cancels on <date>" in the meantime instead of a rental that reads un-cancelled for up
+  // to a month (feedback_stripe_portal_cancel_period_end_dropped).
+  PaymentEventBase.extend({
+    type: z.literal("subscription.updated"),
+    stripeSubscriptionId: z.string().min(1),
+    /** True = a cancel is scheduled; false = it was revoked (the customer resumed). */
+    cancelAtPeriodEnd: z.boolean(),
+    /** When the cancel takes effect. Absent when `cancelAtPeriodEnd` is false. */
+    cancelsAt: Timestamp.optional(),
+  }),
   // Operator-initiated refund/dispute reflected into MT's ledger (informational).
   PaymentEventBase.extend({
     type: z.literal("charge.refunded"),
