@@ -150,3 +150,55 @@ test("an unmappable event is not quietly acked", async () => {
   const blind = renewal({ parent: null, lines: { data: [{ period: { start: 1, end: 2 } }] } });
   assert.equal(await webhook(200, { ok: true, accepted: true }, blind), 502);
 });
+
+// ── customer.subscription.updated → subscription.updated ──────────────────────────────────
+// The billing portal's default cancel is "at period end": Stripe fires `updated` with
+// `cancel_at_period_end: true`, and `deleted` only when the period ends. Dropped, it left a
+// cancelled rental reading `active` on MT for up to a month (MS-0019, 2026-09-18).
+
+const updated = (over: Record<string, any> = {}, prev: Record<string, any> = {}): StripeEvent =>
+  ({
+    id: "evt_test_updated",
+    type: "customer.subscription.updated",
+    data: {
+      object: {
+        id: SUB,
+        object: "subscription",
+        customer: "cus_V7yJ5ZPDzlqexS",
+        cancel_at_period_end: true,
+        cancel_at: 1790283119,
+        canceled_at: 1787604719,
+        items: { data: [{ current_period_start: 1787604719, current_period_end: 1790283119 }] },
+        ...over,
+      },
+      previous_attributes: prev,
+    },
+  }) as unknown as StripeEvent;
+
+test("a scheduled cancel relays subscription.updated with cancelsAt", () => {
+  const ev = normalizeEvent(updated({}, { cancel_at_period_end: false, cancel_at: null }), SLUG) as any;
+  assert.equal(ev.type, "subscription.updated");
+  assert.equal(ev.stripeSubscriptionId, SUB);
+  assert.equal(ev.cancelAtPeriodEnd, true);
+  assert.equal(ev.cancelsAt, new Date(1790283119 * 1000).toISOString());
+});
+
+test("a period-end cancel with cancel_at null falls back to the item's current_period_end", () => {
+  const ev = normalizeEvent(updated({ cancel_at: null }, { cancel_at_period_end: false }), SLUG) as any;
+  assert.equal(ev.cancelsAt, new Date(1790283119 * 1000).toISOString());
+});
+
+test("a revoked cancel relays cancelAtPeriodEnd=false with no date", () => {
+  const ev = normalizeEvent(
+    updated({ cancel_at_period_end: false, cancel_at: null, canceled_at: null }, { cancel_at_period_end: true, cancel_at: 1790283119 }),
+    SLUG
+  ) as any;
+  assert.equal(ev.type, "subscription.updated");
+  assert.equal(ev.cancelAtPeriodEnd, false);
+  assert.equal(ev.cancelsAt, undefined);
+});
+
+test("an `updated` that did not touch the cancel fields is ignored (period rolls, metadata edits)", () => {
+  assert.equal(normalizeEvent(updated({}, { items: {} }), SLUG), null);
+  assert.equal(normalizeEvent(updated({}, {}), SLUG), null);
+});

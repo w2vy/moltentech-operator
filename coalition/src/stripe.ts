@@ -4,7 +4,12 @@ import Stripe from "stripe";
  * The narrow slice of Stripe the Coalition uses, as an interface so the payment
  * logic can be unit-tested with a fake (real Stripe calls need live keys).
  */
-export type StripeEvent = { id: string; type: string; data: { object: Record<string, unknown> } };
+export type StripeEvent = {
+  id: string;
+  type: string;
+  /** `previous_attributes` is present on `*.updated` events only: the fields that changed. */
+  data: { object: Record<string, unknown>; previous_attributes?: Record<string, unknown> };
+};
 
 export interface StripeLike {
   checkout: { sessions: { create(args: Record<string, unknown>): Promise<{ url: string | null }> } };
