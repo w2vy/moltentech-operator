@@ -83,6 +83,25 @@ Select **Your account**. You will add **six** events. In the search box type
   billing portal's default) reaches the hub as "cancels on <date>"; without it the rental
   reads un-cancelled until the period actually ends.
 
+### Already have a webhook? Add `customer.subscription.updated` to it
+
+Coalition 0.6.3 relays `customer.subscription.updated`; a destination created before it has
+only five events and Stripe will **not** send the sixth — the event still appears under
+**Developers → Events**, but with no delivery attempt, and nothing tells you.
+
+1. **Developers → Webhooks** → open the destination whose URL is *your* Coalition
+   (`https://coalition-<slug>.app.runonflux.io/webhook`). If you run more than one Coalition,
+   each has its own destination — do every one.
+2. **Edit destination** → the **All events** tab (the *Selected events* tab only filters what is
+   already chosen, so the search finds nothing there) → search `customer.subscription.updated`
+   → tick it → **Save destination**.
+3. Confirm: the destination's **Overview** lists six events.
+
+To prove it end to end, cancel a test subscription from the billing portal (its default is
+*cancel at period end*): within a minute the destination's **Event deliveries** tab shows
+`customer.subscription.updated` with `200 OK`, and the hub shows "cancels <date>" on the
+rental. **Don't cancel** in the portal reverses it the same way.
+
 ![invoice.payment events](images/stripe/8_WH_InvoicePayment.png)
 
 Next search `invoice.payment` and select both:
