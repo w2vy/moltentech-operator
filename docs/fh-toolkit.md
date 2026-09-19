@@ -1135,7 +1135,7 @@ configuration. Read it before anything else:
 | `ARCANE_ISO` | `FluxLive.iso` | ⚠️ the default matches **no real file** — published builds are dated, e.g. `FluxLive-1775071308.iso`. Set the exact filename in `PROXMOX_STORAGE_ISO`, or declare inventory and let ISO auto-refresh fill it in. `doctor --check-proxmox` FAILs while it is wrong |
 | `OPERATOR_SSH_PUBKEY` | `""` | |
 | `CONSOLE_PASSWORD_HASH` | `!` | |
-| `AGENT_INVENTORY_PATH` | — | normally `/data/inventory.json`; `AGENT_INVENTORY_JSON` is the inline alternative |
+| `AGENT_INVENTORY_PATH` | — | normally `/data/inventory.json`; `AGENT_INVENTORY_JSON` is the inline alternative. **The toolkit follows this too**: `doctor`, `inventory` and `level` resolve the container path through your compose file's bind mounts (`./config:/config` + `/config/x.json` → `config/x.json`), so a non-default layout is linted and rewritten where the agent actually reads |
 | `AGENT_LISTING_JSON` | — | what to offer for sale, re-asserted each heartbeat. How much hardware you **have** comes from inventory, not from here |
 | `AGENT_DRY_RUN` | `0` | `1` = talk to FH, touch nothing |
 | `AGENT_POLL_INTERVAL_MS` | `10000` | job poll |
