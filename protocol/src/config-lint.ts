@@ -820,7 +820,7 @@ export function lintListingCapacity(
 
   const declared = new Map<string, number>();
   for (const host of hosts) {
-    for (const slot of host.slots) {
+    for (const slot of (host.slots ?? []) as { tier?: unknown }[]) {
       if (typeof slot.tier === "string") declared.set(slot.tier, (declared.get(slot.tier) ?? 0) + 1);
     }
   }
@@ -837,7 +837,7 @@ export function lintListingCapacity(
     if ((offered as number) > have) {
       findings.push({
         rule: "LISTING_ABOVE_HARDWARE",
-        severity: "warn",
+        severity: "warning",
         file,
         message:
           `${tier}: AGENT_LISTING_JSON offers ${offered} slots but inventory.json declares ${have}. ` +
@@ -847,7 +847,7 @@ export function lintListingCapacity(
     } else if ((offered as number) < have) {
       findings.push({
         rule: "LISTING_HOLDS_BACK",
-        severity: "warn",
+        severity: "warning",
         file,
         message:
           `${tier}: AGENT_LISTING_JSON offers ${offered} of the ${have} slots inventory.json declares. ` +

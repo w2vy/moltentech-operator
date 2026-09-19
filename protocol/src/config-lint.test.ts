@@ -586,15 +586,15 @@ test("doctor compares availableSlots with the hardware inventory.json declares (
   // Stale from a previous stock-take, above what exists: warned, never an error (the hub clamps).
   const above = run('[{"tier":"cumulus","priceCents":700,"availableSlots":7}]');
   assert.equal(above.length, 1);
-  assert.equal(above[0].rule, "LISTING_ABOVE_HARDWARE");
-  assert.equal(above[0].severity, "warn");
-  assert.match(above[0].message, /offers 7 slots but inventory.json declares 2/);
+  assert.equal(above[0]!.rule, "LISTING_ABOVE_HARDWARE");
+  assert.equal(above[0]!.severity, "warning");
+  assert.match(above[0]!.message, /offers 7 slots but inventory.json declares 2/);
 
   // Holding slots back: a throttle or a forgotten update — say which count, let them decide.
   const below = run('[{"tier":"cumulus","priceCents":700,"availableSlots":1}]');
   assert.equal(below.length, 1);
-  assert.equal(below[0].rule, "LISTING_HOLDS_BACK");
-  assert.match(below[0].message, /offers 1 of the 2 slots/);
+  assert.equal(below[0]!.rule, "LISTING_HOLDS_BACK");
+  assert.match(below[0]!.message, /offers 1 of the 2 slots/);
 
   // Exactly the hardware: quiet.
   assert.deepEqual(run('[{"tier":"cumulus","priceCents":700,"availableSlots":2}]'), []);
