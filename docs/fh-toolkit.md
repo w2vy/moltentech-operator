@@ -833,6 +833,7 @@ counted as an unproven check, never an error.
 | `PRICE_ZEROS` | a value that looks like dollars where cents were meant |
 | `PRICE_NOT_INTEGER_CENTS` / `PRICE_MALFORMED` / `PRICE_UNKNOWN_TIER` | `TIER_PRICES_JSON` shape |
 | `PRICE_DISAGREES_ACROSS_FILES` | Coalition price ≠ listing price → 502 at checkout |
+| `LISTING_ABOVE_HARDWARE` / `LISTING_HOLDS_BACK` | warn: `availableSlots` above what inventory.json declares (stale), or below it (a throttle — or a forgotten update showing fewer free slots than you have) |
 | `HOSTS_UNATTESTED` | an inventory host not named in the signed `HOSTS` list → FH rejects it |
 | `LANIP_NO_CIDR` | a bare `lanIp` (silently becomes `/32`) |
 | `INVENTORY_MALFORMED` / `LISTING_MALFORMED` / `LISTING_NOT_AN_ARRAY` | shape errors |
