@@ -192,6 +192,8 @@ export type RelayResult = {
   reason?: string;
   /** The documented terminal-rejection directive, e.g. `cancel`. */
   directive?: string;
+  /** The hub's rental code for this subscription, answered on `subscription.created`. */
+  rentalCode?: string;
 };
 
 /**
@@ -233,7 +235,36 @@ export async function relayPaymentEvent(
     accepted: body?.accepted !== false,
     reason: typeof body?.reason === "string" ? body.reason : undefined,
     directive: typeof body?.directive === "string" ? body.directive : undefined,
+    rentalCode: typeof body?.rentalCode === "string" ? body.rentalCode : undefined,
   };
+}
+
+/**
+ * Stamp the hub's rental code onto the Stripe subscription's metadata.
+ *
+ * The rental does not exist when the subscription is minted — the hub creates it only when the
+ * `subscription.created` relay lands — so the code can only ever be written back afterwards, and
+ * only from here: the operator is merchant of record and the hub holds no Stripe credentials.
+ * Without it, two same-tier subscriptions from one customer are indistinguishable in the
+ * operator's own dashboard.
+ *
+ * Never fatal: the relay has already been accepted, and a Stripe hiccup here must not turn into
+ * a 502 that makes Stripe re-deliver work the hub has already done. Stripe merges metadata by
+ * key, so existing keys survive; a re-delivery finds the code already present and does nothing.
+ */
+export async function stampRentalCode(
+  stripe: StripeLike,
+  event: StripeEvent,
+  rentalCode: string
+): Promise<void> {
+  const o = event.data.object as Record<string, any>;
+  const md = (o.metadata ?? {}) as Record<string, string>;
+  if (md.rentalCode === rentalCode) return;
+  try {
+    await stripe.subscriptions.update(String(o.id), { metadata: { rentalCode } });
+  } catch (err) {
+    console.error(`[payments] ${event.id}: could not stamp rentalCode ${rentalCode} on ${o.id} —`, err);
+  }
 }
 
 /**
@@ -287,7 +318,10 @@ export async function handleWebhook(
 
   const result = await relayPaymentEvent(cfg, ev, fetchImpl);
   if (!result.delivered) return 502; // transient — Stripe's retry is the durable queue
-  if (result.accepted) return 200;
+  if (result.accepted) {
+    if (ev.type === "subscription.created" && result.rentalCode) await stampRentalCode(stripe, event, result.rentalCode);
+    return 200;
+  }
 
   // MT took the request and declined to act on it.
   if (result.directive === "cancel") {
