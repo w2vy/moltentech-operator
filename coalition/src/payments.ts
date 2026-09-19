@@ -5,6 +5,7 @@ import {
   ManageRequest,
   ManageResponse,
   PaymentEvent,
+  PaymentRelayResponse,
 } from "@moltentech/protocol";
 import type { CoalitionConfig } from "./config";
 import { mtAuthHeaders, type MtCallerConfig } from "./coalition-signing";
@@ -190,8 +191,8 @@ export type RelayResult = {
   accepted: boolean;
   /** MT's machine-readable reason when it refused, e.g. `unknown_subscription`. */
   reason?: string;
-  /** The documented terminal-rejection directive, e.g. `cancel`. */
-  directive?: string;
+  /** The documented terminal-rejection directive. */
+  directive?: "cancel";
   /** The hub's rental code for this subscription, answered on `subscription.created`. */
   rentalCode?: string;
 };
@@ -230,11 +231,17 @@ export async function relayPaymentEvent(
   } catch {
     return { delivered: true, accepted: true };
   }
+  // The shared contract (protocol `PaymentRelayResponse`). A body that fails it is a hub/
+  // Coalition skew, and the old field-by-field reading below is what we fall back to — with
+  // a line in the log, because a drifted contract is exactly what #51 was.
+  const parsed = PaymentRelayResponse.safeParse(body);
+  if (parsed.success) return { delivered: true, ...parsed.data };
+  console.warn(`[payments] relay response does not match PaymentRelayResponse:`, JSON.stringify(body));
   return {
     delivered: true,
     accepted: body?.accepted !== false,
     reason: typeof body?.reason === "string" ? body.reason : undefined,
-    directive: typeof body?.directive === "string" ? body.directive : undefined,
+    directive: body?.directive === "cancel" ? "cancel" : undefined,
     rentalCode: typeof body?.rentalCode === "string" ? body.rentalCode : undefined,
   };
 }
@@ -268,13 +275,61 @@ export async function stampRentalCode(
 }
 
 /**
- * Refusals that are a correct, terminal answer rather than a fault — ack Stripe and move on.
+ * Carry out MT's `directive:"cancel"` — operator #51.
  *
- * `no_subscription_ref` is MT's response to a refund it cannot map to a subscription, and its
- * own comment says "record nothing but ack so it isn't retried". Anything NOT on this list is
- * treated as a fault, because the alternative is the silence this whole change exists to end.
+ * MT answers `subscription.created` with it when it will NEVER take the subscription: no slot
+ * left, unknown customer, or a sale MT brokered to a different operator. The subscription is
+ * still in its trial, so nothing has been charged; but left alone it converts at trial end and
+ * the customer pays for a node that does not exist, into an account MT does not hold. Until
+ * 2026-09-19 this branch only logged "NOT IMPLEMENTED, acked anyway".
+ *
+ * Returns true when the subscription is cancelled (or already was — Stripe re-delivers, and a
+ * second pass must not fail on the first pass's work). False = the cancel did not happen, and
+ * the caller answers 502 so Stripe re-delivers and we try again: MT's refusal is idempotent
+ * (a refused intent is never consumed), so the retry re-derives the same directive.
  */
-const BENIGN_REFUSALS = new Set(["no_subscription_ref"]);
+export async function cancelRefusedSubscription(
+  stripe: StripeLike,
+  event: StripeEvent,
+  reason: string | undefined
+): Promise<boolean> {
+  const o = event.data.object as Record<string, any>;
+  const id = String(o.id);
+  try {
+    const sub = await stripe.subscriptions.retrieve(id);
+    if (sub.status === "canceled") {
+      console.warn(`[payments] ${event.id}: MT directed cancel (${reason ?? "no reason"}) — ${id} already cancelled`);
+      return true;
+    }
+    await stripe.subscriptions.cancel(id);
+    console.error(`[payments] ${event.id}: MT directed cancel (${reason ?? "no reason"}) — cancelled ${id} at Stripe`);
+    return true;
+  } catch (err) {
+    console.error(`[payments] ${event.id}: MT directed cancel (${reason ?? "no reason"}) but ${id} could NOT be cancelled —`, err);
+    return false;
+  }
+}
+
+/**
+ * Refusals that are a correct, terminal answer rather than a fault — ack Stripe and move on.
+ * Keyed by EVENT TYPE, because the same reason means different things on different events.
+ *
+ * - `no_subscription_ref` (any event): MT cannot map a refund and says so; nothing to retry.
+ * - `unknown_subscription` on a cancel or an update: MT never held this subscription — which
+ *   is exactly what the `cancelRefusedSubscription` path produces (Stripe emits
+ *   `customer.subscription.deleted` for the cancel we just made). Nothing to tear down.
+ *   ⚠️ NOT benign on a renewal: `unknown_subscription` on `invoice.payment_succeeded` is how
+ *   MT-0075's paid renewal vanished. Anything not listed here is a fault and is re-delivered.
+ */
+const BENIGN_ON_ANY_EVENT: ReadonlySet<string> = new Set(["no_subscription_ref"]);
+const BENIGN_BY_EVENT: Record<string, ReadonlySet<string>> = {
+  "subscription.cancelled": new Set(["unknown_subscription"]),
+  "subscription.updated": new Set(["unknown_subscription"]),
+};
+export function isBenignRefusal(eventType: string, reason: string | undefined): boolean {
+  if (reason === undefined) return false;
+  return BENIGN_ON_ANY_EVENT.has(reason) || (BENIGN_BY_EVENT[eventType]?.has(reason) ?? false);
+}
 
 /**
  * Verify + handle a Stripe webhook. Returns the HTTP status to send Stripe:
@@ -325,15 +380,11 @@ export async function handleWebhook(
 
   // MT took the request and declined to act on it.
   if (result.directive === "cancel") {
-    // The documented terminal rejection: MT wants the (trialing) subscription cancelled.
-    // ⚠️ The cancellation itself is NOT implemented here — acking a directive we do not carry
-    // out is the honest current behaviour, and it is logged so it cannot pass unnoticed.
-    console.error(
-      `[payments] ${event.type} ${event.id}: MT directed cancel (${result.reason ?? "no reason"}) — NOT IMPLEMENTED, acked anyway`
-    );
-    return 200;
+    // The documented terminal rejection: cancel the (trialing) subscription, THEN ack. A
+    // failed cancel is a 502 so Stripe brings the event back and we try again.
+    return (await cancelRefusedSubscription(stripe, event, result.reason)) ? 200 : 502;
   }
-  if (result.reason && BENIGN_REFUSALS.has(result.reason)) {
+  if (isBenignRefusal(ev.type, result.reason)) {
     console.warn(`[payments] ${event.type} ${event.id}: MT declined (${result.reason}) — expected, acked`);
     return 200;
   }

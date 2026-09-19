@@ -115,6 +115,31 @@ export const PaymentEvent = z.discriminatedUnion("type", [
 // schema and `Extract<PaymentEvent, { type: "..." }>` for a single variant.
 export type PaymentEvent = z.infer<typeof PaymentEvent>;
 
+/**
+ * MT's 2xx answer to a relayed PaymentEvent. Until 2026-09-19 this contract lived only as a
+ * prose comment on the hub route, and the Coalition read `res.ok` — so `{accepted:false}` was
+ * indistinguishable from success (a renewal vanished, MT-0075) and `directive:"cancel"` was a
+ * dead letter (operator #51). Both ends now share this shape.
+ *
+ *   accepted:true                      → MT processed it; ack Stripe.
+ *   accepted:false, directive:"cancel" → terminal: MT will never take this subscription
+ *                                        (no slot / unknown customer / not brokered to this
+ *                                        operator). The Coalition cancels it at Stripe, THEN
+ *                                        acks. Nothing was charged: it is still in trial.
+ *   accepted:false, no directive       → MT declined; `reason` says whether that is benign.
+ *
+ * Non-2xx bodies (`{error}`) are transport failures and are not described here.
+ */
+export const PaymentRelayResponse = z.object({
+  ok: z.literal(true),
+  accepted: z.boolean(),
+  /** On an accepted `subscription.created`: the rental code the hub minted. */
+  rentalCode: z.string().min(1).optional(),
+  directive: z.literal("cancel").optional(),
+  reason: z.string().min(1).optional(),
+});
+export type PaymentRelayResponse = z.infer<typeof PaymentRelayResponse>;
+
 // ───────────────────────────────────────────────────────────────────────────
 // 3. job  —  MT → on-prem agent (claim response)
 //    Provision/teardown instruction the agent PULLS. Carries NO hypervisor creds
