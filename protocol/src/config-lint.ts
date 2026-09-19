@@ -766,29 +766,6 @@ export function normalizeInventory(parsed: unknown): InventoryHost[] | null {
   return null;
 }
 
-/** Rules 2 + 3, over inventory.json. */
-/**
- * ⭐ Two sources, one fact: `inventory.json` vs the agent's `PROXMOX_STORAGE_*`.
- *
- * These describe the same storage twice and only ONE of them reaches the hypervisor.
- * `inventory.json` is what the agent DECLARES to Flux Hub — it becomes `ProxmoxHost.storageIso`
- * in the hub's database, so it is what every dashboard, every query and every operator
- * eyeballing the DB will show. But `buildProvisionYaml` reads `cfg.host`, which comes from
- * the ENV VARS alone (`agent/src/config.ts`), so the env is what actually provisions.
- *
- * Measured 2026-08-29: an operator corrected `storageIso` in `inventory.json`, the hub's DB
- * duly updated to the right value, the correction was verified there — and the next provision
- * failed identically, because `PROXMOX_STORAGE_ISO` still held the old one. The DB agreeing
- * with you is not evidence, and that is precisely what makes this worth a check: the obvious
- * place to look is authoritative for everything EXCEPT the thing being debugged.
- *
- * Was an error — a divergence here did not degrade, it failed a provision. **Since agent
- * 0.11.24 the inventory host row is honoured** (`slot → inventory host → env`, executor.ts
- * `effectiveHost`), so the declared value IS what provisions and the env line is a default.
- * Kept as a warning for two reasons: an operator still on an older agent provisions with the
- * env value, and a default that never applies is a line worth knowing about. Only when both
- * files are present and both name the same host.
- */
 /**
  * `availableSlots` against the hardware inventory.json declares (tom, 2026-09-19: the
  * marketplace said "7 of 22 free" while 8 were actually free — the listing still carried
@@ -863,47 +840,7 @@ export function lintListingCapacity(
   return findings;
 }
 
-export function lintStorageAgreement(
-  inventoryText: string,
-  operator: Record<string, string>,
-  file = ".env.operator"
-): Finding[] {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(inventoryText);
-  } catch {
-    return []; // lintInventory reports malformed JSON; no need to say it twice.
-  }
-  const hosts = Array.isArray(parsed) ? parsed : [];
-  const findings: Finding[] = [];
-  for (const raw of hosts) {
-    const h = raw as Record<string, unknown>;
-    const name = typeof h.name === "string" ? h.name : "(unnamed host)";
-    for (const [key, invField] of [
-      ["PROXMOX_STORAGE_ISO", "storageIso"],
-      ["PROXMOX_STORAGE_IMAGES", "storageImages"],
-      ["PROXMOX_NETWORK", "network"],
-    ] as const) {
-      const declared = h[invField];
-      const used = operator[key];
-      // Only compare when the inventory actually states it. An absent field means "use the
-      // agent default", which is not a disagreement.
-      if (typeof declared !== "string" || !declared || !used || declared === used) continue;
-      findings.push({
-        rule: "STORAGE_DECLARED_NOT_USED",
-        severity: "warning",
-        file,
-        message:
-          `${key}="${used}" in .env.operator but the inventory declares ${invField}="${declared}" for host ` +
-          `${name}. From agent 0.11.24 the inventory value provisions and the env line is only the ` +
-          `default for hosts that declare nothing; an OLDER agent provisions with "${used}" and ` +
-          `reports "${declared}" to Flux Hub. Check \`fh-agent version\`, then set both to be sure.`,
-      });
-    }
-  }
-  return findings;
-}
-
+/** Rules 2 + 3, over inventory.json. */
 export function lintInventory(
   inventoryText: string,
   hostsFromConfig: string[],
@@ -1170,7 +1107,6 @@ export function runDoctor(input: DoctorInput): DoctorReport {
     );
     // Needs both files, so it lives here rather than in either one's own linter.
     if (input.envOperator != null) {
-      findings.push(...lintStorageAgreement(input.inventoryJson, operatorRec));
       findings.push(...lintListingCapacity(input.inventoryJson, operatorRec));
     }
   }
