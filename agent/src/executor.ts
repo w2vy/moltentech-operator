@@ -4,8 +4,9 @@ import { writeFileSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
-import type { Job, FailureClass } from "@moltentech/protocol";
+import type { Job, FailureClass, InventoryHost } from "@moltentech/protocol";
 import type { AgentConfig } from "./config";
+import { reloadInventory } from "./config";
 import { checkOwnerAuth } from "./owner-auth";
 import { allocateVmId, VMID_MIN, VMID_MAX } from "./vmid";
 import { getClusterVmIds } from "./health";
@@ -44,7 +45,33 @@ function yamlStr(v: string | number): string {
  * identity_key, tx_id, discord/telegram) MUST NOT be interpolated raw, or a crafted
  * value with newlines could inject sibling YAML keys (e.g. override `hypervisor`).
  */
-export function buildProvisionYaml(job: Job, cfg: AgentConfig, vmIdOverride?: number): string {
+/**
+ * The host settings a provision runs with: `slot` → inventory host → `.env.operator`.
+ *
+ * Until 0.11.24 the inventory's host-level `network` / `storageImages` / `storageIso` were
+ * reported to the hub and then IGNORED here — `PROXMOX_*` in .env.operator was the only
+ * fallback under the slot. A fleet with different bridges per host (pve20 vmbr186, pve40
+ * vmbr184, the rest vmbr0) had to carry the bridge on every slot, and doctor's
+ * STORAGE_DECLARED_NOT_USED existed only to shout about the dead fields (tom, 2026-09-19:
+ * "the PROXMOX defaults are more trouble than they're worth"). Now the inventory host row
+ * for the slot's node is honoured, and the env lines are what they read as: defaults.
+ */
+export function effectiveHost(cfg: AgentConfig, inventoryHost?: InventoryHost): AgentConfig["host"] {
+  if (!inventoryHost) return cfg.host;
+  return {
+    ...cfg.host,
+    network: inventoryHost.network ?? cfg.host.network,
+    storageImages: inventoryHost.storageImages ?? cfg.host.storageImages,
+    storageIso: inventoryHost.storageIso ?? cfg.host.storageIso,
+  };
+}
+
+/** The declared host row for a slot's Proxmox node, by `nodeName` then `name`. */
+export function inventoryHostFor(hosts: InventoryHost[], nodeName: string): InventoryHost | undefined {
+  return hosts.find((h) => h.nodeName === nodeName) ?? hosts.find((h) => h.name === nodeName);
+}
+
+export function buildProvisionYaml(job: Job, cfg: AgentConfig, vmIdOverride?: number, inventoryHost?: InventoryHost): string {
   const { slot, nodeConfig } = job;
   if (!nodeConfig) throw new Error(`Job ${job.jobId} has no nodeConfig (required to provision)`);
   // Fail here, with the fix in the message, rather than emitting `iso_name: ""` and
@@ -57,7 +84,7 @@ export function buildProvisionYaml(job: Job, cfg: AgentConfig, vmIdOverride?: nu
         "ISO auto-refresh keeps it current."
     );
   }
-  const h = cfg.host;
+  const h = effectiveHost(cfg, inventoryHost);
   const L: string[] = [];
   // D3-B: a rotated id, used only when MT sent no pin. `slot.vmId` still wins — that
   // is the operator's own per-slot `vmId` from inventory.json, a deliberate choice.
@@ -411,7 +438,8 @@ async function provision(job: Job, cfg: AgentConfig): Promise<ExecResult> {
   const yamlPath = join(tmpdir(), `mt-${job.jobId}-${randomUUID()}.yaml`);
   const rotated = await pickRotatedVmId(job, cfg);
   if (rotated != null) console.log(`[vmid] ${job.slot.vmName}: allocated ${rotated}`);
-  writeFileSync(yamlPath, buildProvisionYaml(job, cfg, rotated), { mode: 0o600 });
+  const invHost = inventoryHostFor(reloadInventory(cfg), job.slot.nodeName);
+  writeFileSync(yamlPath, buildProvisionYaml(job, cfg, rotated, invHost), { mode: 0o600 });
   try {
     const r = await runArcaneMage(["provision", "--json", "-c", yamlPath], cfg, TIMEOUT.provision);
     const ok = r.json?.ok === true;

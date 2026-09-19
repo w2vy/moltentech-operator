@@ -857,14 +857,18 @@ readable inside the agent container.
   `config.env` — FH rejects the *whole* assert with a 409 naming any unattested host.
 - ⚠️ **`lanIp` needs its CIDR suffix.** A bare `192.168.1.51` is interpreted as `/32`,
   the VM comes up with no route to its gateway, and the node never reaches the network.
-- `storageImages` / `storageIso` override the agent's defaults per host — use them when
-  hosts differ (see Step 0.2; this is where you keep VMs off the spinning disk).
+- `storageImages` / `storageIso` / `network` override the agent's `PROXMOX_*` defaults per
+  host — use them when hosts differ (see Step 0.2; this is where you keep VMs off the
+  spinning disk). Honoured at provision from agent **0.11.24**; older agents reported them to
+  Flux Hub and provisioned with the env value regardless (`doctor` warns
+  `STORAGE_DECLARED_NOT_USED` when the two differ).
 - ⚠️ **Repeat `network` and `storagePool` on every SLOT.** FH builds your `Slot` rows from
   the per-slot fields only, so a host-level-only value leaves every Slot row with an empty
   `storagePool`/`network` — silently, and `doctor` still passes because it checks the
-  host-level value you did write. Provisioning follows the same precedence
-  (`slot.storagePool ?? host.storageImages`, `slot.network ?? host.network`), so per-slot
-  values are also what let one machine carry slots on two bridges or two pools.
+  host-level value you did write. Provisioning precedence is **slot → inventory host →
+  `.env.operator`** (`slot.storagePool ?? host.storageImages ?? PROXMOX_STORAGE_IMAGES`,
+  same for `network`), so per-slot values are also what let one machine carry slots on
+  two bridges or two pools.
   `fh-toolkit init` writes both levels for you.
 - Omit optional fields like `vlan`/`rateLimit` rather than setting them `null`.
   `dns1`/`dns2` default to `8.8.8.8`/`1.1.1.1`.

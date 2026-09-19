@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { Job } from "@moltentech/protocol";
 import type { AgentConfig } from "./config";
-import { buildProvisionYaml, classifyAmFailure, amFailure, parseAmJson, redactToken, coerceVmId } from "./executor";
+import { inventoryHostFor, buildProvisionYaml, classifyAmFailure, amFailure, parseAmJson, redactToken, coerceVmId } from "./executor";
 import type { AmResult } from "./executor";
 
 // arcane-mage parses the config disk with PyYAML `yaml.safe_load`. Parse the generated
@@ -467,4 +467,48 @@ test("D3-B: no pin and no rotated id omits vm_id entirely", () => {
     nodes: { hypervisor: { vm_id?: number } }[];
   };
   assert.equal(doc.nodes[0]!.hypervisor.vm_id, undefined);
+});
+
+// 0.11.24 — the inventory's host row is honoured between the slot and the env defaults.
+// Before this the host-level network/storage fields were reported to the hub and ignored
+// at provision, so a fleet with per-host bridges had to repeat the bridge on every slot.
+test("provision precedence is slot → inventory host → .env.operator", () => {
+  const base = jobWith({
+    fluxId: "t1abcdefghijkmnopqrstuvwx",
+    fluxIdentityKey: "Kx1abcdefghijkmnopqrstuvwxyz0123456789ABCDEFGHJKLMN",
+    collateralTxid: "a".repeat(64),
+    collateralVout: 0,
+    discordUserId: null,
+    discordWebhook: null,
+    telegramBotToken: null,
+    telegramChatId: null,
+  });
+  const hyp = (doc: unknown) => (doc as { nodes: Array<{ hypervisor: Record<string, unknown> }> }).nodes[0]!.hypervisor;
+  const pve20 = { name: "pve20", nodeName: "pve20", network: "vmbr186", storageImages: "ss8", storageIso: "pve55-shared", slots: [] };
+
+  // Inventory host fills what the slot leaves null; env is not consulted for those.
+  const viaHost = hyp(safeLoad(buildProvisionYaml(base, cfg, undefined, pve20)));
+  assert.equal(viaHost.network, "vmbr186");
+  assert.equal(viaHost.storage_images, "ss8");
+  assert.equal(viaHost.storage_iso, "pve55-shared");
+  assert.equal(viaHost.storage_import, "local"); // no inventory field — env
+
+  // The slot still wins over its host.
+  const slotWins = { ...base, slot: { ...base.slot, network: "vmbr185", storagePool: "ss3" } } as Job;
+  const viaSlot = hyp(safeLoad(buildProvisionYaml(slotWins, cfg, undefined, pve20)));
+  assert.equal(viaSlot.network, "vmbr185");
+  assert.equal(viaSlot.storage_images, "ss3");
+  assert.equal(viaSlot.storage_iso, "pve55-shared");
+
+  // A host row with nothing declared, or no row at all, falls through to env — exactly as before.
+  const bare = hyp(safeLoad(buildProvisionYaml(base, cfg, undefined, { name: "pve20", nodeName: "pve20", slots: [] })));
+  assert.equal(bare.network, "vmbr0");
+  assert.equal(bare.storage_images, "local-lvm");
+  assert.deepEqual(hyp(safeLoad(buildProvisionYaml(base, cfg))), hyp(safeLoad(buildProvisionYaml(base, cfg, undefined, undefined))));
+
+  // Lookup: nodeName first, then name.
+  assert.equal(inventoryHostFor([pve20], "pve20"), pve20);
+  assert.equal(inventoryHostFor([{ ...pve20, name: "rack-a", nodeName: "pve20" }], "pve20")?.name, "rack-a");
+  assert.equal(inventoryHostFor([{ ...pve20, name: "pve20", nodeName: "node20" }], "pve20")?.nodeName, "node20");
+  assert.equal(inventoryHostFor([pve20], "pve99"), undefined);
 });

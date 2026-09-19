@@ -13,17 +13,22 @@ function opt(over: Partial<StorageOption> & { id: string }): StorageOption {
 }
 
 // ── attempt 3: "Storage type missing on hypervisor" ────────────────────────────────────
-test("⭐ inventory.json and PROXMOX_STORAGE_* disagreeing is an ERROR, not a note", () => {
+// Since agent 0.11.24 the inventory host row provisions (slot → inventory host → env), so
+// the disagreement is a warning that names the version boundary rather than an error —
+// but it still has to say which value wins on which agent.
+test("⭐ inventory.json and PROXMOX_STORAGE_* disagreeing is named, with which value wins on which agent", () => {
   const findings = lintStorageAgreement(
     JSON.stringify([{ name: "pve50", storageIso: "local", storageImages: "local-lvm" }]),
     { PROXMOX_STORAGE_ISO: "local-lvm", PROXMOX_STORAGE_IMAGES: "local-lvm" }
   );
   assert.equal(findings.length, 1);
   assert.equal(findings[0]!.rule, "STORAGE_DECLARED_NOT_USED");
-  assert.equal(findings[0]!.severity, "error");
+  assert.equal(findings[0]!.severity, "warning");
   // The message must say which one WINS. Knowing they differ is not enough to act on: the
-  // operator had already "fixed" this in the file that turned out not to matter.
-  assert.match(findings[0]!.message, /ENV value is what provisions/);
+  // operator had already "fixed" this in the file that turned out not to matter (2026-08-29,
+  // on an agent that only read the env).
+  assert.match(findings[0]!.message, /From agent 0.11.24 the inventory value provisions/);
+  assert.match(findings[0]!.message, /OLDER agent provisions with "local-lvm"/);
   assert.match(findings[0]!.message, /pve50/);
 });
 

@@ -1128,9 +1128,9 @@ configuration. Read it before anything else:
 | `PROXMOX_URL` | — | an address the **container** can reach: your Proxmox LAN IP, not `127.0.0.1` (which is the container's own loopback). Or run with `--network host` if the agent is on the Proxmox host |
 | `PROXMOX_TOKEN_ID` | — | e.g. `fh-agent@pve!agent` — a **credential, not a label**; renaming it breaks every Proxmox call |
 | `PROXMOX_TOKEN_SECRET` | — | |
-| `PROXMOX_NETWORK` | `vmbr0` | |
-| `PROXMOX_STORAGE_IMAGES` | `local-lvm` | ⚠️ the default is frequently the spinning disk — see `--check-proxmox` |
-| `PROXMOX_STORAGE_ISO` | `local` | must be readable by every host |
+| `PROXMOX_NETWORK` | `vmbr0` | the default for a host whose inventory row and slot declare no `network` (agent ≥ 0.11.24; older agents used it for every host) |
+| `PROXMOX_STORAGE_IMAGES` | `local-lvm` | same rule — a default under the slot's `storagePool` and the host's `storageImages`. ⚠️ the default is frequently the spinning disk — see `--check-proxmox` |
+| `PROXMOX_STORAGE_ISO` | `local` | default under the host's `storageIso`; must be readable by every host |
 | `PROXMOX_STORAGE_IMPORT` | `local` | |
 | `ARCANE_ISO` | `FluxLive.iso` | ⚠️ the default matches **no real file** — published builds are dated, e.g. `FluxLive-1775071308.iso`. Set the exact filename in `PROXMOX_STORAGE_ISO`, or declare inventory and let ISO auto-refresh fill it in. `doctor --check-proxmox` FAILs while it is wrong |
 | `OPERATOR_SSH_PUBKEY` | `""` | |
