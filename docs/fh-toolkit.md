@@ -613,7 +613,7 @@ previous bytes as `*.bak`, and says `Nothing to change` when the answers match.
 |---|---|---|---|
 | `slug` | hub, slug, VM prefix, name | `config.env` identity | yes (slug/prefix/name are manifest fields) |
 | `proxmox` | URL, token id, token secret — probed | `.env.operator` `PROXMOX_URL/TOKEN_ID/TOKEN_SECRET` | never (not a manifest field) |
-| `stripe` | tiers + prices (floors from the hub), Stripe keys | `TIER_PRICES_JSON` in `config.env`, `AGENT_LISTING_JSON` in `.env.operator`, `STRIPE_*` in `secrets.env` | no — prints the `sign` + re-paste steps, as `level` does |
+| `stripe` | tiers + prices (floors from the hub), Stripe keys | `TIER_PRICES_JSON` in `config.env`, `AGENT_LISTING_JSON` in `.env.operator`, `STRIPE_*` in `secrets.env` | never (price is not a manifest field) — prints the `env` + `fh-agent restart` steps |
 | `inventory` | hosts, storage, slots | `data/inventory.json`, `HOSTS` in `config.env`, `PROXMOX_STORAGE_IMAGES/ISO` + listing counts in `.env.operator` | yes (`HOSTS` is `hardware[]`) |
 
 ### `proxmox`
@@ -648,8 +648,9 @@ follows `data/inventory.json` for a newly priced tier and keeps a hold-back you 
 No `secrets.env` yet → the `init` skeleton is written first (`MANIFEST_KEY` from the key,
 a generated `SESSION_SECRET`) and the Stripe block added to it.
 
-`TIER_PRICES_JSON` is a manifest field, so the closing steps are `sign` → re-paste at
-`/onboard`, then `fh-agent restart` when the listing changed. On a
+`TIER_PRICES_JSON` is NOT a manifest field (the manifest carries identity and hardware, never
+price), so the closing steps are `env` → re-import into the Flux app, then `fh-agent restart`
+when the listing changed — no re-sign. On a
 Supporter it writes the prices and says so: nothing is for sale until `level --set operator`.
 
 ### `inventory`
@@ -1161,7 +1162,7 @@ store. It is not a middlebox on your network and not a Proxmox certificate probl
 | `/onboard` gave me a key | put it in `secrets.env`, then `doctor` |
 | Everything is filled in — is it right? | `doctor`, then `doctor --check-proxmox --check-stripe` |
 | I edited `config.env` | `sign`, then `env`, then re-import to Flux |
-| I changed a price | `stripe --price <tier>=<usd>` → `sign` → re-paste at `/onboard` → `env` → re-import |
+| I changed a price | `stripe --price <tier>=<usd>` → `env` → re-import → `fh-agent restart`. **No re-sign** (prices are not in the manifest) |
 | Stripe minted my webhook secret | `stripe --stripe-webhook whsec_…` |
 | I added a Proxmox host or slot | `inventory` (Enter through the rest) → **re-paste at `/onboard`** → `env` → re-import |
 | I rotated the Proxmox token | `proxmox`, then `fh-agent restart` |

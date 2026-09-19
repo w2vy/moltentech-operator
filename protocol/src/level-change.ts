@@ -333,12 +333,15 @@ export function planSellingChange(input: Omit<LevelChangeInput, "target">): Leve
 function sellingNextSteps(o: { manifestField: boolean; stripe: boolean; listingChanged: boolean; hubBaseUrl?: string }): string[] {
   const hub = o.hubBaseUrl ?? "https://fluxhub.moltentech.us";
   const steps: string[] = [];
+  // Price is deliberately NOT a manifest field (see manifest.ts's trust model): the Coalition
+  // reads TIER_PRICES_JSON from its runtime env and the hub learns prices from the agent's
+  // listing. So a price change is `env` + re-import + `fh-agent restart` — never a re-sign.
   if (o.manifestField) {
     steps.push(
-      "TIER_PRICES_JSON is in your SIGNED manifest, so Flux Hub needs a re-ingest:",
-      "  1. fh-toolkit sign",
-      `  2. paste manifest.json at ${hub}/onboard and sign with your owner wallet`,
-      "     — the hub re-ingests there; nothing this command wrote reaches it until you do"
+      "TIER_PRICES_JSON is the Coalition's RUNTIME env (not in the signed manifest — no re-sign):",
+      "  1. fh-toolkit env",
+      "  2. re-import env.json into the Flux app and redeploy",
+      `     — the hub (${hub}) learns the new price from your agent's listing, not from the manifest`
     );
   }
   if (o.stripe) {

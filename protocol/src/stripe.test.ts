@@ -26,7 +26,8 @@ test("existing: a price change lands in config.env AND the agent's listing; the 
     { tier: "nimbus", priceCents: 1200, availableSlots: 0 },
   ]);
   assert.ok(existsSync(join(dir, "config.env.bak")));
-  assert.match(log, /TIER_PRICES_JSON is in your SIGNED manifest/);
+  assert.match(log, /TIER_PRICES_JSON is the Coalition's RUNTIME env/);
+  assert.doesNotMatch(log, /fh-toolkit sign/);
   assert.match(log, /force-recreate/);
   assert.equal(readEnvValue(readFileSync(join(dir, "secrets.env"), "utf8"), "STRIPE_SECRET_KEY"), "rk_test_old", "keys untouched when not given");
 });
