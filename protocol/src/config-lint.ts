@@ -782,8 +782,12 @@ export function normalizeInventory(parsed: unknown): InventoryHost[] | null {
  * with you is not evidence, and that is precisely what makes this worth a check: the obvious
  * place to look is authoritative for everything EXCEPT the thing being debugged.
  *
- * Errors rather than warns on the ISO/images pair — a divergence here does not degrade, it
- * fails a provision — but only when both files are present and both name the same host.
+ * Was an error — a divergence here did not degrade, it failed a provision. **Since agent
+ * 0.11.24 the inventory host row is honoured** (`slot → inventory host → env`, executor.ts
+ * `effectiveHost`), so the declared value IS what provisions and the env line is a default.
+ * Kept as a warning for two reasons: an operator still on an older agent provisions with the
+ * env value, and a default that never applies is a line worth knowing about. Only when both
+ * files are present and both name the same host.
  */
 /**
  * `availableSlots` against the hardware inventory.json declares (tom, 2026-09-19: the
@@ -887,13 +891,13 @@ export function lintStorageAgreement(
       if (typeof declared !== "string" || !declared || !used || declared === used) continue;
       findings.push({
         rule: "STORAGE_DECLARED_NOT_USED",
-        severity: "error",
+        severity: "warning",
         file,
         message:
-          `${key}="${used}" but data/inventory.json declares ${invField}="${declared}" for host ` +
-          `${name}. The ENV value is what provisions; the inventory value is only what Flux Hub ` +
-          `is told. Checking the hub's database would show "${declared}" and look correct while ` +
-          `every provision uses "${used}". Set both.`,
+          `${key}="${used}" in .env.operator but the inventory declares ${invField}="${declared}" for host ` +
+          `${name}. From agent 0.11.24 the inventory value provisions and the env line is only the ` +
+          `default for hosts that declare nothing; an OLDER agent provisions with "${used}" and ` +
+          `reports "${declared}" to Flux Hub. Check \`fh-agent version\`, then set both to be sure.`,
       });
     }
   }
