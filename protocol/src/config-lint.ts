@@ -988,6 +988,12 @@ export interface DoctorInput {
    * stays in the CLI so this function is pure.
    */
   nameCheck?: NameCheckResponse | null;
+  /**
+   * What to call the inventory in the summary line — its path as the agent's own
+   * `AGENT_INVENTORY_PATH` resolves it (inventory-source.ts), so the operator can see
+   * WHICH file was linted. Defaults to the legacy `inventory.json`.
+   */
+  inventoryLabel?: string;
 }
 
 export interface DoctorReport {
@@ -1148,7 +1154,7 @@ export function runDoctor(input: DoctorInput): DoctorReport {
   }
 
   if (input.inventoryJson != null) {
-    filesChecked.push("inventory.json");
+    filesChecked.push(input.inventoryLabel ?? "inventory.json");
     const prefix = configRec.PROVIDER_VM_PREFIX;
     findings.push(
       ...lintInventory(
@@ -1356,9 +1362,14 @@ export function formatReport(report: DoctorReport): { text: string; ok: boolean 
     if (unproven.length === 0) {
       lines.push("everything agrees.");
     } else {
-      lines.push("every file agrees, but these live checks proved nothing:");
+      lines.push("every file agrees, but these checks proved nothing:");
       for (const name of unproven) lines.push(`  ? ${name}`);
     }
+  } else if (unproven.length > 0) {
+    // With findings present the count alone ("2 unproven") hides WHICH check was skipped —
+    // and a missing inventory skips four rules at once. Name them either way.
+    lines.push("unproven:");
+    for (const name of unproven) lines.push(`  ? ${name}`);
   }
   if (actionable.length > 0) {
     lines.push("");

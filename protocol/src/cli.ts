@@ -131,6 +131,7 @@ import {
   type SlotAnswer,
 } from "./scaffold";
 import { verifyManifestOwnerSignature } from "./wallet";
+import { resolveInventorySource } from "./inventory-source";
 import {
   generateEd25519,
   exportPrivateKeyPem,
@@ -1275,8 +1276,10 @@ interface OperatorDir {
   operatorPath: string;
   operatorText: string | undefined;
   inventoryPath: string;
+  /** What to call the inventory file in output — its path relative to the dir, plus how it was found. */
+  inventoryLabel: string;
   inventoryText: string | undefined;
-  /** Declared slots per tier from data/inventory.json; `availableSlots` derives from it. */
+  /** Declared slots per tier from the inventory; `availableSlots` derives from it. */
   slotCounts: Record<string, number>;
   /** data/inventory.json as `HostAnswer`s, for re-run defaults. Empty when absent or unreadable. */
   currentHosts: HostAnswer[];
@@ -1324,6 +1327,20 @@ function hostsFromInventory(inventoryText: string): HostAnswer[] {
   return hosts;
 }
 
+/**
+ * The inventory file the AGENT reads, resolved from `.env.operator` + compose.yaml — see
+ * `inventory-source.ts`. `label` is what to print; `relPath` is where to read/write.
+ */
+function locateInventory(dir: string): { relPath: string; label: string; inlineText?: string } {
+  const operatorPath = join(dir, ".env.operator");
+  const operator = existsSync(operatorPath) ? parseConfigEnv(readFileSync(operatorPath, "utf8")) : undefined;
+  const composePath = ["compose.yaml", "compose.yml", "docker-compose.yml"].map((f) => join(dir, f)).find((p) => existsSync(p));
+  const compose = composePath ? readFileSync(composePath, "utf8") : undefined;
+  const src = resolveInventorySource(operator, compose, (rel) => existsSync(join(dir, rel)));
+  if (src.kind === "inline") return { relPath: "data/inventory.json", label: src.label, inlineText: src.text };
+  return { relPath: src.relPath, label: src.label };
+}
+
 function readOperatorDir(cmd: string, dir: string): OperatorDir {
   const configPath = join(dir, "config.env");
   if (!existsSync(configPath)) {
@@ -1332,8 +1349,9 @@ function readOperatorDir(cmd: string, dir: string): OperatorDir {
   const configText = readFileSync(configPath, "utf8");
   const secretsPath = join(dir, "secrets.env");
   const operatorPath = join(dir, ".env.operator");
-  const inventoryPath = join(dir, "data", "inventory.json");
-  const inventoryText = existsSync(inventoryPath) ? readFileSync(inventoryPath, "utf8") : undefined;
+  const inv = locateInventory(dir);
+  const inventoryPath = join(dir, inv.relPath);
+  const inventoryText = inv.inlineText ?? (existsSync(inventoryPath) ? readFileSync(inventoryPath, "utf8") : undefined);
   const currentHosts = inventoryText !== undefined ? hostsFromInventory(inventoryText) : [];
   const slotCounts: Record<string, number> = {};
   for (const h of currentHosts) for (const sl of h.slots) slotCounts[sl.tier] = (slotCounts[sl.tier] ?? 0) + 1;
@@ -1348,6 +1366,7 @@ function readOperatorDir(cmd: string, dir: string): OperatorDir {
     operatorPath,
     operatorText: existsSync(operatorPath) ? readFileSync(operatorPath, "utf8") : undefined,
     inventoryPath,
+    inventoryLabel: inv.relPath,
     inventoryText,
     slotCounts,
     currentHosts,
@@ -1930,7 +1949,7 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
         .flatMap((h) => h.slots.map((sl) => sl.vmName))
         .filter((v) => !hosts.some((h) => h.slots.some((sl) => sl.vmName === v)));
 
-      console.log(`\ndata/inventory.json: ${hosts.length} host(s), ${hosts.reduce((n, h) => n + h.slots.length, 0)} slot(s)${od.inventoryText !== undefined ? " (rewritten)" : ""}`);
+      console.log(`\n${od.inventoryLabel}: ${hosts.length} host(s), ${hosts.reduce((n, h) => n + h.slots.length, 0)} slot(s)${od.inventoryText !== undefined ? " (rewritten)" : ""}`);
       if (hostsChanged) console.log(`  config.env    HOSTS: ${od.env.HOSTS ?? "(unset)"} → ${hosts.map((h) => h.name).join(",")}`);
       if (operatorText !== undefined && operatorText !== od.operatorText) console.log("  .env.operator PROXMOX_STORAGE_IMAGES/ISO from the first host; AGENT_LISTING_JSON counts refreshed");
       if (od.operatorText === undefined) console.log("  (no .env.operator here — run `fh-toolkit proxmox` to create it; the storage lines come from this file)");
@@ -1944,7 +1963,7 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
 
       mkdirSync(join(od.dir, "data"), { recursive: true, mode: 0o755 });
       const wrote: string[] = [];
-      if (writeWithBackup(od.inventoryPath, od.inventoryText, inventoryText, 0o644)) wrote.push("data/inventory.json");
+      if (writeWithBackup(od.inventoryPath, od.inventoryText, inventoryText, 0o644)) wrote.push(od.inventoryLabel);
       if (writeWithBackup(od.configPath, od.configText, configText)) wrote.push("config.env");
       if (operatorText !== undefined && writeWithBackup(od.operatorPath, od.operatorText, operatorText)) wrote.push(".env.operator");
       // HOSTS is `hardware[]` in the signed manifest.
@@ -1960,8 +1979,8 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
       if (wrote.includes(".env.operator")) {
         console.log("\n.env.operator changed, which the agent reads ONLY at start:");
         console.log("  fh-agent restart    (= docker compose up -d --force-recreate; `docker restart` does NOT reload it)");
-      } else if (wrote.includes("data/inventory.json")) {
-        console.log("\nThe agent re-reads data/inventory.json on its next cycle — nothing to restart.");
+      } else if (wrote.includes(od.inventoryLabel)) {
+        console.log(`\nThe agent re-reads ${od.inventoryLabel} on its next cycle — nothing to restart.`);
       }
       return 0;
     }
@@ -2204,9 +2223,10 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
         const p = join(dir, f);
         return existsSync(p) ? readFileSync(p, "utf8") : undefined;
       };
-      // inventory.json sits beside the others during onboarding but is mounted at
-      // data/ once the agent runs, so look in both rather than reporting it missing.
-      const inventory = read(join("data", "inventory.json")) ?? read("inventory.json");
+      // The inventory is wherever the AGENT reads it — AGENT_INVENTORY_JSON / AGENT_INVENTORY_PATH
+      // through the compose mounts — not a layout doctor assumes (inventory-source.ts).
+      const invSrc = locateInventory(dir);
+      const inventory = invSrc.inlineText ?? read(invSrc.relPath);
       const configText = read("config.env");
       // Price rules come from MT itself when we can reach it — the minimum is MT's to
       // set, and a copy in this repo is only a fallback. MT_BASE_URL is read from the
@@ -2223,10 +2243,16 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
         secretsEnv: read("secrets.env"),
         envOperator: read(".env.operator"),
         inventoryJson: inventory,
+        inventoryLabel: invSrc.label,
         manifestJson: read("manifest.json"),
         tierMinimums,
         nameCheck,
       });
+      // Silence about the inventory read as "checked" in the 2026-09-19 case: the file
+      // sat under config/ and every inventory rule was skipped without a word.
+      if (inventory === undefined) {
+        report.unproven = [...(report.unproven ?? []), `inventory: nothing at ${invSrc.label} — hosts, slot names, storage and listing counts unchecked`];
+      }
       if (mtBaseUrl && configText && nameCheck === null) {
         report.unproven = [...(report.unproven ?? []), `name check: could not reach ${mtBaseUrl} — slug, prefix and VM names unchecked against the hub`];
       }
@@ -2395,8 +2421,9 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
       // "for sale" the agent actually asserts — see planLevelChange for the 2026-09-10 miss.
       const operatorPath = join(dir, ".env.operator");
       const operatorText = existsSync(operatorPath) ? readFileSync(operatorPath, "utf8") : undefined;
-      const inventoryPath = join(dir, "data", "inventory.json");
-      const inventoryText = existsSync(inventoryPath) ? readFileSync(inventoryPath, "utf8") : undefined;
+      const invSrc = locateInventory(dir);
+      const inventoryPath = join(dir, invSrc.relPath);
+      const inventoryText = invSrc.inlineText ?? (existsSync(inventoryPath) ? readFileSync(inventoryPath, "utf8") : undefined);
       const slotCounts: Record<string, number> = {};
       if (inventoryText !== undefined) {
         try {
