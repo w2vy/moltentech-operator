@@ -560,3 +560,46 @@ test("the hub's name verdicts become findings, one rule per kind; null or omitte
   const reserved = runDoctor({ ...base, nameCheck: { advisory: true, vmNamePrefix: { value: "fh-", available: false, reason: "reserved" } } });
   assert.deepEqual(rules(reserved), ["VM_PREFIX_RESERVED"]);
 });
+
+test("doctor compares availableSlots with the hardware inventory.json declares (tom, 2026-09-19)", () => {
+  // Two cumulus slots on one host; the listing is the variable.
+  const inventory = JSON.stringify([
+    {
+      name: "pve30",
+      nodeName: "pve30",
+      slots: [
+        { tier: "cumulus", vmName: "mt-1-c1", ipAddress: "1.2.3.4", gateway: "1.2.3.1", apiPort: 16127 },
+        { tier: "cumulus", vmName: "mt-1-c2", ipAddress: "1.2.3.4", gateway: "1.2.3.1", apiPort: 16137 },
+      ],
+    },
+  ]);
+  const base =
+    "COALITION_URL=https://c.example\nMANIFEST_KEY=x\nOWNER_ADDRESS=1abc\n" +
+    "PROXMOX_TOKEN_ID=mt-agent@pve!agent\nPROXMOX_TOKEN_SECRET=uuid\n";
+  const run = (listing: string) =>
+    runDoctor({
+      configEnv: 'PROVIDER_SLUG=acme\nHOSTS=pve30\nPROVIDER_VM_PREFIX=mt-\nTIER_PRICES_JSON={"cumulus":700}\n',
+      envOperator: base + `AGENT_LISTING_JSON=${listing}\n`,
+      inventoryJson: inventory,
+    }).findings.filter((f) => f.rule.startsWith("LISTING_"));
+
+  // Stale from a previous stock-take, above what exists: warned, never an error (the hub clamps).
+  const above = run('[{"tier":"cumulus","priceCents":700,"availableSlots":7}]');
+  assert.equal(above.length, 1);
+  assert.equal(above[0]!.rule, "LISTING_ABOVE_HARDWARE");
+  assert.equal(above[0]!.severity, "warning");
+  assert.match(above[0]!.message, /offers 7 slots but inventory.json declares 2/);
+
+  // Holding slots back: a throttle or a forgotten update — say which count, let them decide.
+  const below = run('[{"tier":"cumulus","priceCents":700,"availableSlots":1}]');
+  assert.equal(below.length, 1);
+  assert.equal(below[0]!.rule, "LISTING_HOLDS_BACK");
+  assert.match(below[0]!.message, /offers 1 of the 2 slots/);
+
+  // Exactly the hardware: quiet.
+  assert.deepEqual(run('[{"tier":"cumulus","priceCents":700,"availableSlots":2}]'), []);
+
+  // A tier with no declared slots at all: "above" (0 declared), which is the same stale-number story.
+  const ghost = run('[{"tier":"cumulus","priceCents":700,"availableSlots":2},{"tier":"nimbus","priceCents":2000,"availableSlots":1}]');
+  assert.deepEqual(ghost.map((f) => f.rule), ["LISTING_ABOVE_HARDWARE"]);
+});

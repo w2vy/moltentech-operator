@@ -785,6 +785,80 @@ export function normalizeInventory(parsed: unknown): InventoryHost[] | null {
  * Errors rather than warns on the ISO/images pair — a divergence here does not degrade, it
  * fails a provision — but only when both files are present and both name the same host.
  */
+/**
+ * `availableSlots` against the hardware inventory.json declares (tom, 2026-09-19: the
+ * marketplace said "7 of 22 free" while 8 were actually free — the listing still carried
+ * the count from a previous stock-take). The hub clamps the listing to the LIVE available
+ * count, so neither direction can oversell; both are warnings about a number that no
+ * longer says what the operator meant:
+ *  - above the hardware: a slot count that cannot be true — the hub ignores the excess.
+ *  - below the hardware: a deliberate throttle, or a stale number holding slots off the
+ *    market. Doctor cannot tell which, so it says what the count is and lets them decide.
+ * Inventory declares hardware, not what is rented, so "below" is measured against the
+ * declared slot count for the tier, not against what is free today.
+ */
+export function lintListingCapacity(
+  inventoryText: string,
+  operator: Record<string, string>,
+  file = ".env.operator"
+): Finding[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(inventoryText);
+  } catch {
+    return []; // lintInventory reports malformed JSON; no need to say it twice.
+  }
+  const hosts = normalizeInventory(parsed);
+  if (!hosts || !operator.AGENT_LISTING_JSON) return [];
+  let listing: unknown;
+  try {
+    listing = JSON.parse(operator.AGENT_LISTING_JSON);
+  } catch {
+    return []; // lintListing's finding.
+  }
+  if (!Array.isArray(listing)) return [];
+
+  const declared = new Map<string, number>();
+  for (const host of hosts) {
+    for (const slot of (host.slots ?? []) as { tier?: unknown }[]) {
+      if (typeof slot.tier === "string") declared.set(slot.tier, (declared.get(slot.tier) ?? 0) + 1);
+    }
+  }
+  // An inventory whose slots carry no tier (a skeleton, or a hand-written file) gives
+  // nothing to compare against; lintInventory owns that complaint.
+  if (declared.size === 0) return [];
+
+  const findings: Finding[] = [];
+  for (const entry of listing as { tier?: unknown; availableSlots?: unknown }[]) {
+    const tier = typeof entry.tier === "string" ? entry.tier : null;
+    const offered = entry.availableSlots;
+    if (!tier || !Number.isInteger(offered)) continue; // lintListing's finding.
+    const have = declared.get(tier) ?? 0;
+    if ((offered as number) > have) {
+      findings.push({
+        rule: "LISTING_ABOVE_HARDWARE",
+        severity: "warning",
+        file,
+        message:
+          `${tier}: AGENT_LISTING_JSON offers ${offered} slots but inventory.json declares ${have}. ` +
+          "Flux Hub clamps to what is live, so nothing oversells — but the number is stale. " +
+          "`fh-toolkit inventory` rewrites it from the stock-take.",
+      });
+    } else if ((offered as number) < have) {
+      findings.push({
+        rule: "LISTING_HOLDS_BACK",
+        severity: "warning",
+        file,
+        message:
+          `${tier}: AGENT_LISTING_JSON offers ${offered} of the ${have} slots inventory.json declares. ` +
+          "Fine if that is a deliberate throttle; if not, the marketplace shows fewer free slots " +
+          "than you have. `fh-toolkit inventory` sets it to the full count.",
+      });
+    }
+  }
+  return findings;
+}
+
 export function lintStorageAgreement(
   inventoryText: string,
   operator: Record<string, string>,
@@ -1087,6 +1161,7 @@ export function runDoctor(input: DoctorInput): DoctorReport {
     // Needs both files, so it lives here rather than in either one's own linter.
     if (input.envOperator != null) {
       findings.push(...lintStorageAgreement(input.inventoryJson, operatorRec));
+      findings.push(...lintListingCapacity(input.inventoryJson, operatorRec));
     }
   }
 
