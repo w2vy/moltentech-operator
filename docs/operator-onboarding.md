@@ -860,8 +860,8 @@ readable inside the agent container.
 - `storageImages` / `storageIso` / `network` override the agent's `PROXMOX_*` defaults per
   host — use them when hosts differ (see Step 0.2; this is where you keep VMs off the
   spinning disk). Honoured at provision from agent **0.11.24**; older agents reported them to
-  Flux Hub and provisioned with the env value regardless (`doctor` warns
-  `STORAGE_DECLARED_NOT_USED` when the two differ).
+  Flux Hub and provisioned with the env value regardless — `fh-agent version` before you rely
+  on a host-level value.
 - ⚠️ **Repeat `network` and `storagePool` on every SLOT.** FH builds your `Slot` rows from
   the per-slot fields only, so a host-level-only value leaves every Slot row with an empty
   `storagePool`/`network` — silently, and `doctor` still passes because it checks the
