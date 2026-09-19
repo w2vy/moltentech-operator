@@ -16,6 +16,7 @@ export interface StripeLike {
   billingPortal: { sessions: { create(args: Record<string, unknown>): Promise<{ url: string }> } };
   subscriptions: {
     retrieve(id: string): Promise<{ customer: string | { id: string } }>;
+    update(id: string, args: Record<string, unknown>): Promise<unknown>;
     cancel(id: string): Promise<unknown>;
   };
   prices: {
