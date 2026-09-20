@@ -56,33 +56,96 @@ async function fetchWatchedNodes(cfg: CoalitionConfig, fetchImpl: typeof fetch):
     .filter((n) => n.status && n.collateralTxid);
 }
 
-export type BenchmarkRead = {
-  /** `status` is a tier: what the lifecycle report carries. */
+export type NodeRead = {
+  /** `benchStatus` is a tier: what `benchmarkPassed` on the lifecycle report carries. */
   passed: boolean;
+  /** The node's API port answered (`/flux/info`, or the `getbenchmarks` fallback). */
+  apiReachable: boolean;
   /**
-   * The raw `benchmarking`/`status` word (`CUMULUS`, `running`, `failed`, …), or null when the
-   * node did not answer. `passed` alone cannot tell a failing node from one whose benchmark is
+   * The raw benchmark word (`CUMULUS`, `running`, `failed`, …), or null when the node did
+   * not answer. `passed` alone cannot tell a failing node from one whose benchmark is
    * mid-run — the first `benchmark_failed` on prod (2026-09-12) was a re-bench in progress.
    */
-  status: string | null;
+  benchStatus: string | null;
+  /** Raw `getfluxnodestatus` word: `expired` → `STARTED` → `CONFIRMED`; null if unread. */
+  nodeStatus: string | null;
+  /** FluxOS explorer scan height vs daemon tip — a readout, never a gate. */
+  scanHeight: number | null;
+  chainHeight: number | null;
 };
 
-/** Poll one node's Flux benchmark API from outside the operator LAN (hairpin-proof). */
-async function fetchBenchmark(node: AgentNode, fetchImpl: typeof fetch): Promise<BenchmarkRead> {
-  const url = `http://${node.host}:${node.apiPort}/benchmark/getbenchmarks`;
+const UNREACHABLE: NodeRead = {
+  passed: false,
+  apiReachable: false,
+  benchStatus: null,
+  nodeStatus: null,
+  scanHeight: null,
+  chainHeight: null,
+};
+
+/** GET one node-API path from outside the operator LAN (hairpin-proof); null on any failure. */
+async function nodeApiGet(node: AgentNode, apiPath: string, fetchImpl: typeof fetch): Promise<unknown> {
+  const url = `http://${node.host}:${node.apiPort}${apiPath}`;
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), NODE_TIMEOUT_MS);
   try {
     const res = await fetchImpl(url, { signal: ctrl.signal });
-    if (!res.ok) return { passed: false, status: null };
-    const json = (await res.json()) as { data?: { benchmarking?: string; status?: string } };
-    const benchStatus = json.data?.benchmarking ?? json.data?.status;
-    return { passed: !!benchStatus && PASSED_TIERS.has(benchStatus), status: benchStatus ?? null };
+    if (!res.ok) return null;
+    return (await res.json()) as unknown;
   } catch {
-    return { passed: false, status: null };
+    return null;
   } finally {
     clearTimeout(timer);
   }
+}
+
+const int = (v: unknown): number | null => (typeof v === "number" && Number.isInteger(v) && v >= 0 ? v : null);
+const word = (v: unknown): string | null => (typeof v === "string" && v ? v : null);
+
+/**
+ * Read one node's lifecycle facts in ONE public, unauthenticated `/flux/info` call:
+ * benchmark word, fluxnode status, explorer scan vs chain tip. A closed API port (the VM
+ * is still installing / downloading the bootstrap) is the Installing gate, and the only
+ * way to see it is this fetch failing.
+ *
+ * Falls back to `/benchmark/getbenchmarks` (what this module read before) when
+ * `/flux/info` is unavailable or carries no benchmark section — a FluxOS release that
+ * moves the field must not blind the Benchmark gate.
+ */
+async function fetchNode(node: AgentNode, fetchImpl: typeof fetch): Promise<NodeRead> {
+  const info = (await nodeApiGet(node, "/flux/info", fetchImpl)) as {
+    data?: {
+      benchmark?: { bench?: { status?: string } };
+      node?: { status?: { status?: string } };
+      daemon?: { info?: { blocks?: number } };
+      flux?: { explorerScannedHeigth?: { generalScannedHeight?: number } };
+    };
+  } | null;
+  const benchWord = word(info?.data?.benchmark?.bench?.status);
+  if (info?.data && benchWord) {
+    return {
+      passed: PASSED_TIERS.has(benchWord),
+      apiReachable: true,
+      benchStatus: benchWord,
+      nodeStatus: word(info.data.node?.status?.status),
+      scanHeight: int(info.data.flux?.explorerScannedHeigth?.generalScannedHeight),
+      chainHeight: int(info.data.daemon?.info?.blocks),
+    };
+  }
+  const bench = (await nodeApiGet(node, "/benchmark/getbenchmarks", fetchImpl)) as {
+    data?: { benchmarking?: string; status?: string };
+  } | null;
+  if (!bench) return UNREACHABLE;
+  const fallbackWord = word(bench.data?.benchmarking ?? bench.data?.status);
+  return {
+    ...UNREACHABLE,
+    apiReachable: true,
+    passed: !!fallbackWord && PASSED_TIERS.has(fallbackWord),
+    benchStatus: fallbackWord,
+    nodeStatus: word(info?.data?.node?.status?.status),
+    scanHeight: int(info?.data?.flux?.explorerScannedHeigth?.generalScannedHeight),
+    chainHeight: int(info?.data?.daemon?.info?.blocks),
+  };
 }
 
 /** Minimal read-only Flux public-API GET. Unwraps the {status,data} envelope. */
@@ -245,8 +308,9 @@ async function postLifecycleReport(
 }
 
 /**
- * One pass: fetch the nodes MT is watching, measure each (benchmark pass, collateral
- * confs, deterministic-list membership), report back to MT, and cache the snapshot for
+ * One pass: fetch the nodes MT is watching, measure each (API reachable, benchmark word,
+ * fluxnode status, scan height, collateral confs, deterministic-list membership), report
+ * back to MT, and cache the snapshot for
  * the /console visibility section. Covers both directions of the lifecycle — maturing
  * nodes on their way to `active`, and active nodes that may have lapsed off the list.
  */
@@ -254,8 +318,8 @@ export async function checkCollateralOnce(cfg: CoalitionConfig, fetchImpl: typeo
   const nodes = await fetchWatchedNodes(cfg, fetchImpl);
   const results = await Promise.all(
     nodes.map(async (node): Promise<LifecycleNodeStatus & { benchmarkStatus: string | null }> => {
-      const [bench, collateralConfs, onDeterministicList] = await Promise.all([
-        fetchBenchmark(node, fetchImpl),
+      const [read, collateralConfs, onDeterministicList] = await Promise.all([
+        fetchNode(node, fetchImpl),
         getCollateralConfirmations(cfg, node.collateralTxid!, fetchImpl),
         // Same `host:apiPort` this module already polls for benchmarks — the endpoint MT
         // assigned the slot, so it is what the list entry must agree with.
@@ -267,7 +331,18 @@ export async function checkCollateralOnce(cfg: CoalitionConfig, fetchImpl: typeo
           fetchImpl
         ),
       ]);
-      return { vmName: node.vmName, benchmarkPassed: bench.passed, collateralConfs, onDeterministicList, benchmarkStatus: bench.status };
+      return {
+        vmName: node.vmName,
+        benchmarkPassed: read.passed,
+        collateralConfs,
+        onDeterministicList,
+        apiReachable: read.apiReachable,
+        benchStatus: read.benchStatus,
+        nodeStatus: read.nodeStatus,
+        scanHeight: read.scanHeight,
+        chainHeight: read.chainHeight,
+        benchmarkStatus: read.benchStatus,
+      };
     })
   );
   // Edge-triggered hints (events.ts): a node that left the list or stopped passing since

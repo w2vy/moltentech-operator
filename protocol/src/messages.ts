@@ -572,6 +572,28 @@ export const LifecycleNodeStatus = z.object({
    * next tick, and only in the case where the Flux API was already unreadable.
    */
   onDeterministicList: z.boolean().nullable(),
+  /**
+   * Lifecycle GATES (hub `project_slot_lifecycle_syncing_state`, 2026-09-19). All optional
+   * and all read from ONE public `GET host:apiPort/flux/info` per node, so an old hub
+   * strips them (this object is not `.strict()`) and an old Coalition simply never sends
+   * them — the hub shows the gate as "unknown". No `SCHEMA_VERSION` bump.
+   *
+   * `apiReachable`  — the node's API port answered. false = still installing/downloading
+   *                   (the bootstrap image only opens the port once FluxOS is up).
+   * `benchStatus`   — raw `benchmark.bench.status` word: `running` | tier | `failed`.
+   *                   `benchmarkPassed` is derived from it; the raw word is what tells a
+   *                   mid-run bench from a failing one.
+   * `nodeStatus`    — raw `node.status.status` from getfluxnodestatus: `expired` →
+   *                   `STARTED` → `CONFIRMED`. The Started gate.
+   * `scanHeight` / `chainHeight` — FluxOS explorer scan vs daemon tip. NOT a gate (a node
+   *                   CONFIRMS long before the scan catches up); a progress readout only.
+   * All null when the API is unreachable.
+   */
+  apiReachable: z.boolean().optional(),
+  benchStatus: z.string().nullable().optional(),
+  nodeStatus: z.string().nullable().optional(),
+  scanHeight: z.number().int().nonnegative().nullable().optional(),
+  chainHeight: z.number().int().nonnegative().nullable().optional(),
 });
 export type LifecycleNodeStatus = z.infer<typeof LifecycleNodeStatus>;
 
