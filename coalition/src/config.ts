@@ -45,6 +45,13 @@ export type CoalitionConfig = {
    * the Coalition would not start at all without them. */
   stripeSecretKey?: string;
   stripeWebhookSecret?: string;
+  /**
+   * Pay-by-Flux: this operator accepts FLUX to the `fluxPayoutAddress` in their SIGNED
+   * manifest, so paid tiers may be listed with no Stripe keys at all. Written into env.json
+   * by `fh-toolkit env` when PROVIDER_FLUX_PAYOUT_ADDRESS is set; the hub does all the work
+   * (quote, chain watch, mint) — the Coalition only has to agree to boot.
+   */
+  fluxPayments: boolean;
   /** Path to the offline-signed manifest JSON served at /.well-known/mt-provider.json. */
   manifestPath: string;
   /**
@@ -127,6 +134,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CoalitionConfi
     mtPubkey: req(env, "MT_PUBKEY"),
     stripeSecretKey: env.STRIPE_SECRET_KEY || undefined,
     stripeWebhookSecret: env.STRIPE_WEBHOOK_SECRET || undefined,
+    fluxPayments: env.FLUX_PAYMENTS === "true",
     manifestPath: env.MANIFEST_PATH ?? "./manifest.json",
     manifestJson: env.MANIFEST_JSON || undefined,
     ownerAddress: env.OWNER_ADDRESS || undefined,
@@ -151,10 +159,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CoalitionConfi
     const missing = (["stripeSecretKey", "stripeWebhookSecret"] as const)
       .filter((k) => !cfg[k])
       .map((k) => (k === "stripeSecretKey" ? "STRIPE_SECRET_KEY" : "STRIPE_WEBHOOK_SECRET"));
-    if (missing.length > 0) {
+    // Pay-by-Flux is the other rail: with FLUX_PAYMENTS=true the paid tiers sell for FLUX
+    // and Stripe is optional (card payments simply stay off; /checkout answers 503).
+    if (missing.length > 0 && !cfg.fluxPayments) {
       throw new Error(
         `Missing required env ${missing.join(" and ")} — you list PAID tier(s): ` +
-          `${paidTiers.join(", ")}. Run with TIER_PRICES_JSON={} to sell nothing and skip Stripe.`
+          `${paidTiers.join(", ")}. Run with TIER_PRICES_JSON={} to sell nothing and skip Stripe, ` +
+          `or set FLUX_PAYMENTS=true (written by \`fh-toolkit env\` when PROVIDER_FLUX_PAYOUT_ADDRESS is set) to sell for FLUX only.`
       );
     }
   }

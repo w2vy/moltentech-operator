@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { FluxTAddress } from "./flux-address";
 import { Envelope, ProviderSlug, Timestamp, VmNamePrefix } from "./common";
 
 /**
@@ -86,6 +87,15 @@ export const ProviderManifestBody = Envelope.extend({
    * same reasoning as `trustedSelfClaim` below.
    */
   level: z.enum(["supporter", "operator"]).optional(),
+  /**
+   * Pay-by-Flux: the operator's own Flux CHAIN address (t1…/t3…) customers pay rentals to.
+   * Present = this operator accepts FLUX (with or without Stripe); absent = card payments only.
+   * The hub never holds the coins — it watches this address for the payment and mints the
+   * rental. Same rule as `level`: OPTIONAL and WITHOUT a default, so a legacy manifest's
+   * signed bytes are untouched. In the signed manifest, not the Coalition env, because the
+   * hub tells customers to send money here — it must be something the owner wallet signed.
+   */
+  fluxPayoutAddress: FluxTAddress.optional(),
   /** Operator-selectable free-trial window in days (1–30); MT defaults missing to 1. */
   trialDays: z.number().int().min(1).max(30).default(1),
   /** Cautious operators may require manual approval before provisioning a trial. */

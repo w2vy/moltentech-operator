@@ -146,6 +146,9 @@ export interface Answers {
    * who listed a paid tier; a self-hoster has no Stripe account to ask about. */
   stripeSecretKey?: string;
   stripeWebhookSecret?: string;
+  /** Pay-by-Flux: the operator's own Flux chain address (t1…/t3…) rentals are paid to.
+   * Signed in the manifest. Blank = card payments only. */
+  fluxPayoutAddress?: string;
   /**
    * The Coalition console's session secret. Any long random string — it has no
    * external issuer, so `init` GENERATES one when this is absent rather than sending
@@ -438,7 +441,15 @@ export function renderConfigEnv(a: Answers): string {
     "#   supporter = your own nodes + Foundation nodes on idle capacity; nothing for sale",
     "#   operator  = the above, plus hardware rented out through the marketplace",
     "# A supporter needs no Stripe account at all.",
-    `PROVIDER_LEVEL=${a.level ?? (isSelling(a) ? "operator" : "supporter")}`
+    `PROVIDER_LEVEL=${a.level ?? (isSelling(a) ? "operator" : "supporter")}`,
+    "",
+    "# PROVIDER_FLUX_PAYOUT_ADDRESS — accept FLUX for rentals, paid straight to this Flux",
+    "# CHAIN address of yours (t1…/t3… — the wallet's Flux receive address, NOT your ZelID/SSP",
+    "# login address). Flux Hub never holds the coins and takes no cut: it watches the address",
+    "# and hands over the node when the payment confirms. Blank = card payments only. With it",
+    "# set you may sell with no Stripe account at all. Signed in the manifest: changing it is a",
+    "# re-sign + re-paste.",
+    `PROVIDER_FLUX_PAYOUT_ADDRESS=${a.fluxPayoutAddress ?? ""}`
   );
   // ALWAYS emitted, even empty. An absent line is invisible: the operator has nothing
   // to notice and nothing to fill in, and the omission only surfaces at the first
@@ -531,7 +542,9 @@ export function renderSecretsEnv(
   if (opts.includeStripe) {
     lines.push(
       "",
-      "# Stripe — required because you listed at least one PAID tier.",
+      a.fluxPayoutAddress
+        ? "# Stripe — OPTIONAL for you: you accept FLUX (PROVIDER_FLUX_PAYOUT_ADDRESS in config.env),\n# so paid tiers sell without these. Fill them in to take cards as well."
+        : "# Stripe — required because you listed at least one PAID tier.",
       "# STRIPE_SECRET_KEY: Stripe dashboard > Developers > API keys (use a restricted key).",
       `STRIPE_SECRET_KEY=${a.stripeSecretKey ?? ""}`,
       "# STRIPE_WEBHOOK_SECRET: shown ONCE when you create the webhook endpoint.",
@@ -547,7 +560,8 @@ export function renderSecretsEnv(
       "# TIER_PRICES_JSON later and `fh-toolkit env` will tell you what it then needs.",
       "#",
       "# You can still run nodes: a rental an admin ASSIGNS to you needs no payment",
-      "# method at all. Stripe is what lets STRANGERS buy from you."
+      "# method at all. Stripe (or a PROVIDER_FLUX_PAYOUT_ADDRESS in config.env) is what",
+      "# lets STRANGERS buy from you."
     );
   }
   lines.push("");

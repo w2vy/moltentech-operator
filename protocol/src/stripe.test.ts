@@ -98,12 +98,34 @@ test("a supporter's prices are written with a warning that nothing is for sale u
 
 test("interactive: the same questions `init` asks a seller, floors from the hub", async () => {
   const dir = await scaffolded();
-  // tiers → price cumulus → price nimbus → stripe key → webhook
-  const { ctx, transcript } = ctxFor(dir, ["cumulus,nimbus", "8", "", "rk_test_int", ""]);
+  // tiers → price cumulus → price nimbus → flux payout address (blank) → stripe key → webhook
+  const { ctx, transcript } = ctxFor(dir, ["cumulus,nimbus", "8", "", "", "rk_test_int", ""]);
   const { result } = await quiet(() => runCommand("stripe", ["--dir", dir], ctx));
   assert.equal(result, 0);
   assert.match(transcript(), /floor \$2\.50/);
   assert.match(transcript(), /floor \$7\.00/);
   assert.deepEqual(readTierPrices(readFileSync(join(dir, "config.env"), "utf8")), { cumulus: 800, nimbus: 700 });
   assert.equal(readEnvValue(readFileSync(join(dir, "secrets.env"), "utf8"), "STRIPE_SECRET_KEY"), "rk_test_int");
+});
+
+test("interactive: a Flux payout address makes Stripe optional and lands in config.env", async () => {
+  const dir = await scaffolded();
+  const T1 = "t1d1FRcLh5nrF7ubbTzwV7KiqvA8bXKED8e";
+  // tiers → price → a ZelID (refused, re-asked) → the t1 → stripe key (blank) → webhook (blank)
+  const { ctx, transcript } = ctxFor(dir, ["cumulus", "8", "1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2", T1, "", ""]);
+  const { result } = await quiet(() => runCommand("stripe", ["--dir", dir], ctx));
+  assert.equal(result, 0);
+  // The transcript is the PROMPTS: the ZelID was refused and the question asked again.
+  assert.equal(transcript().split("Flux payout address").length - 1, 2, "re-asked once after the ZelID");
+  assert.equal(readEnvValue(readFileSync(join(dir, "config.env"), "utf8"), "PROVIDER_FLUX_PAYOUT_ADDRESS"), T1);
+});
+
+test("scripted: --flux-address writes the address; \"\" turns it off", async () => {
+  const dir = await scaffolded();
+  const T1 = "t1d1FRcLh5nrF7ubbTzwV7KiqvA8bXKED8e";
+  const { ctx } = ctxFor(dir, []);
+  assert.equal((await quiet(() => runCommand("stripe", ["--dir", dir, "--flux-address", T1, "--yes"], ctx))).result, 0);
+  assert.equal(readEnvValue(readFileSync(join(dir, "config.env"), "utf8"), "PROVIDER_FLUX_PAYOUT_ADDRESS"), T1);
+  assert.equal((await quiet(() => runCommand("stripe", ["--dir", dir, "--flux-address", "", "--yes"], ctx))).result, 0);
+  assert.equal(readEnvValue(readFileSync(join(dir, "config.env"), "utf8"), "PROVIDER_FLUX_PAYOUT_ADDRESS"), "");
 });

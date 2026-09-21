@@ -47,6 +47,7 @@
  * builds the wrapper itself. Reading a wrapper is still fully supported — see `env` and
  * `verify` above, which accept either shape.
  */
+import { isFluxTAddress, looksLikeZelId } from "./flux-address";
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { randomBytes } from "node:crypto";
@@ -419,6 +420,8 @@ export interface SellingAnswers {
   tierPricesCents: Record<string, number>;
   stripeSecretKey: string;
   stripeWebhookSecret: string;
+  /** Pay-by-Flux payout address (t1…/t3…); "" = card payments only. */
+  fluxPayoutAddress: string;
 }
 
 /**
@@ -473,12 +476,32 @@ export async function askSellingAnswers(
   // wait. Offer it, accept empty, and let `doctor` keep naming it.
   let stripeSecretKey = "";
   let stripeWebhookSecret = "";
+  let fluxPayoutAddress = "";
   if (Object.keys(tierPricesCents).length > 0) {
-    console.log("\nStripe — you are merchant of record; Flux Hub never holds these.");
+    // Pay-by-Flux first: with a payout address set, Stripe becomes optional, and the
+    // Stripe prompts below say so. The wallet's LOGIN address is the mistake to catch here
+    // — it decodes fine and is not a chain address.
+    console.log("\nPay by Flux — customers send FLUX straight to a chain address of yours; Flux Hub takes no cut.");
+    fluxPayoutAddress = await askUntil(
+      "  Flux payout address (t1…/t3… from your wallet's Flux chain), blank for card payments only",
+      (v) => {
+        const t = v.trim();
+        if (t === "" || isFluxTAddress(t)) return undefined;
+        return looksLikeZelId(t)
+          ? "that is a ZelID/SSP LOGIN address — open the wallet's Flux chain and copy its receive address (t1…)."
+          : `"${t}" is not a Flux t1…/t3… address.`;
+      },
+      ""
+    );
+    console.log(
+      fluxPayoutAddress
+        ? "\nStripe — optional for you (FLUX is on). Fill these in to take cards as well."
+        : "\nStripe — you are merchant of record; Flux Hub never holds these."
+    );
     stripeSecretKey = await ask("  STRIPE_SECRET_KEY (rk_… / sk_…), blank to fill in later", "");
     stripeWebhookSecret = await ask("  STRIPE_WEBHOOK_SECRET (whsec_…), blank if the endpoint does not exist yet", "");
   }
-  return { tierPricesCents, stripeSecretKey, stripeWebhookSecret };
+  return { tierPricesCents, stripeSecretKey, stripeWebhookSecret, fluxPayoutAddress: fluxPayoutAddress.trim() };
 }
 
 /**
@@ -1135,8 +1158,9 @@ async function askAnswers(ctx: Ctx): Promise<Answers> {
     let tierPricesCents: Record<string, number> = {};
     let stripeSecretKey = "";
     let stripeWebhookSecret = "";
+    let fluxPayoutAddress = "";
     if (level === "operator") {
-      ({ tierPricesCents, stripeSecretKey, stripeWebhookSecret } = await askSellingAnswers(
+      ({ tierPricesCents, stripeSecretKey, stripeWebhookSecret, fluxPayoutAddress } = await askSellingAnswers(
         ask,
         askUntil,
         minimums
@@ -1202,6 +1226,7 @@ async function askAnswers(ctx: Ctx): Promise<Answers> {
       proxmoxTokenSecret: proxmox.proxmoxTokenSecret || undefined,
       stripeSecretKey: stripeSecretKey || undefined,
       stripeWebhookSecret: stripeWebhookSecret || undefined,
+      fluxPayoutAddress: fluxPayoutAddress || undefined,
     };
   });
 }
@@ -1786,7 +1811,7 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
       // and the same three files `level --set operator` writes, minus the level itself.
       // Use it to price a tier, change a price, or paste the webhook secret once Stripe
       // has minted it. The level is reported, never changed here.
-      rejectUnknownFlags("stripe", args, ["--dir", "--price", "--stripe-key", "--stripe-webhook"], ["--dry-run", "--yes"]);
+      rejectUnknownFlags("stripe", args, ["--dir", "--price", "--stripe-key", "--stripe-webhook", "--flux-address"], ["--dry-run", "--yes"]);
       const od = readOperatorDir("stripe", dirFlag(args));
       const dryRun = args.includes("--dry-run");
       const yes = args.includes("--yes");
@@ -1796,10 +1821,13 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
       const cliPrices = parsePriceFlags(args);
       refuseBadPrices(cliPrices, minimums);
       const cliStripe = { secretKey: flag(args, "--stripe-key"), webhookSecret: flag(args, "--stripe-webhook") };
+      // `--flux-address t1…` turns Pay-by-Flux on; `--flux-address ""` turns it off.
+      const cliFlux = flag(args, "--flux-address");
 
       let askedPrices: Record<string, number> | undefined;
       let askedStripe: { secretKey?: string; webhookSecret?: string } | undefined;
-      const scripted = Object.keys(cliPrices).length > 0 || cliStripe.secretKey !== undefined || cliStripe.webhookSecret !== undefined;
+      let askedFlux: string | undefined;
+      const scripted = Object.keys(cliPrices).length > 0 || cliStripe.secretKey !== undefined || cliStripe.webhookSecret !== undefined || cliFlux !== undefined;
       if (!scripted && !yes) {
         await withPrompts(ctx, async (ask, askUntil) => {
           const have = readTierPrices(od.configText);
@@ -1814,6 +1842,7 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
             secretKey: selling.stripeSecretKey || undefined,
             webhookSecret: selling.stripeWebhookSecret || undefined,
           };
+          askedFlux = selling.fluxPayoutAddress;
         });
       }
 
@@ -1825,6 +1854,7 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
         ...(od.operatorText !== undefined ? { operatorText: od.operatorText } : {}),
         slotCounts: od.slotCounts,
         prices: { ...askedPrices, ...cliPrices },
+        fluxPayoutAddress: cliFlux ?? askedFlux,
         stripe: {
           secretKey: cliStripe.secretKey ?? askedStripe?.secretKey,
           webhookSecret: cliStripe.webhookSecret ?? askedStripe?.webhookSecret,
@@ -2186,7 +2216,11 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
       console.log("Next, in order:");
       console.log(`  1. open ${answers.mtBaseUrl}/onboard, paste manifest.json, sign with ${answers.ownerAddress}`);
       console.log("     → issues COALITION_SIGNING_KEY for secrets.env");
-      if (hasPaidTier(prices)) {
+      if (hasPaidTier(prices) && answers.fluxPayoutAddress) {
+        console.log(`  2. Pay by Flux: ON — rentals are paid to ${answers.fluxPayoutAddress}; nothing more to set up.`);
+        console.log("     Stripe is optional for you: to take cards as well, create the webhook endpoint");
+        console.log("     against your Coalition URL and fill in secrets.env.");
+      } else if (hasPaidTier(prices)) {
         console.log("  2. Stripe: create the webhook endpoint against your Coalition URL.");
         console.log("     ⚠️  the webhook secret is bound to THAT endpoint — a secret from another");
         console.log("         endpoint fails silently and checkout never completes.");
@@ -2399,7 +2433,7 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
       return 0;
     }
     case "level": {
-      rejectUnknownFlags("level", args, ["--dir", "--set", "--price", "--stripe-key", "--stripe-webhook"], ["--dry-run", "--yes"]);
+      rejectUnknownFlags("level", args, ["--dir", "--set", "--price", "--stripe-key", "--stripe-webhook", "--flux-address"], ["--dry-run", "--yes"]);
       // Two knobs, one command. PROVIDER_LEVEL and the Stripe pair are two halves of a
       // single decision ("do I sell hardware?"), and the only ways to change them before
       // this were `init --force` — which also mints a new SESSION_SECRET, blanks the three
@@ -2469,13 +2503,17 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
           .join(", ");
         console.log(`${pad("tiers for sale")}${tierList || "none"}`);
         const stripeKey = readEnvValue(secretsText, "STRIPE_SECRET_KEY");
+        const fluxPayout = readEnvValue(configText, "PROVIDER_FLUX_PAYOUT_ADDRESS");
+        console.log(`${pad("Pay by Flux")}${fluxPayout ? `ON — paid to ${fluxPayout}` : "off (PROVIDER_FLUX_PAYOUT_ADDRESS empty)"}`);
         console.log(
           `${pad("Stripe")}${
             stripeKey
               ? "configured"
               : current === "supporter"
                 ? "not configured — a Supporter needs no Stripe account"
-                : "NOT configured"
+                : fluxPayout
+                  ? "not configured — optional, you sell for FLUX"
+                  : "NOT configured"
           }`
         );
         console.log(
@@ -2501,9 +2539,11 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
         secretKey: flag(args, "--stripe-key"),
         webhookSecret: flag(args, "--stripe-webhook"),
       };
+      const cliFlux = flag(args, "--flux-address");
 
       let askedPrices: Record<string, number> | undefined;
       let askedStripe: { secretKey?: string; webhookSecret?: string } | undefined;
+      let askedFlux: string | undefined;
 
       if (target === "operator") {
         // Live floors, same rule and same fallback note as `init`.
@@ -2533,6 +2573,7 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
               secretKey: selling.stripeSecretKey || undefined,
               webhookSecret: selling.stripeWebhookSecret || undefined,
             };
+            askedFlux = selling.fluxPayoutAddress;
           });
         }
       }
@@ -2544,6 +2585,7 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
         slotCounts,
         target,
         prices: { ...askedPrices, ...cliPrices },
+        fluxPayoutAddress: cliFlux ?? askedFlux,
         stripe: {
           secretKey: cliStripe.secretKey ?? askedStripe?.secretKey,
           webhookSecret: cliStripe.webhookSecret ?? askedStripe?.webhookSecret,
@@ -2757,17 +2799,36 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
       // expressible: MT enforces a minimum (`TierInfo.minPriceCents`) and 422s anything
       // under it. Unrelated to a "free rental", which is an admin-ASSIGNED rental and
       // needs no Stripe account whatever the tier costs.
+      //
+      // Pay-by-Flux is the second rail: with PROVIDER_FLUX_PAYOUT_ADDRESS set (a signed
+      // manifest field, validated when the manifest was rendered), paid tiers sell without
+      // Stripe, and FLUX_PAYMENTS=true tells the Coalition to boot that way. The Coalition's
+      // own check mirrors this one.
       const paidTiers = Object.keys(prices as Record<string, number>);
+      const fluxPayout = (config.PROVIDER_FLUX_PAYOUT_ADDRESS ?? "").trim();
+      if (fluxPayout) {
+        if (!isFluxTAddress(fluxPayout)) die(`config.env: PROVIDER_FLUX_PAYOUT_ADDRESS is not a Flux t1…/t3… address: "${fluxPayout}"`);
+        put("FLUX_PAYMENTS", "true");
+      }
       if (paidTiers.length > 0) {
         const missing = ["STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET"].filter((k) => !secrets[k]);
-        if (missing.length > 0) {
+        if (missing.length > 0 && !fluxPayout) {
           die(
             `secrets.env: ${missing.join(" and ")} required because you list PAID tier(s): ` +
-              `${paidTiers.join(", ")}. Use TIER_PRICES_JSON={} to sell nothing and skip Stripe.`
+              `${paidTiers.join(", ")}. Use TIER_PRICES_JSON={} to sell nothing and skip Stripe, ` +
+              `or set PROVIDER_FLUX_PAYOUT_ADDRESS in config.env to sell for FLUX without Stripe.`
           );
         }
-        put("STRIPE_SECRET_KEY", secrets.STRIPE_SECRET_KEY);
-        put("STRIPE_WEBHOOK_SECRET", secrets.STRIPE_WEBHOOK_SECRET);
+        if (missing.length > 0) {
+          console.error(
+            `note: ${missing.join(" and ")} not set — card payments OFF; FLUX payments ON to ${fluxPayout}.`
+          );
+          if (secrets.STRIPE_SECRET_KEY) put("STRIPE_SECRET_KEY", secrets.STRIPE_SECRET_KEY);
+          if (secrets.STRIPE_WEBHOOK_SECRET) put("STRIPE_WEBHOOK_SECRET", secrets.STRIPE_WEBHOOK_SECRET);
+        } else {
+          put("STRIPE_SECRET_KEY", secrets.STRIPE_SECRET_KEY);
+          put("STRIPE_WEBHOOK_SECRET", secrets.STRIPE_WEBHOOK_SECRET);
+        }
       } else if (secrets.STRIPE_SECRET_KEY || secrets.STRIPE_WEBHOOK_SECRET) {
         // Present but not needed: pass them through rather than dropping a key the
         // operator deliberately set, since dropping it would be its own silent failure.
@@ -2915,14 +2976,14 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
       console.log("            against Flux Hub; before init, or later to re-check or move hubs");
       console.log("  proxmox   [--dir <dir>] [--url <u> --token-id <id> --token-secret <s>] [--no-probe] [--yes]");
       console.log("            the agent's Proxmox token in .env.operator, verified");
-      console.log("  stripe    [--dir <dir>] [--price <tier>=<usd>]... [--stripe-key <k>] [--stripe-webhook <k>]");
+      console.log("  stripe    [--dir <dir>] [--price <tier>=<usd>]... [--stripe-key <k>] [--stripe-webhook <k>] [--flux-address <t1…>]");
       console.log("            [--dry-run] [--yes]              prices, listing and Stripe keys — the selling block");
       console.log("  inventory [--dir <dir>] [--hosts <hosts.json>] [--dry-run]");
       console.log("            hosts, storage and slots → data/inventory.json, HOSTS, storage lines, listing counts");
       console.log("  (slug → proxmox → stripe → inventory is what `init` asks, one file at a time; each");
       console.log("   works instead of init on a fresh directory, or after setup to change one thing)");
       console.log("  level     [--dir <dir>]                      show your level, tiers and Stripe state");
-      console.log("            --set <supporter|operator> [--price <tier>=<usd>] [--stripe-key <k>]");
+      console.log("            --set <supporter|operator> [--price <tier>=<usd>] [--stripe-key <k>] [--flux-address <t1…>]");
       console.log("            [--stripe-webhook <k>] [--dry-run] [--yes]");
       console.log("  doctor    [--dir <dir>] [--check-proxmox] [--check-stripe] [--check-hub]");
       console.log("  sign      [--dir <dir>] [--key <pem>] [--from-config <config.env>|--in <body.json>]");

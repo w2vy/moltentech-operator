@@ -636,7 +636,7 @@ until `inventory` fills them. Existing: the three lines, in place — then
 ### `stripe`
 
 ```
-fh-toolkit stripe [--dir <dir>] [--price <tier>=<usd>]... [--stripe-key <k>] [--stripe-webhook <k>] [--dry-run] [--yes]
+fh-toolkit stripe [--dir <dir>] [--price <tier>=<usd>]... [--stripe-key <k>] [--stripe-webhook <k>] [--flux-address <t1…>] [--dry-run] [--yes]
 ```
 
 What you **sell** — the same questions `init` asks a seller, the same three files
@@ -652,6 +652,18 @@ a generated `SESSION_SECRET`) and the Stripe block added to it.
 price), so the closing steps are `env` → re-import into the Flux app, then `fh-agent restart`
 when the listing changed — no re-sign. On a
 Supporter it writes the prices and says so: nothing is for sale until `level --set operator`.
+
+**Pay by Flux.** `--flux-address t1…` (or the prompt after the prices) sets
+`PROVIDER_FLUX_PAYOUT_ADDRESS` in `config.env`: your own Flux **chain** address (`t1…`/`t3…`
+from the wallet's Flux chain — not your ZelID/SSP login address, which the tool refuses by
+name). Customers then pay FLUX straight to it; the hub quotes the tier's USD price in FLUX,
+watches the chain for the payment and mints the rental — Flux Hub never holds the coins and
+takes no cut. With it set, Stripe is optional (`env` writes `FLUX_PAYMENTS=true` and the
+Coalition boots without keys; card payments stay off until you add them). Unlike a price it
+IS a manifest field, so the closing steps say `fh-toolkit sign` → re-paste at `/onboard`.
+`--flux-address ""` turns it off. `doctor` errors on a login address
+(`FLUX_PAYOUT_IS_ZELID`), a bad checksum (`FLUX_PAYOUT_ADDRESS_INVALID`), and on paid tiers
+with no Stripe line and no address (`PAID_TIERS_NO_PAYMENT_RAIL`).
 
 ### `inventory`
 

@@ -45,6 +45,7 @@ function cfg(sessionSecret?: string): CoalitionConfig {
     trialDays: 1,
     statsWindowDays: 30,
     fluxApiUrl: "https://api.runonflux.io",
+    fluxPayments: false,
   } as CoalitionConfig;
 }
 

@@ -603,3 +603,32 @@ test("doctor compares availableSlots with the hardware inventory.json declares (
   const ghost = run('[{"tier":"cumulus","priceCents":700,"availableSlots":2},{"tier":"nimbus","priceCents":2000,"availableSlots":1}]');
   assert.deepEqual(ghost.map((f) => f.rule), ["LISTING_ABOVE_HARDWARE"]);
 });
+
+test("Pay-by-Flux: payout address rules, and paid tiers with no rail at all", () => {
+  const T1 = "t1d1FRcLh5nrF7ubbTzwV7KiqvA8bXKED8e";
+  const secretsNoStripe = "MANIFEST_KEY=x\nCOALITION_SIGNING_KEY=y\nSESSION_SECRET=z\n";
+  const secretsEmptyStripe = secretsNoStripe + "STRIPE_SECRET_KEY=\nSTRIPE_WEBHOOK_SECRET=\n";
+  const secretsStripe = secretsNoStripe + "STRIPE_SECRET_KEY=rk_test_x\nSTRIPE_WEBHOOK_SECRET=whsec_x\n";
+
+  // Paid tiers, no Stripe, no address → the one error `env` would also refuse on.
+  assert.deepEqual(rules(runDoctor({ configEnv: GOOD_CONFIG, secretsEnv: secretsNoStripe })), ["PAID_TIERS_NO_PAYMENT_RAIL"]);
+  // Stripe alone is a rail.
+  assert.deepEqual(rules(runDoctor({ configEnv: GOOD_CONFIG, secretsEnv: secretsStripe })), []);
+  // A payout address alone is a rail, and it silences the empty-Stripe skeleton warnings.
+  const flux = GOOD_CONFIG + `PROVIDER_FLUX_PAYOUT_ADDRESS=${T1}\n`;
+  assert.deepEqual(rules(runDoctor({ configEnv: flux, secretsEnv: secretsEmptyStripe })), []);
+  // Without the address those same empty slots are "not yet filled" — the scaffold's
+  // pending state, which is not the no-rail error (that is for a file with no Stripe line).
+  assert.deepEqual(
+    rules(runDoctor({ configEnv: GOOD_CONFIG, secretsEnv: secretsEmptyStripe })).sort(),
+    ["NOT_YET_FILLED", "NOT_YET_FILLED"],
+  );
+  // A ZelID pasted as the payout address is named as such; garbage is invalid. Both errors.
+  const zel = runDoctor({ configEnv: GOOD_CONFIG + "PROVIDER_FLUX_PAYOUT_ADDRESS=1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2\n", secretsEnv: secretsStripe });
+  assert.deepEqual(rules(zel), ["FLUX_PAYOUT_IS_ZELID"]);
+  assert.equal(zel.findings[0]?.severity, "error");
+  assert.match(zel.findings[0]?.message ?? "", /LOGIN address/);
+  assert.deepEqual(rules(runDoctor({ configEnv: GOOD_CONFIG + "PROVIDER_FLUX_PAYOUT_ADDRESS=nope\n", secretsEnv: secretsStripe })), ["FLUX_PAYOUT_ADDRESS_INVALID"]);
+  // Empty value = off, nothing to say.
+  assert.deepEqual(rules(runDoctor({ configEnv: GOOD_CONFIG + "PROVIDER_FLUX_PAYOUT_ADDRESS=\n", secretsEnv: secretsStripe })), []);
+});

@@ -15,7 +15,13 @@ async function main() {
   // could never start. loadConfig has already refused the dangerous combination — a
   // PAID tier with no keys — so reaching here without a key means every tier is free.
   const stripe = cfg.stripeSecretKey ? createStripe(cfg.stripeSecretKey) : null;
-  if (!stripe) console.log("[coalition] no Stripe key — nothing is listed for sale; payment routes disabled");
+  if (!stripe) {
+    console.log(
+      cfg.fluxPayments
+        ? "[coalition] no Stripe key — card payments off; FLUX payments ON (the hub quotes, watches the chain and mints)"
+        : "[coalition] no Stripe key — nothing is listed for sale; payment routes disabled"
+    );
+  }
 
   await collectStats(cfg).catch((e) => console.error("[coalition] initial stats error:", e.message));
   setInterval(() => {
