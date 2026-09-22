@@ -122,3 +122,17 @@ test("malformed facility values are refused with the key named", () => {
   assert.throws(() => renderManifestBodyFromConfig(SAMPLE + "\nISP_SPEED_MBPS=0\n"), /ISP_SPEED_MBPS/);
   assert.throws(() => renderManifestBodyFromConfig(SAMPLE + "\nUPS=yes\n"), /UPS must be "true" or "false"/);
 });
+
+test("PROVIDER_FLUX_PAYOUT_ADDRESS maps to fluxPayoutAddress (absent when unset; a ZelID is refused by name)", () => {
+  assert.equal("fluxPayoutAddress" in renderManifestBodyFromConfig(SAMPLE), false, "legacy bytes unchanged");
+  const T1 = "t1d1FRcLh5nrF7ubbTzwV7KiqvA8bXKED8e";
+  const body = renderManifestBodyFromConfig(SAMPLE + `\nPROVIDER_FLUX_PAYOUT_ADDRESS= ${T1} `);
+  assert.equal(body.fluxPayoutAddress, T1, "trimmed");
+  const stamped = { ...body, pubkey: "x", publishedAt: new Date().toISOString() };
+  assert.equal(ProviderManifestBody.safeParse(stamped).success, true);
+  assert.throws(
+    () => renderManifestBodyFromConfig(SAMPLE + "\nPROVIDER_FLUX_PAYOUT_ADDRESS=1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2"),
+    /LOGIN address/,
+  );
+  assert.throws(() => renderManifestBodyFromConfig(SAMPLE + "\nPROVIDER_FLUX_PAYOUT_ADDRESS=nope"), /t1…\/t3…/);
+});

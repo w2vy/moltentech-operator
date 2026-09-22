@@ -1,4 +1,5 @@
 import { SCHEMA_VERSION } from "./common";
+import { isFluxTAddress, looksLikeZelId } from "./flux-address";
 
 /**
  * Render a Provider Manifest *body* (unsigned; no `pubkey`/`publishedAt`/`signature`)
@@ -17,6 +18,7 @@ import { SCHEMA_VERSION } from "./common";
  *                                                      derive from the agent's inventory)
  *   TRIAL_DAYS                                      -> trialDays
  *   PROVIDER_LEVEL                                  -> level (supporter | operator)
+ *   PROVIDER_FLUX_PAYOUT_ADDRESS                    -> fluxPayoutAddress (Pay-by-Flux; t1…/t3…)
  *   MANUAL_APPROVAL ("true"/"false")                -> manualApproval
  *   OWNER_ADDRESS                                   -> ownerAddress (optional; the
  *                                                      wallet that authorizes this
@@ -98,6 +100,17 @@ export function renderManifestBodyFromConfig(configText: string): Record<string,
       throw new Error(`config.env: PROVIDER_LEVEL must be "supporter" or "operator", got "${env.PROVIDER_LEVEL}"`);
     }
     body.level = env.PROVIDER_LEVEL;
+  }
+  // Pay-by-Flux payout address. Same emit-only-when-set rule, same reason.
+  if (env.PROVIDER_FLUX_PAYOUT_ADDRESS) {
+    const addr = env.PROVIDER_FLUX_PAYOUT_ADDRESS.trim();
+    if (!isFluxTAddress(addr)) {
+      throw new Error(
+        `config.env: PROVIDER_FLUX_PAYOUT_ADDRESS must be a Flux t1…/t3… chain address, got "${addr}"` +
+          (looksLikeZelId(addr) ? " — that is a ZelID/SSP LOGIN address; open the wallet's Flux chain and copy its receive address" : ""),
+      );
+    }
+    body.fluxPayoutAddress = addr;
   }
   return body;
 }

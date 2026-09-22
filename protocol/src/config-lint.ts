@@ -17,6 +17,7 @@
  * courier quietly never starting, costs a whole provision cycle and a beginner
  * cannot diagnose either. The silent rules are the reason this file exists.
  */
+import { isFluxTAddress, looksLikeZelId } from "./flux-address";
 import { renderManifestBodyFromConfig } from "./manifest-config";
 import { canonicalize, verifyManifestObject } from "./signing";
 import { VM_NAME_PREFIX_RULE, VmNamePrefix } from "./common";
@@ -270,6 +271,76 @@ function lintSecretPlacement(entries: EnvEntry[], file: string, bannedKeys: stri
  *     right there in config.env, and the level in the SIGNED manifest is what stops
  *     anything being listed. Nothing else says so.
  */
+/**
+ * Pay-by-Flux payout address, when set. The value the hub tells CUSTOMERS to send money to,
+ * so a wrong one is money lost, not a broken page: an error, not a warning. The commonest
+ * mistake is the wallet's LOGIN address (ZelID / SSP ID) — it looks right, decodes fine,
+ * and is not on the Flux chain at all — so it gets its own rule and its own sentence.
+ */
+export function lintFluxPayout(entries: EnvEntry[], file: string): Finding[] {
+  const e = entries.find((x) => x.key === "PROVIDER_FLUX_PAYOUT_ADDRESS");
+  if (!e || e.value.trim() === "") return [];
+  const v = e.value.trim();
+  if (isFluxTAddress(v)) return [];
+  if (looksLikeZelId(v)) {
+    return [
+      {
+        rule: "FLUX_PAYOUT_IS_ZELID",
+        severity: "error",
+        file,
+        line: e.line,
+        message:
+          `PROVIDER_FLUX_PAYOUT_ADDRESS=${v} is a ZelID / SSP LOGIN address, not a Flux chain ` +
+          "address — FLUX sent there is lost. Open your wallet's Flux chain and copy its receive address (t1…).",
+        summary: "payout address is a login address",
+        fix: "fh-toolkit stripe --flux-address <t1…>",
+      },
+    ];
+  }
+  return [
+    {
+      rule: "FLUX_PAYOUT_ADDRESS_INVALID",
+      severity: "error",
+      file,
+      line: e.line,
+      message: `PROVIDER_FLUX_PAYOUT_ADDRESS=${v} is not a Flux t1…/t3… address (bad checksum or wrong prefix).`,
+      summary: "payout address invalid",
+      fix: "fh-toolkit stripe --flux-address <t1…>",
+    },
+  ];
+}
+
+/**
+ * Paid tiers with NO way to be paid: prices set, no Stripe key in secrets.env, no
+ * PROVIDER_FLUX_PAYOUT_ADDRESS in config.env. `fh-toolkit env` refuses this outright; here
+ * it is named before the operator gets that far.
+ */
+export function lintPaymentRail(configRec: Record<string, string>, secretsRec: Record<string, string>): Finding[] {
+  let priced = false;
+  try {
+    const parsed: unknown = JSON.parse(configRec.TIER_PRICES_JSON ?? "{}");
+    priced = !!parsed && typeof parsed === "object" && Object.keys(parsed).length > 0;
+  } catch {
+    return [];
+  }
+  if (!priced) return [];
+  // A PRESENT-but-empty STRIPE_SECRET_KEY is the scaffold's "not yet filled" state and is
+  // already reported as such; this rule is for the file that has no Stripe line at all.
+  if ("STRIPE_SECRET_KEY" in secretsRec || (configRec.PROVIDER_FLUX_PAYOUT_ADDRESS ?? "").trim()) return [];
+  return [
+    {
+      rule: "PAID_TIERS_NO_PAYMENT_RAIL",
+      severity: "error",
+      file: "secrets.env",
+      message:
+        "TIER_PRICES_JSON lists paid tier(s) but nothing can pay you: no STRIPE_SECRET_KEY in " +
+        "secrets.env and no PROVIDER_FLUX_PAYOUT_ADDRESS in config.env. `fh-toolkit env` will refuse.",
+      summary: "paid tiers, no payment rail",
+      fix: "fh-toolkit stripe   (Stripe keys, or --flux-address <t1…> to sell for FLUX)",
+    },
+  ];
+}
+
 export function lintLevelAgreement(entries: EnvEntry[], file: string): Finding[] {
   const level = entries.find((e) => e.key === "PROVIDER_LEVEL");
   if (!level) return [];
@@ -728,10 +799,13 @@ export function lintObsoleteKeys(entries: EnvEntry[], file: string): Finding[] {
  * about something that will never be filled teaches the operator to skim the list, and
  * the three warnings that DO matter are in that same list.
  */
-function lintSkeletonSlots(entries: EnvEntry[], file: string, opts: { supporter?: boolean } = {}): Finding[] {
+function lintSkeletonSlots(entries: EnvEntry[], file: string, opts: { supporter?: boolean; fluxPayout?: boolean } = {}): Finding[] {
   return entries
     .filter((e) => e.value === "")
     .filter((e) => !(opts.supporter && e.key.startsWith("STRIPE_")))
+    // Pay-by-Flux: an empty Stripe pair is a choice, not a pending step, once a payout
+    // address is set — the operator sells for FLUX and may never want cards.
+    .filter((e) => !(opts.fluxPayout && e.key.startsWith("STRIPE_")))
     // An obsolete key is never "not yet filled" — `lintObsoleteKeys` reports it, and
     // saying both would tell the operator to go and fetch a credential that no longer
     // exists at the same time as telling them to delete it.
@@ -1060,6 +1134,7 @@ export function runDoctor(input: DoctorInput): DoctorReport {
     findings.push(...lintTierPrices(entries, "config.env", minimums));
     findings.push(...lintLevelAgreement(entries, "config.env"));
     findings.push(...lintVmPrefix(entries, "config.env"));
+    findings.push(...lintFluxPayout(entries, "config.env"));
   }
 
   if (input.secretsEnv != null) {
@@ -1072,9 +1147,11 @@ export function runDoctor(input: DoctorInput): DoctorReport {
     findings.push(
       ...lintSkeletonSlots(secretEntries, "secrets.env", {
         supporter: configRec.PROVIDER_LEVEL === "supporter",
+        fluxPayout: (configRec.PROVIDER_FLUX_PAYOUT_ADDRESS ?? "").trim() !== "",
       })
     );
     findings.push(...lintObsoleteKeys(secretEntries, "secrets.env"));
+    if (input.configEnv != null) findings.push(...lintPaymentRail(configRec, entriesToRecord(secretEntries)));
   }
 
   let operatorRec: Record<string, string> = {};

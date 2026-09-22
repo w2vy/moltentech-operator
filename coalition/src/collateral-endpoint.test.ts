@@ -72,6 +72,7 @@ function cfg(): CoalitionConfig {
     // falling back to a bearer, so every fixture that reaches an outbound call needs one.
     coalitionSigningKey: SIGNING_KEY,
     fluxApiUrl: "https://flux.example",
+    fluxPayments: false,
   } as unknown as CoalitionConfig;
 }
 

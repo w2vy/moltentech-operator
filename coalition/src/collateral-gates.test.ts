@@ -30,6 +30,7 @@ const cfg = () =>
     legacyBearersPresent: [],
     coalitionSigningKey: SIGNING_KEY,
     fluxApiUrl: "https://flux.example",
+    fluxPayments: false,
   }) as unknown as CoalitionConfig;
 
 /** The `/flux/info` shape read on mt-184-c4 (2026-09-19), trimmed to the fields we use. */

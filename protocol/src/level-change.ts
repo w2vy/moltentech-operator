@@ -1,3 +1,4 @@
+import { isFluxTAddress, looksLikeZelId } from "./flux-address";
 /**
  * `level` — change PROVIDER_LEVEL and the Stripe pair, surgically.
  *
@@ -142,7 +143,7 @@ export function addStripeBlock(
   // Drop exactly that block rather than leaving a paragraph contradicting the keys below.
   const body = secretsText
     .replace(
-      /\n*# No Stripe keys needed:[\s\S]*?Stripe is what lets STRANGERS buy from you\.\n?/,
+      /\n*# No Stripe keys needed:[\s\S]*?lets STRANGERS buy from you\.\n?/,
       "\n"
     )
     .replace(/\n+$/, "");
@@ -222,6 +223,8 @@ interface SellingResult extends SellingTexts {
   secretsEdits: string[];
   operatorEdits: string[];
   warnings: string[];
+  /** A signed-manifest field changed (the payout address): the operator must re-sign. */
+  manifestChanged: boolean;
 }
 
 /**
@@ -232,13 +235,33 @@ interface SellingResult extends SellingTexts {
  */
 function applySelling(
   texts: SellingTexts,
-  input: Pick<LevelChangeInput, "prices" | "stripe" | "slotCounts">
+  input: Pick<LevelChangeInput, "prices" | "stripe" | "slotCounts" | "fluxPayoutAddress">
 ): SellingResult {
   let { configText, secretsText, operatorText } = texts;
   const configEdits: string[] = [];
   const secretsEdits: string[] = [];
   const operatorEdits: string[] = [];
   const warnings: string[] = [];
+  let manifestChanged = false;
+
+  // Pay-by-Flux payout address. Unlike prices this IS a manifest field (the hub tells
+  // customers to send coins here, so the owner wallet must have signed it) — writing it
+  // means a re-sign, and the next steps say so.
+  if (input.fluxPayoutAddress !== undefined) {
+    const addr = input.fluxPayoutAddress.trim();
+    if (addr !== "" && !isFluxTAddress(addr)) {
+      throw new Error(
+        `not a Flux t1…/t3… chain address: "${addr}"` +
+          (looksLikeZelId(addr) ? " — that is a ZelID/SSP LOGIN address; copy the wallet's Flux receive address" : ""),
+      );
+    }
+    const before = readEnvValue(configText, "PROVIDER_FLUX_PAYOUT_ADDRESS") ?? "";
+    if (before !== addr) {
+      configText = upsertEnvLine(configText, "PROVIDER_FLUX_PAYOUT_ADDRESS", addr);
+      configEdits.push(`PROVIDER_FLUX_PAYOUT_ADDRESS: ${before || "(unset)"} → ${addr || "(off — card payments only)"}`);
+      manifestChanged = true;
+    }
+  }
 
   const prices = { ...readTierPrices(configText), ...(input.prices ?? {}) };
   if (Object.keys(prices).length > 0) {
@@ -288,7 +311,7 @@ function applySelling(
     );
   }
 
-  return { configText, secretsText, operatorText, configEdits, secretsEdits, operatorEdits, warnings };
+  return { configText, secretsText, operatorText, configEdits, secretsEdits, operatorEdits, warnings, manifestChanged };
 }
 
 /**
@@ -321,6 +344,7 @@ export function planSellingChange(input: Omit<LevelChangeInput, "target">): Leve
       manifestField: sold.configEdits.length > 0,
       stripe: true,
       listingChanged: sold.operatorEdits.length > 0,
+      resign: sold.manifestChanged,
       hubBaseUrl: input.hubBaseUrl,
     }),
     configText: sold.configText,
@@ -330,9 +354,17 @@ export function planSellingChange(input: Omit<LevelChangeInput, "target">): Leve
 }
 
 /** The closing checklist, shared so `level` and `stripe` send the operator the same way. */
-function sellingNextSteps(o: { manifestField: boolean; stripe: boolean; listingChanged: boolean; hubBaseUrl?: string }): string[] {
+function sellingNextSteps(o: { manifestField: boolean; stripe: boolean; listingChanged: boolean; resign?: boolean; hubBaseUrl?: string }): string[] {
   const hub = o.hubBaseUrl ?? "https://fluxhub.moltentech.us";
   const steps: string[] = [];
+  if (o.resign) {
+    steps.push(
+      "PROVIDER_FLUX_PAYOUT_ADDRESS is in the SIGNED manifest (customers are told to pay there):",
+      "  fh-toolkit sign, then paste the manifest at the hub's /onboard — the FLUX button",
+      "  appears on your card only once the hub holds the re-signed manifest.",
+      ""
+    );
+  }
   // Price is deliberately NOT a manifest field (see manifest.ts's trust model): the Coalition
   // reads TIER_PRICES_JSON from its runtime env and the hub learns prices from the agent's
   // listing. So a price change is `env` + re-import + `fh-agent restart` — never a re-sign.
@@ -378,6 +410,8 @@ export interface LevelChangeInput {
   /** Tier → price in CENTS. Only used going up. */
   prices?: Record<string, number>;
   stripe?: { secretKey?: string; webhookSecret?: string };
+  /** Pay-by-Flux payout address: a t1…/t3… to set, `""` to turn FLUX off, undefined = untouched. */
+  fluxPayoutAddress?: string;
   /** Where the operator's own hub lives, for the next-steps text. */
   hubBaseUrl?: string;
 }
@@ -463,9 +497,12 @@ export function planLevelChange(input: LevelChangeInput): LevelChange {
       "     — the hub re-ingests there; nothing this command wrote reaches it until you do"
     );
     if (to === "operator") {
+      const fluxOn = !!readEnvValue(configText, "PROVIDER_FLUX_PAYOUT_ADDRESS");
       nextSteps.push(
         "",
-        "Stripe (you are merchant of record; Flux Hub never holds these):",
+        fluxOn
+          ? "Stripe — OPTIONAL: you accept FLUX to PROVIDER_FLUX_PAYOUT_ADDRESS. To take cards too:"
+          : "Stripe (you are merchant of record; Flux Hub never holds these):",
         "  3. register a webhook endpoint at <your coalition>/webhook, then:",
         "     fh-toolkit doctor --check-stripe    ← catches a key from the wrong account",
         "  4. fh-toolkit env, re-import env.json into the Flux app, redeploy"

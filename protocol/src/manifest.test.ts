@@ -150,3 +150,25 @@ test("vmNamePrefix: well-formed namespaces parse, malformed ones do not, omitted
   assert.equal("vmNamePrefix" in without.provider, false);
   assert.equal(JSON.stringify(without.provider), JSON.stringify({ slug: "prefix-test", name: "Prefix Test" }));
 });
+
+test("fluxPayoutAddress: a t1/t3 chain address parses, a ZelID does not, omitted is byte-identical", () => {
+  const { publicKeyBase64 } = generateEd25519();
+  const body = (fluxPayoutAddress?: string): Record<string, unknown> => ({
+    schemaVersion: 2,
+    provider: { slug: "flux-pay-test", name: "Flux Pay Test" },
+    coalitionUrl: "https://coalition.example",
+    pubkey: publicKeyBase64,
+    hardware: [{ name: "pve-01" }],
+    trialDays: 1,
+    manualApproval: false,
+    serviceFlags: {},
+    trustedSelfClaim: false,
+    publishedAt: "2026-09-21T00:00:00.000Z",
+    signature: "x",
+    ...(fluxPayoutAddress === undefined ? {} : { fluxPayoutAddress }),
+  });
+  assert.equal(ProviderManifest.safeParse(body("t1d1FRcLh5nrF7ubbTzwV7KiqvA8bXKED8e")).success, true);
+  assert.equal(ProviderManifest.safeParse(body("1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2")).success, false, "ZelID");
+  assert.equal(ProviderManifest.safeParse(body("t1d1FRcLh5nrF7ubbTzwV7KiqvA8bXKED8f")).success, false, "checksum");
+  assert.equal("fluxPayoutAddress" in ProviderManifest.parse(body()), false);
+});

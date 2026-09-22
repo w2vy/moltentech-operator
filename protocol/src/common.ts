@@ -45,6 +45,14 @@ export const NoCtrl = z.string().regex(/^[^\u0000-\u001f\u007f]*$/, "control cha
 export const PriceCents = z.number().int().positive();
 export const Currency = z.enum(["usd"]); // multi-currency = later manifest field
 
+/**
+ * Response header every Coalition sets on every reply: does this operator take CARD payments
+ * (a Stripe key is configured)? Always present — `"true"` | `"false"` — unlike `X-Stripe-Livemode`,
+ * which is omitted when there is no key and so cannot say "no". The hub keys the card button on it;
+ * FLUX payments are declared separately, in the signed manifest (`fluxPayoutAddress`).
+ */
+export const HEADER_CARD_PAYMENTS = "x-card-payments";
+
 /** ISO-8601 instant, e.g. "2026-06-23T18:30:00.000Z". */
 export const Timestamp = z.string().datetime();
 

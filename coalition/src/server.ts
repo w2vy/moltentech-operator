@@ -1,5 +1,5 @@
 import http from "node:http";
-import { CheckoutInitRequest, ManageRequest, HEADER_COALITION_VERSION } from "@moltentech/protocol";
+import { CheckoutInitRequest, ManageRequest, HEADER_COALITION_VERSION, HEADER_CARD_PAYMENTS } from "@moltentech/protocol";
 import { readManifest, type CoalitionConfig } from "./config";
 import type { StripeLike } from "./stripe";
 import { handleCheckout, handleManage, handleWebhook } from "./payments";
@@ -60,6 +60,9 @@ export function createServer(stripe: StripeLike | null, cfg: CoalitionConfig): h
     // be read as "live".
     const liveMode = stripeLiveMode(cfg.stripeSecretKey);
     if (liveMode !== null) res.setHeader("X-Stripe-Livemode", liveMode ? "true" : "false");
+    // ALWAYS present, unlike the livemode header: the hub keys the card button on it, and
+    // "absent" must be able to mean "no" once an operator drops their Stripe key.
+    res.setHeader(HEADER_CARD_PAYMENTS, stripe !== null ? "true" : "false");
     const send = (status: number, obj: unknown) => {
       res.writeHead(status, { "content-type": "application/json" });
       res.end(JSON.stringify(obj));
@@ -122,6 +125,8 @@ export function createServer(stripe: StripeLike | null, cfg: CoalitionConfig): h
           provider: cfg.providerSlug,
           coalitionVersion: COALITION_VERSION,
           ...(liveMode !== null ? { stripeLiveMode: liveMode } : {}),
+          cardPayments: stripe !== null,
+          fluxPayments: cfg.fluxPayments,
         });
       }
 

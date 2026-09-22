@@ -11,6 +11,7 @@
  * ARCHITECTURE — REVISED 2026-06-23") for the architecture these encode.
  */
 export * from "./common";
+export * from "./flux-address";
 export * from "./manifest";
 export * from "./messages";
 export * from "./hub-refusal";

@@ -8,6 +8,7 @@ import {
   setTierPrices,
   addStripeBlock,
   planLevelChange,
+  planSellingChange,
 } from "./level-change";
 import { renderSecretsEnv, type Answers } from "./scaffold";
 
@@ -227,4 +228,33 @@ test("no .env.operator in reach — the plan WARNS rather than silently skipping
   const plan = planLevelChange({ configText: CONFIG, secretsText: "", target: "operator", prices: { cumulus: 2500 } });
   assert.equal(plan.operatorText, undefined);
   assert.ok(plan.warnings.some((w) => /AGENT_LISTING_JSON was NOT written/.test(w)));
+});
+
+test("Pay-by-Flux: the payout address is written to config.env, says re-sign, refuses a ZelID; \"\" turns it off", () => {
+  const T1 = "t1d1FRcLh5nrF7ubbTzwV7KiqvA8bXKED8e";
+  const secrets = renderSecretsEnv(ANSWERS, { includeStripe: false });
+  const on = planSellingChange({ configText: CONFIG, secretsText: secrets, prices: { cumulus: 700 }, fluxPayoutAddress: T1 });
+  assert.equal(readEnvValue(on.configText, "PROVIDER_FLUX_PAYOUT_ADDRESS"), T1);
+  assert.ok(on.configEdits.some((e) => e.startsWith("PROVIDER_FLUX_PAYOUT_ADDRESS:")));
+  assert.ok(on.nextSteps.some((l) => l.includes("SIGNED manifest")), "a manifest field → re-sign");
+  assert.ok(on.nextSteps.some((l) => l.includes("fh-toolkit sign")));
+
+  // Untouched when undefined; the line survives a second, unrelated selling change.
+  const again = planSellingChange({ configText: on.configText, secretsText: secrets, prices: { cumulus: 800 } });
+  assert.equal(readEnvValue(again.configText, "PROVIDER_FLUX_PAYOUT_ADDRESS"), T1);
+  assert.equal(again.configEdits.some((e) => e.startsWith("PROVIDER_FLUX_PAYOUT_ADDRESS:")), false);
+
+  // Off.
+  const off = planSellingChange({ configText: on.configText, secretsText: secrets, fluxPayoutAddress: "" });
+  assert.equal(readEnvValue(off.configText, "PROVIDER_FLUX_PAYOUT_ADDRESS"), "");
+  assert.ok(off.configEdits.some((e) => e.includes("card payments only")));
+
+  assert.throws(
+    () => planSellingChange({ configText: CONFIG, secretsText: secrets, fluxPayoutAddress: "1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2" }),
+    /LOGIN address/,
+  );
+
+  // level --set operator with the address: the Stripe step reads as optional.
+  const lvl = planLevelChange({ configText: on.configText, secretsText: secrets, target: "operator", prices: { cumulus: 700 } });
+  assert.ok(lvl.nextSteps.some((l) => l.includes("Stripe — OPTIONAL")));
 });

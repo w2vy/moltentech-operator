@@ -79,3 +79,14 @@ test("the error explains how to run without Stripe", () => {
 test("the other required env vars are still required", () => {
   assert.throws(() => loadConfig({ TIER_PRICES_JSON: "{}" }), /Missing required env PROVIDER_SLUG/);
 });
+
+test("Pay-by-Flux: a PAID listing with FLUX_PAYMENTS=true boots without Stripe keys; false still refuses", () => {
+  const cfg = loadConfig({ ...BASE, TIER_PRICES_JSON: JSON.stringify({ cumulus: 700 }), FLUX_PAYMENTS: "true" });
+  assert.equal(cfg.fluxPayments, true);
+  assert.equal(cfg.stripeSecretKey, undefined);
+  assert.throws(
+    () => loadConfig({ ...BASE, TIER_PRICES_JSON: JSON.stringify({ cumulus: 700 }), FLUX_PAYMENTS: "false" }),
+    /FLUX_PAYMENTS=true/,
+  );
+  assert.equal(loadConfig({ ...BASE, TIER_PRICES_JSON: "{}" }).fluxPayments, false);
+});

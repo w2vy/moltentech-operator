@@ -684,11 +684,13 @@ whole of this step in the Stripe dashboard. The summary below is the same proced
    of which API key you use. A test-mode `rk_test_` paired with a live-mode `whsec_`
    fails the same silent way.
 
-> **Known rough edge:** Stripe is currently *mandatory* — the Coalition refuses to start
-> without both `STRIPE_SECRET_KEY` and `STRIPE_WEBHOOK_SECRET`, even if you list no paid
-> tiers at all. Running nodes for yourself with no rentals should not require a Stripe
-> account, and making payment config optional is planned. Until then, a test-mode
-> restricted key is enough to satisfy the check.
+> **Stripe is optional.** The Coalition needs `STRIPE_SECRET_KEY` + `STRIPE_WEBHOOK_SECRET`
+> only when you list a PAID tier *and* do not accept FLUX. A Supporter (`TIER_PRICES_JSON={}`)
+> needs no payment setup at all. An Operator may instead — or as well — accept **FLUX**: set
+> `PROVIDER_FLUX_PAYOUT_ADDRESS` in `config.env` (`fh-toolkit stripe --flux-address t1…`, then
+> `fh-toolkit sign` — it is in the signed manifest), and `fh-toolkit env` writes
+> `FLUX_PAYMENTS=true` so the Coalition boots without Stripe. Customers then pay FLUX straight to
+> your address; the hub watches the chain and hands over the node. Flux Hub takes no cut.
 
 ---
 
