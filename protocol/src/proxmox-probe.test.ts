@@ -34,6 +34,8 @@ const ALL_PRIVS = {
     "VM.PowerMgmt": 1,
     "Datastore.AllocateSpace": 1,
     "Sys.Audit": 1,
+    "VM.Audit": 1,
+    "VM.Config.Options": 1,
     // On PVE 8+ these are what make a bridge VISIBLE. Without them the network list is
     // filtered rather than refused, so a provision fails with "Network not present on
     // hypervisor" against a bridge that is up and correct.

@@ -91,7 +91,13 @@ import {
   describeStorage,
   type ProxmoxSurvey,
   type ProbeResult,
+  type QemuVm,
+  existingNodeCandidates,
+  tierForVm,
 } from "./proxmox-probe";
+import { describeVm, nodeOf, parseKeepList, retireAdoptedMarks } from "./existing-nodes";
+import { fetchFluxNodeStatus, type FluxNodeStatus } from "./flux-node-status";
+import { ExistingVm } from "./messages";
 import {
   DEFAULT_API_PORT,
   MAX_API_PORT,
@@ -865,9 +871,12 @@ export async function askHosts(
      * stock-take is Enter all the way through and a one-host change is one typed line.
      */
     current?: HostAnswer[];
+    /** FluxOS status probe for an existing node, injected for tests. */
+    nodeStatus?: (ip: string, apiPort: number) => Promise<FluxNodeStatus | null>;
   }
 ): Promise<HostAnswer[]> {
   const { prefix, tiers, minimums, survey, hub, current = [] } = input;
+  const nodeStatus = input.nodeStatus ?? ((ip: string, port: number) => fetchFluxNodeStatus(ip, port));
   const vmSuffixProblem = vmSuffixProblemFor(prefix);
   console.log("\nNow your hardware. Everything above was about you; this is a stock-take.");
   const hosts: HostAnswer[] = [];
@@ -952,9 +961,50 @@ export async function askHosts(
       was?.storageIso ?? iso[0]?.id
     );
 
+    // ── Existing Flux nodes ─────────────────────────────────────────────────────
+    // Nodes the operator already runs here. Each one becomes a slot marked `existingVm`:
+    // the hub never sells it and the agent never builds over it, until the operator clicks
+    // Adopt on /operator/fleet (which renames the VM to the slot name). No teardown asked.
+    const nodeVms: QemuVm[] | undefined = survey?.vms?.[nodeOf(was ?? { name })];
+    const marked = wasSlots.flatMap((w) => (w.existingVm ? [w.existingVm.vmid] : []));
+    let keep: QemuVm[] = [];
+    if (nodeVms) {
+      const declared = new Set([...current, ...hosts].flatMap((h) => h.slots.map((sl) => sl.vmName)));
+      const candidates = existingNodeCandidates(nodeVms, declared);
+      const markedVms = nodeVms.filter((v) => marked.includes(v.vmid) && !candidates.some((c) => c.vm === v));
+      const offer = [...markedVms, ...candidates.map((c) => c.vm)];
+      if (offer.length > 0) {
+        console.log(`  VMs on ${name} sized like a Flux node (or already marked):`);
+        for (const vm of offer) console.log(`    ${describeVm(vm)}`);
+        const answer = await askUntil(
+          `  which are Flux nodes you run and want to keep? VMIDs, comma-separated ('none' for none)`,
+          (v) => {
+            const r = parseKeepList(v, nodeVms);
+            return typeof r === "string" ? r : undefined;
+          },
+          marked.length > 0 ? marked.join(",") : "none"
+        );
+        keep = parseKeepList(answer, nodeVms) as QemuVm[];
+        if (keep.length > 0) {
+          console.log(
+            "  Each one gets a slot below: give it the WAN IP and API port it already answers on.\n" +
+              "  It stays untouched and unsold until you click Adopt on /operator/fleet."
+          );
+        }
+      }
+    }
+    // Without a listing, marks from the file are kept as they are — the slot prompts below
+    // carry them — but nothing new can be picked.
+    const unplaced = new Map<number, QemuVm>(keep.map((v) => [v.vmid, v]));
+
     const capacity = Math.max(
       1,
-      Math.trunc(Number(await ask(`  how many node slots does ${name} support?`, String(wasSlots.length || 1)))) || 1
+      keep.length,
+      Math.trunc(
+        Number(
+          await ask(`  how many node slots does ${name} support?`, String(Math.max(wasSlots.length, keep.length) || 1))
+        )
+      ) || 1
     );
 
     // ── Slots, grouped by WAN IP ────────────────────────────────────────────────
@@ -1047,14 +1097,63 @@ export async function askHosts(
         }
 
         console.log(`    · slot ${slots.length + 1} of ${capacity}`);
+        // An existing node on this slot? Asked only when there is one to place (or the file
+        // already marks this slot and no listing could confirm it).
+        let existingVm: ExistingVm | undefined;
+        let status: FluxNodeStatus | null = null;
+        const carried = !nodeVms && w?.existingVm ? w.existingVm : undefined;
+        if (unplaced.size > 0 || carried) {
+          const choices = carried ? [String(carried.vmid)] : [...unplaced.keys()].map(String);
+          const dflt =
+            w?.existingVm && (carried || unplaced.has(w.existingVm.vmid))
+              ? String(w.existingVm.vmid)
+              : w
+                ? "none"
+                : choices[0]!;
+          const pick = await askUntil(
+            `      existing VM on this slot? (${choices.join("/")}, or 'none' for a new node)`,
+            (v) => (v === "none" || choices.includes(v) ? undefined : `"${v}" is not one of: ${choices.join(", ")}, none.`),
+            dflt
+          );
+          if (pick !== "none") {
+            const vm = unplaced.get(Number(pick));
+            unplaced.delete(Number(pick));
+            existingVm = carried ?? { vmid: vm!.vmid, name: vm!.name };
+            status = await nodeStatus(ipAddress, apiPort);
+            if (status) {
+              console.log(
+                `      FluxOS on ${ipAddress}:${apiPort}: ${status.status}, ${status.tier ?? "no tier"}` +
+                  (status.collateral ? `, collateral ${status.collateral.txid.slice(0, 8)}…:${status.collateral.vout}` : "")
+              );
+              if (status.ip !== ipAddress || status.apiPort !== apiPort) {
+                console.log(
+                  `      ⚠ the chain has this node at ${status.ip}:${status.apiPort}, not ${ipAddress}:${apiPort} — ` +
+                    "check the WAN IP and port before adopting."
+                );
+              }
+              const collateral = status.collateral ?? w?.existingVm?.collateral;
+              if (collateral) existingVm = { ...existingVm, collateral };
+            } else {
+              console.log(
+                `      FluxOS did not answer on ${ipAddress}:${apiPort} — fine; the tier and collateral are yours to confirm.`
+              );
+              if (w?.existingVm?.collateral && !existingVm.collateral) {
+                existingVm = { ...existingVm, collateral: w.existingVm.collateral };
+              }
+            }
+          }
+        }
         // Offered tiers when the operator priced some; otherwise every tier FH knows.
         // A tier that is not on the list is not a tier — it used to be accepted here and
         // rejected by validateAnswers after the last question.
         const allowed = tiers.length > 0 ? tiers : Object.keys(minimums);
+        // An existing node defaults to the tier FluxOS reports, else the one its size fits.
+        const existingVmRow = existingVm ? nodeVms?.find((v) => v.vmid === existingVm!.vmid) : undefined;
+        const existingTier = status?.tier ?? (existingVmRow ? tierForVm(existingVmRow) : undefined);
         const tier = await askUntil(
           `      tier (${allowed.join("/")})`,
           (v) => (allowed.includes(v) ? undefined : `"${v}" is not one of: ${allowed.join(", ")}.`),
-          w && allowed.includes(w.tier) ? w.tier : allowed[0]
+          existingTier && allowed.includes(existingTier) ? existingTier : w && allowed.includes(w.tier) ? w.tier : allowed[0]
         );
         // Only the part after the prefix is typed: the namespace is fixed, so a name
         // outside it is not a mistake the prompt can make. Validated on the WHOLE name.
@@ -1090,6 +1189,7 @@ export async function askHosts(
           gateway: net.gateway,
           apiPort,
           ...(storagePool && storagePool !== storageImages ? { storagePool } : {}),
+          ...(existingVm ? { existingVm } : {}),
         });
         // Advance from the port that was USED, not from a running count: an operator who
         // types 16157 to leave room for something else gets 16167 next, still on stride
@@ -1097,6 +1197,9 @@ export async function askHosts(
         used.add(apiPort);
         nextPort = Math.max(apiPort + API_PORT_STRIDE, firstFree());
       }
+    }
+    for (const vm of unplaced.values()) {
+      console.log(`  ⚠ ${vm.vmid} ${vm.name} was not given a slot — it is not marked, and the hub knows nothing about it.`);
     }
     hosts.push({ name, storageImages, storageIso, slots });
   }
@@ -1338,6 +1441,10 @@ function hostsFromInventory(inventoryText: string): HostAnswer[] {
         apiPort: typeof sl.apiPort === "number" ? sl.apiPort : 0,
         ...(typeof sl.network === "string" && sl.network !== r.network ? { network: sl.network } : {}),
         ...(typeof sl.storagePool === "string" && sl.storagePool !== r.storageImages ? { storagePool: sl.storagePool } : {}),
+        ...((): { existingVm?: ExistingVm } => {
+          const ev = ExistingVm.safeParse(sl.existingVm);
+          return ev.success ? { existingVm: ev.data } : {};
+        })(),
       });
     }
     hosts.push({
@@ -1927,6 +2034,9 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
           if (probe.ok) survey = probe.survey;
           else console.log(formatProbe(probe.checks) + "\n  → no survey; storage names are typed, not picked. `fh-toolkit proxmox` fixes the token.");
         }
+        // A mark whose VM was adopted (renamed to its slot) or is gone has done its job.
+        const retired = retireAdoptedMarks(od.currentHosts, survey?.vms);
+        for (const note of retired.notes) console.log(`  ${note}`);
         hosts = await withPrompts(ctx, (ask, askUntil) =>
           askHosts(ask, askUntil, {
             prefix,
@@ -1934,7 +2044,7 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
             minimums,
             survey,
             hub,
-            current: od.currentHosts,
+            current: retired.hosts,
           })
         );
       }

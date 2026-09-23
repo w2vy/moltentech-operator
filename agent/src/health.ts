@@ -14,7 +14,7 @@ const insecureAgent = new https.Agent({ rejectUnauthorized: false });
  * protocol/src/messages.ts for what may not: a tag read back FROM the hypervisor is the VM's own
  * state and may gate; the same string arriving on a job never may.
  */
-type Vm = { name?: string; status?: string; tags?: string; vmid?: number | string };
+export type Vm = { name?: string; status?: string; tags?: string; vmid?: number | string };
 
 /** One owned VM as the agent sees it locally: its reported status, and its own tag chips. */
 export type OwnedVm = {
@@ -90,8 +90,48 @@ function getJson<T>(cfg: AgentConfig, path: string): Promise<T> {
 }
 
 /** GET the VM list for one Proxmox node via the local API token. */
-function getQemuList(cfg: AgentConfig, nodeName: string): Promise<Vm[]> {
-  return getJson<Vm[]>(cfg, `/api2/json/nodes/${nodeName}/qemu`);
+export function getQemuList(cfg: AgentConfig, nodeName: string): Promise<Vm[]> {
+  return getJson<Vm[]>(cfg, `/api2/json/nodes/${encodeURIComponent(nodeName)}/qemu`);
+}
+
+/**
+ * Set a VM's Proxmox `name` (`PUT /nodes/{node}/qemu/{vmid}/config`).
+ *
+ * Applies live on a running VM, with no pending change and no restart: proven 2026-09-23 on
+ * pve55 `desktop`, and on ArcaneOS `mt-184-c4`, which also rebooted cleanly under the new name.
+ * Needs `VM.Config.Options` on the agent's token.
+ */
+export function setVmName(cfg: AgentConfig, nodeName: string, vmid: number, name: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const url = new URL(
+      `${cfg.proxmox.url}/api2/json/nodes/${encodeURIComponent(nodeName)}/qemu/${vmid}/config`
+    );
+    const body = new URLSearchParams({ name }).toString();
+    const r = https.request(
+      url,
+      {
+        method: "PUT",
+        agent: insecureAgent,
+        headers: {
+          Authorization: `PVEAPIToken=${cfg.proxmox.tokenId}=${cfg.proxmox.tokenSecret}`,
+          "Content-Type": "application/x-www-form-urlencoded",
+          "Content-Length": Buffer.byteLength(body),
+        },
+      },
+      (res) => {
+        let data = "";
+        res.on("data", (c) => (data += c));
+        res.on("end", () => {
+          if (res.statusCode && res.statusCode >= 400) {
+            return reject(new Error(`proxmox ${res.statusCode}: ${data.trim().slice(0, 300)}`));
+          }
+          resolve();
+        });
+      }
+    );
+    r.on("error", reject);
+    r.end(body);
+  });
 }
 
 /**

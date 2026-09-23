@@ -685,6 +685,18 @@ that is no longer in it is named on the way out, because the agent is upsert-onl
 hub keeps the record until you retire it in the console. `--hosts <file>` takes the
 `hosts` array of an `init --answers` file for scripted use.
 
+**Flux nodes you already run.** With a survey, each host first lists its VMs sized like a
+Flux node (not already a slot, not built by the hub) and asks which ones you want to keep.
+Each one you pick is placed on a slot: give it the WAN IP and API port it already answers on,
+and the toolkit asks the node's FluxOS on that WAN address (`/daemon/getfluxnodestatus`) to
+pre-fill the tier and collateral. The slot is written with `existingVm` in
+`data/inventory.json`. The hub never sells, grants or idle-fills that slot, and the agent
+refuses to build on it while that VM exists. Click **Adopt** on `/operator/fleet` to rename
+the VM to the slot name and take it on as your own node. Nothing is torn down or
+re-provisioned. A later `inventory` run drops the mark once the VM carries the slot name
+(adopted) or is gone. The token needs `VM.Audit` and `VM.Config.Options`, which are both in the
+documented role.
+
 `HOSTS` is `hardware[]` in the signed manifest, so when it changes the manifest is re-signed
 in place (key present) and you re-paste it at `/onboard`. The agent re-reads
 `data/inventory.json` on its next cycle; only a changed `.env.operator` (storage lines,
