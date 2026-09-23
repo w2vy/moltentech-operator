@@ -180,6 +180,91 @@ export interface ProxmoxSurvey {
   nodes: string[];
   /** Node name -> its storages. */
   storages: Record<string, StorageOption[]>;
+  /**
+   * Node name -> its VMs (`GET /nodes/<node>/qemu`). Best-effort: a node whose listing fails
+   * is simply absent, so the existing-node scan offers nothing there rather than failing init.
+   */
+  vms?: Record<string, QemuVm[]>;
+}
+
+/** One VM from `GET /nodes/<node>/qemu`, narrowed to what the existing-node scan reads. */
+export interface QemuVm {
+  vmid: number;
+  name: string;
+  status: string;
+  cpus: number;
+  /** Bytes. */
+  maxmem: number;
+  /** Bytes — the boot disk. */
+  maxdisk: number;
+  /** Lowercased `tags` chips. */
+  tags: string[];
+}
+
+interface QemuRow {
+  vmid?: number | string;
+  name?: string;
+  status?: string;
+  cpus?: number;
+  maxmem?: number;
+  maxdisk?: number;
+  tags?: string;
+}
+
+/** Narrow raw qemu rows; rows without a usable VMID are dropped. */
+export function qemuVms(rows: QemuRow[]): QemuVm[] {
+  const out: QemuVm[] = [];
+  for (const r of rows) {
+    const vmid = typeof r.vmid === "string" ? Number(r.vmid) : r.vmid;
+    if (typeof vmid !== "number" || !Number.isInteger(vmid) || vmid <= 0) continue;
+    out.push({
+      vmid,
+      name: r.name ?? "",
+      status: r.status ?? "unknown",
+      cpus: r.cpus ?? 0,
+      maxmem: r.maxmem ?? 0,
+      maxdisk: r.maxdisk ?? 0,
+      tags: (r.tags ?? "").split(";").map((t) => t.trim().toLowerCase()).filter(Boolean),
+    });
+  }
+  return out.sort((a, b) => a.vmid - b.vmid);
+}
+
+/**
+ * The VM size each tier is built at — arcane-mage's `TIER_CONFIG` (`provisioner.py`), which is
+ * also FluxOS's floor. Largest first, so the first match is the best tier a VM can hold.
+ */
+export const TIER_VM_SIZES: Array<{ tier: string; cores: number; memMb: number; diskGb: number }> = [
+  { tier: "stratus", cores: 16, memMb: 65536, diskGb: 880 },
+  { tier: "nimbus", cores: 8, memMb: 32768, diskGb: 440 },
+  { tier: "cumulus", cores: 4, memMb: 8192, diskGb: 220 },
+];
+
+/** The largest tier this VM is sized for, or undefined when it is under cumulus. */
+export function tierForVm(vm: Pick<QemuVm, "cpus" | "maxmem" | "maxdisk">): string | undefined {
+  const MiB = 1024 * 1024;
+  const GiB = 1024 * MiB;
+  return TIER_VM_SIZES.find(
+    (t) => vm.cpus >= t.cores && vm.maxmem >= t.memMb * MiB && vm.maxdisk >= t.diskGb * GiB
+  )?.tier;
+}
+
+/**
+ * VMs on a node that could be Flux nodes the operator already runs: sized at or above a tier,
+ * not already a slot in the inventory, and not built by the hub (`flux-hub` tag). A guess to
+ * offer, never a verdict — the operator picks.
+ */
+export function existingNodeCandidates(
+  vms: QemuVm[],
+  inventoryNames: Set<string>
+): Array<{ vm: QemuVm; tier: string }> {
+  const out: Array<{ vm: QemuVm; tier: string }> = [];
+  for (const vm of vms) {
+    if (inventoryNames.has(vm.name) || vm.tags.includes("flux-hub")) continue;
+    const tier = tierForVm(vm);
+    if (tier) out.push({ vm, tier });
+  }
+  return out;
 }
 
 interface NodeRow {
@@ -273,6 +358,11 @@ export const REQUIRED_PRIVS = [
   "VM.PowerMgmt",
   "Datastore.AllocateSpace",
   "Sys.Audit",
+  // Adopting an existing node: `VM.Audit` lists the host's VMs (the scan, and the agent's
+  // health pass already needs it), `VM.Config.Options` renames the adopted VM. Both are in
+  // the documented FluxHubAgent role (docs/operator-onboarding.md); only this check lacked them.
+  "VM.Audit",
+  "VM.Config.Options",
   // ⭐ On PVE 8+, bridges are behind SDN permissions: without these, GET
   // /nodes/<node>/network FILTERS the bridge out of the response rather than erroring, and
   // arcane-mage's `validate_network` finds no match and fails with "Network not present on
@@ -400,6 +490,12 @@ export async function probeProxmox(
         });
       }
       survey.storages[node] = options;
+      try {
+        const rows = await get<QemuRow[]>(creds, `/api2/json/nodes/${node}/qemu`);
+        (survey.vms ??= {})[node] = qemuVms(rows);
+      } catch {
+        /* best-effort: no listing = no existing-node candidates on this node */
+      }
 
       // ⭐ EXERCISED, not self-reported. Measured 2026-08-29 on pve50: `/access/permissions`
       // returned the complete `Datastore.*` set while EVERY real storage call failed — the

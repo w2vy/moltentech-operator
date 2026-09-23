@@ -14,7 +14,7 @@
  * same generator, and the tests drive the same one the operator does.
  */
 import { ProviderSlug, VM_NAME_PREFIX_RULE, VmNamePrefix } from "./common";
-import { FOUNDATION_VM_PREFIX } from "./messages";
+import { FOUNDATION_VM_PREFIX, type ExistingVm } from "./messages";
 
 import { TIER_FLOORS_CENTS } from "./config-lint";
 
@@ -34,6 +34,8 @@ export interface SlotAnswer {
   network?: string;
   /** Proxmox storage id for THIS slot's disk. Omitted = the host's `storageImages`. */
   storagePool?: string;
+  /** A node VM that already runs here, marked by the operator (see `InventorySlot.existingVm`). */
+  existingVm?: ExistingVm;
 }
 
 export interface HostAnswer {
@@ -814,6 +816,7 @@ export function renderInventoryJson(a: Answers): string {
       apiPort: s.apiPort,
       network: slotNetwork(h, s),
       storagePool: slotStoragePool(h, s),
+      ...(s.existingVm ? { existingVm: s.existingVm } : {}),
     })),
   }));
   return JSON.stringify(hosts, null, 2) + "\n";

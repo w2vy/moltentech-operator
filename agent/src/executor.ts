@@ -9,7 +9,9 @@ import type { AgentConfig } from "./config";
 import { reloadInventory } from "./config";
 import { checkOwnerAuth } from "./owner-auth";
 import { allocateVmId, VMID_MIN, VMID_MAX } from "./vmid";
-import { getClusterVmIds } from "./health";
+import { getClusterVmIds, getQemuList, setVmName } from "./health";
+import { existingVmFence, existingVmFor, planRename, toListing } from "./existing-vm";
+import type { VmListing } from "./existing-vm";
 
 export type ExecResult = { ok: boolean; message?: string; vmId?: number; failureClass?: FailureClass };
 export type Executor = (job: Job, cfg: AgentConfig) => Promise<ExecResult>;
@@ -508,8 +510,55 @@ export const arcaneMageExecutor: Executor = async (job, cfg) => {
       // Cross-host move is an MT-internal operation; an operator agent provisions
       // the target (the source teardown, if any, comes as a separate delete job).
       return provision(job, cfg);
+    case "rename":
+      return rename(job, cfg);
   }
 };
+
+/** One node's VMID → name listing, or `null` when Proxmox can't be read. */
+async function nodeListing(cfg: AgentConfig, nodeName: string): Promise<VmListing> {
+  try {
+    return toListing(await getQemuList(cfg, nodeName));
+  } catch (err) {
+    console.error(`[existing-vm] listing ${nodeName} failed: ${(err as Error).message}`);
+    return null;
+  }
+}
+
+/**
+ * Adopt: rename a declared existing VM to its slot's prefixed name. No owner-auth — it is
+ * non-destructive and the operator's own Adopt click ordered it; `planRename` holds the
+ * real gate (the VM must be the one declared in inventory.json).
+ */
+async function rename(job: Job, cfg: AgentConfig): Promise<ExecResult> {
+  const mark = existingVmFor(reloadInventory(cfg), job.slot.nodeName, job.slot.vmName);
+  const plan = planRename(job, mark, await nodeListing(cfg, job.slot.nodeName));
+  if ("ok" in plan) return plan;
+  if (plan.kind === "done") return { ok: true, message: `already named ${job.slot.vmName}`, vmId: mark!.vmid };
+  try {
+    await setVmName(cfg, job.slot.nodeName, plan.vmid, job.slot.vmName);
+  } catch (err) {
+    return { ok: false, message: `rename failed: ${(err as Error).message}`, failureClass: "unknown" };
+  }
+  return { ok: true, message: `renamed ${job.rename!.from} → ${job.slot.vmName}`, vmId: plan.vmid };
+}
+
+/**
+ * Refuse to build on a slot whose declared existing VM is still on the host (see
+ * `existing-vm.ts`). Applies whatever the hub's version, and in dry-run too — there the
+ * listing is unknown, so a marked slot always refuses.
+ */
+function withExistingVmFence(inner: Executor): Executor {
+  return async (job, cfg) => {
+    const mark = existingVmFor(reloadInventory(cfg), job.slot.nodeName, job.slot.vmName);
+    if (mark && job.action !== "delete" && job.action !== "rename") {
+      const listing = cfg.dryRun ? null : await nodeListing(cfg, job.slot.nodeName);
+      const refusal = existingVmFence(job, mark, listing);
+      if (refusal) return refusal;
+    }
+    return inner(job, cfg);
+  };
+}
 
 /**
  * Wrap an executor with the owner-authorization gate: privileged actions
@@ -534,5 +583,5 @@ function withOwnerAuthGate(inner: Executor): Executor {
 }
 
 export function pickExecutor(cfg: AgentConfig): Executor {
-  return withOwnerAuthGate(cfg.dryRun ? dryRunExecutor : arcaneMageExecutor);
+  return withOwnerAuthGate(withExistingVmFence(cfg.dryRun ? dryRunExecutor : arcaneMageExecutor));
 }

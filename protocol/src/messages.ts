@@ -145,7 +145,7 @@ export type PaymentRelayResponse = z.infer<typeof PaymentRelayResponse>;
 //    Provision/teardown instruction the agent PULLS. Carries NO hypervisor creds
 //    (the agent injects its own local Proxmox token).
 // ───────────────────────────────────────────────────────────────────────────
-export const JobAction = z.enum(["provision", "delete", "reprovision", "move"]);
+export const JobAction = z.enum(["provision", "delete", "reprovision", "move", "rename"]);
 export type JobAction = z.infer<typeof JobAction>;
 
 export const JobSlot = z.object({
@@ -297,6 +297,17 @@ export const Job = Envelope.extend({
    * valid signature. MT only relays this; it cannot forge it. See `OwnerAuth`.
    */
   ownerAuth: OwnerAuth.optional(),
+  /**
+   * `rename` only: the existing VM being adopted and the name it has now. The new name is
+   * `slot.vmName`. The agent renames only when BOTH match the slot's `existingVm` in its own
+   * inventory.json — MT asking is not enough (fence 3: only VMs the operator declared).
+   */
+  rename: z
+    .object({
+      vmid: z.number().int().positive(),
+      from: z.string().min(1),
+    })
+    .optional(),
 });
 export type Job = z.infer<typeof Job>;
 
@@ -379,6 +390,21 @@ export type ListingAssert = z.infer<typeof ListingAssert>;
 //    the operator side, instead of an admin hand-inserting them. Provider-scoped
 //    by the agent signature; upsert-only (MT never hard-deletes rented slots).
 // ───────────────────────────────────────────────────────────────────────────
+/** An existing node VM on a slot (see `InventorySlot.existingVm`). */
+export const ExistingVm = z.object({
+  vmid: z.number().int().positive(),
+  /** The VM's Proxmox name when it was marked — the rename's `from`. */
+  name: z.string().min(1),
+  /** The node's collateral outpoint, when the scan could read it from FluxOS. */
+  collateral: z
+    .object({
+      txid: z.string().regex(/^[0-9a-f]{64}$/i),
+      vout: z.number().int().nonnegative(),
+    })
+    .optional(),
+});
+export type ExistingVm = z.infer<typeof ExistingVm>;
+
 /** One agent-managed slot the operator offers (maps to a Slot row). */
 export const InventorySlot = z.object({
   tier: TierKey,
@@ -402,6 +428,17 @@ export const InventorySlot = z.object({
   networkLimit: z.number().int().positive().optional(),
   /** Operator price for this slot's tier (>= platform floor); null = floor. */
   priceCents: PriceCents.optional(),
+  /**
+   * A Flux node VM that ALREADY runs on this slot, found by the toolkit's Proxmox scan and
+   * marked by the operator. The hub holds such a slot out of every sale/grant/idle-fill until
+   * the operator clicks Adopt, which renames the VM to `vmName` (a `rename` job) and makes it
+   * the operator's own free rental. Nothing is provisioned.
+   *
+   * The agent refuses provision/reprovision/move onto this slot while `vmid` is still on the
+   * host, so an old hub can never build over the running node. Must stay in this schema: the
+   * agent strips unknown inventory fields.
+   */
+  existingVm: ExistingVm.optional(),
 });
 export type InventorySlot = z.infer<typeof InventorySlot>;
 
