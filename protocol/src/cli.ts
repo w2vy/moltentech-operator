@@ -873,10 +873,17 @@ export async function askHosts(
     current?: HostAnswer[];
     /** FluxOS status probe for an existing node, injected for tests. */
     nodeStatus?: (ip: string, apiPort: number) => Promise<FluxNodeStatus | null>;
+    /** Does a Flux node already answer at ip:port? Injected for tests. */
+    portInUse?: (ip: string, apiPort: number) => Promise<boolean>;
   }
 ): Promise<HostAnswer[]> {
   const { prefix, tiers, minimums, survey, hub, current = [] } = input;
   const nodeStatus = input.nodeStatus ?? ((ip: string, port: number) => fetchFluxNodeStatus(ip, port));
+  // Short timeout: this runs on the default for every NEW slot, and a filtered port only ever
+  // times out. A starting daemon answers an error and reads as free, which is a miss, not a
+  // false alarm.
+  const portInUse =
+    input.portInUse ?? (async (ip: string, port: number) => (await fetchFluxNodeStatus(ip, port, fetch, 2000)) !== null);
   const vmSuffixProblem = vmSuffixProblemFor(prefix);
   console.log("\nNow your hardware. Everything above was about you; this is a stock-take.");
   const hosts: HostAnswer[] = [];
@@ -1052,6 +1059,10 @@ export async function askHosts(
       // they share a public address.
       const used = usedPorts.get(ipAddress) ?? new Set<number>();
       usedPorts.set(ipAddress, used);
+      // Ports where a Flux node already answers, found while picking a default. They only
+      // move the DEFAULT, never block: an operator declaring their own running nodes finds
+      // every one of them live, and must still be able to type each node's port.
+      const live = new Set<number>();
       const firstFree = (): number => {
         let p = DEFAULT_API_PORT;
         while (used.has(p)) p += API_PORT_STRIDE;
@@ -1078,7 +1089,34 @@ export async function askHosts(
         const w = nextWas();
         const wasPort =
           w === undefined ? undefined : w.ipAddress === ipAddress && !used.has(w.apiPort) ? String(w.apiPort) : "next";
-        const portAnswer = await ask(`    Flux API port (Enter, or 'next' for the next WAN IP)`, wasPort ?? String(nextPort));
+        // A NEW slot's default skips ports where a Flux node already answers. `used` only knows
+        // this file; the same WAN IP can front nodes this operator's inventory never mentions
+        // (on 2026-09-23 the default 16157 on .186 was a live prod node). Existing slots keep
+        // their own port — their node answering there is the point.
+        let freshPort = nextPort;
+        if (wasPort === undefined) {
+          // From `nextPort` up, then wrapping to the block start: slots entered out of order can
+          // leave `nextPort` on a port this file already uses, which was offered as the default
+          // and then refused as taken.
+          const order: number[] = [];
+          for (let p = nextPort; p <= MAX_API_PORT; p += API_PORT_STRIDE) order.push(p);
+          for (let p = DEFAULT_API_PORT; p < nextPort; p += API_PORT_STRIDE) order.push(p);
+          const free = order.filter((p) => !used.has(p));
+          let pick: number | undefined;
+          for (const p of free) {
+            if (live.has(p)) continue;
+            if (await portInUse(ipAddress, p)) {
+              console.log(`    ${ipAddress}:${p} already answers as a Flux node — not offering it.`);
+              live.add(p);
+              continue;
+            }
+            pick = p;
+            break;
+          }
+          // Every free port is live: offer the first free one and let the warning below speak.
+          freshPort = pick ?? free[0] ?? nextPort;
+        }
+        const portAnswer = await ask(`    Flux API port (Enter, or 'next' for the next WAN IP)`, wasPort ?? String(freshPort));
         if (portAnswer.toLowerCase() === "next") break;
         const apiPort = Number(portAnswer);
         if (!isFluxApiPort(apiPort)) {
@@ -1102,7 +1140,10 @@ export async function askHosts(
         let existingVm: ExistingVm | undefined;
         let status: FluxNodeStatus | null = null;
         const carried = !nodeVms && w?.existingVm ? w.existingVm : undefined;
-        if (unplaced.size > 0 || carried) {
+        // Only a NEW slot, or one the file already marks, can hold an existing VM. A slot the
+        // hub already runs a node on is not being adopted, and asking there is how the wrong
+        // slot gets marked (staging, 2026-09-23).
+        if ((unplaced.size > 0 || carried) && (!w || w.existingVm)) {
           const choices = carried ? [String(carried.vmid)] : [...unplaced.keys()].map(String);
           const dflt =
             w?.existingVm && (carried || unplaced.has(w.existingVm.vmid))
@@ -1142,6 +1183,12 @@ export async function askHosts(
               }
             }
           }
+        }
+        if (!existingVm && !w && (live.has(apiPort) || (await portInUse(ipAddress, apiPort)))) {
+          console.log(
+            `      ⚠ a Flux node already answers on ${ipAddress}:${apiPort}. A new node here collides with it; ` +
+              "if it is yours, mark it as an existing VM instead."
+          );
         }
         // Offered tiers when the operator priced some; otherwise every tier FH knows.
         // A tier that is not on the list is not a tier — it used to be accepted here and
@@ -2010,7 +2057,10 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
       const hubBaseUrl = od.env.MT_BASE_URL;
       const minimums = (await cachedTierMinimums(ctx, hubBaseUrl ?? PRODUCTION_BASE_URL)) ?? TIER_FLOORS_CENTS;
       const prices = readTierPrices(od.configText);
-      const hub = hubNames(ctx, hubBaseUrl ?? PRODUCTION_BASE_URL);
+      // `self` is what makes this operator's OWN slots read as available. Without it every
+      // re-run over an existing inventory found its own names "already registered", and the
+      // re-ask refused the same name again — a loop with no way through (staging, 2026-09-23).
+      const hub = hubNames(ctx, hubBaseUrl ?? PRODUCTION_BASE_URL, od.env.PROVIDER_SLUG);
 
       let hosts: HostAnswer[];
       const hostsPath = flag(args, "--hosts");

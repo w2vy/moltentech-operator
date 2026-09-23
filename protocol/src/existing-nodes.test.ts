@@ -155,6 +155,7 @@ test("askHosts: a picked existing VM becomes a marked slot, pre-filled from Flux
     minimums: { cumulus: 250, nimbus: 700, stratus: 1400 },
     survey,
     hub,
+    portInUse: async () => false,
     nodeStatus: async (ip, port) => {
       probed.push(`${ip}:${port}`);
       return { status: "CONFIRMED", tier: "cumulus", ip, apiPort: port, collateral: { txid, vout: 0 } };
@@ -186,6 +187,7 @@ test("askHosts: 'none' for the existing VM leaves an ordinary new slot", async (
     minimums: { cumulus: 250 },
     survey,
     hub,
+    portInUse: async () => false,
     nodeStatus: async () => assert.fail("no existing VM, no probe"),
   });
   assert.equal(hosts[0]!.slots[0]!.existingVm, undefined);
@@ -205,7 +207,108 @@ test("askHosts re-run: Enter all the way keeps an existing mark", async () => {
     survey,
     hub,
     current,
+    portInUse: async () => false,
     nodeStatus: async () => null,
   });
   assert.deepEqual(hosts[0]!.slots.map((s) => [s.vmName, s.existingVm]), [["mt-184-c9", { vmid: 104, name: "flux-node-1" }]]);
+});
+
+test("askHosts re-run: a slot the file already has is NOT asked about an existing VM", async () => {
+  const survey: ProxmoxSurvey = { nodes: ["pve40"], storages: {}, vms: { pve40: qemuVms([cumulusRow]) } };
+  const current: HostAnswer[] = [
+    { name: "pve40", storageImages: "local-lvm", storageIso: "local", slots: [slot("mt-184-c8"), slot("mt-184-c7")] },
+  ];
+  current[0]!.slots[1]!.apiPort = 16187;
+  const { ask, askUntil, asked } = scripted([
+    [/which are Flux nodes/, "104"],
+    [/how many node slots/, "3"],
+    // The new slot's LAN prompt has no default. This answers all three the same; the test is
+    // about which prompts are asked, not the addresses.
+    [/LAN address — host number \(e\.g\. 5 for 192\.168\.184\.5\) or a full IP$/, "7"],
+  ]);
+  const hosts = await askHosts(ask, askUntil, {
+    prefix: "mt-",
+    tiers: [],
+    minimums: { cumulus: 250 },
+    survey,
+    hub,
+    current,
+    portInUse: async () => false,
+    nodeStatus: async () => null,
+  });
+  // Asked once: for the third (new) slot only, where the kept VM lands by default.
+  assert.equal(asked.filter((q) => /existing VM on this slot/.test(q)).length, 1);
+  assert.deepEqual(hosts[0]!.slots.map((s) => s.existingVm?.vmid), [undefined, undefined, 104]);
+});
+
+test("askHosts: a new slot's default port skips one where a Flux node already answers", async () => {
+  const lines: string[] = [];
+  const log = console.log;
+  console.log = (...a: unknown[]) => void lines.push(a.join(" "));
+  const defaults: string[] = [];
+  const { askUntil } = scripted([
+    [/host name/, "pve40"],
+    [/storage pool for VM images/, "local-lvm"],
+    [/ArcaneOS ISO/, "local"],
+    [/how many node slots/, "1"],
+    [/^\s*WAN IP/, "47.206.56.186"],
+    [/LAN gateway/, "192.168.186.1/24"],
+    [/VM name suffix/, "186-c9"],
+    [/LAN address/, "9"],
+  ]);
+  const ask: Ask = async (q, def) => {
+    if (/Flux API port/.test(q)) {
+      defaults.push(def ?? "");
+      return def ?? "";
+    }
+    return askUntil(q, () => undefined, def);
+  };
+  try {
+    const hosts = await askHosts(ask, askUntil, {
+      prefix: "mt-",
+      tiers: [],
+      minimums: { cumulus: 250 },
+      survey: undefined,
+      hub,
+      portInUse: async (_ip, port) => port === 16127 || port === 16137,
+      nodeStatus: async () => null,
+    });
+    assert.deepEqual(defaults, ["16147"]);
+    assert.equal(hosts[0]!.slots[0]!.apiPort, 16147);
+    assert.ok(lines.some((l) => /16127 already answers/.test(l)));
+  } finally {
+    console.log = log;
+  }
+});
+
+test("askHosts: typing a live port for a NEW node warns (but does not block)", async () => {
+  const lines: string[] = [];
+  const log = console.log;
+  console.log = (...a: unknown[]) => void lines.push(a.join(" "));
+  const { ask, askUntil } = scripted([
+    [/host name/, "pve40"],
+    [/storage pool for VM images/, "local-lvm"],
+    [/ArcaneOS ISO/, "local"],
+    [/how many node slots/, "1"],
+    [/^\s*WAN IP/, "47.206.56.186"],
+    [/LAN gateway/, "192.168.186.1/24"],
+    [/Flux API port/, "16127"],
+    [/VM name suffix/, "186-c9"],
+    [/LAN address/, "9"],
+  ]);
+  try {
+    const hosts = await askHosts(ask, askUntil, {
+      prefix: "mt-",
+      tiers: [],
+      minimums: { cumulus: 250 },
+      survey: undefined,
+      hub,
+      portInUse: async (_ip, port) => port === 16127,
+      nodeStatus: async () => null,
+    });
+    assert.equal(hosts[0]!.slots[0]!.apiPort, 16127);
+    assert.ok(lines.some((l) => /already answers on 47\.206\.56\.186:16127/.test(l)));
+  } finally {
+    console.log = log;
+  }
 });

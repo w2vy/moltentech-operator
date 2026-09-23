@@ -46,7 +46,11 @@ test("fresh: after `slug` + `stripe` + `proxmox`, --hosts writes inventory.json,
   assert.equal(op.PROXMOX_STORAGE_IMAGES, "local-lvm", "from the FIRST host — env wins over inventory at provision");
   assert.equal(op.PROXMOX_STORAGE_ISO, "local");
   assert.deepEqual(readListing(readFileSync(join(dir, ".env.operator"), "utf8")), [{ tier: "cumulus", priceCents: 700, availableSlots: 3 }]);
-  assert.deepEqual(seen, [{ hostNames: ["pve-01", "pve-02"], vmNames: ["ac-pve-01-c1", "ac-pve-01-c2", "ac-pve-02-c1"] }]);
+  // `self` is the operator's slug, so the hub leaves this operator's own slots out of "taken".
+  // Without it a re-run found its own names registered and could not get past the re-ask.
+  assert.deepEqual(seen, [
+    { self: ANSWERS.providerSlug, hostNames: ["pve-01", "pve-02"], vmNames: ["ac-pve-01-c1", "ac-pve-01-c2", "ac-pve-02-c1"] },
+  ]);
   assert.match(log, /3 host\(s\)|2 host\(s\), 3 slot\(s\)/);
   assert.match(log, /re-reads data\/inventory\.json|force-recreate/);
 });
