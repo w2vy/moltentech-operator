@@ -864,6 +864,13 @@ readable inside the agent container.
   spinning disk). Honoured at provision from agent **0.11.24**; older agents reported them to
   Flux Hub and provisioned with the env value regardless — `fh-agent version` before you rely
   on a host-level value.
+- `vmMemoryMb` (optional, e.g. `{ "cumulus": 7680, "nimbus": 32000 }`) sizes NEW VMs on
+  this host below the tier default (8192 / 32768 / 65536 MB). Use it only on a host that
+  would otherwise overcommit RAM — a swapping host fails FluxOS's disk-write benchmark. A
+  guest sees ~3 % less than it is given, so these two values are the smallest that pass
+  (cumulus reports 7.3 against a gate of 7, nimbus ~30.25 against 30). A running VM keeps
+  its size until it is rebuilt. Not prompted by `fh-toolkit init`; add it by hand, and a
+  re-run keeps it. Agent **0.11.31** or newer.
 - ⚠️ **Repeat `network` and `storagePool` on every SLOT.** FH builds your `Slot` rows from
   the per-slot fields only, so a host-level-only value leaves every Slot row with an empty
   `storagePool`/`network` — silently, and `doctor` still passes because it checks the

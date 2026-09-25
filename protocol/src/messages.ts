@@ -442,6 +442,15 @@ export const InventorySlot = z.object({
 });
 export type InventorySlot = z.infer<typeof InventorySlot>;
 
+export const VmMemoryMb = z
+  .object({
+    cumulus: z.number().int().positive().optional(),
+    nimbus: z.number().int().positive().optional(),
+    stratus: z.number().int().positive().optional(),
+  })
+  .strict();
+export type VmMemoryMb = z.infer<typeof VmMemoryMb>;
+
 /** One agent-managed Proxmox host + the slots it carries (maps to a ProxmoxHost row). */
 export const InventoryHost = z.object({
   /** Globally-unique host label (ProxmoxHost.name). */
@@ -454,6 +463,14 @@ export const InventoryHost = z.object({
   network: z.string().min(1).optional(),
   storageImages: z.string().min(1).optional(),
   storageIso: z.string().min(1).optional(),
+  /**
+   * Per-tier VM RAM (MB) for NEW VMs on this host, overriding arcane-mage's tier default
+   * (8192 / 32768 / 65536). Opt-in: omitted = the default. For hosts that would otherwise
+   * overcommit RAM and swap — a guest sees ~3 % less than it is given, so cumulus 7680
+   * (reports 7.3, gate 7) and nimbus 32000 (~30.25, gate 30) pass FluxOS's benchmark.
+   * Read by the agent from its own inventory at provision time; a running VM keeps its size.
+   */
+  vmMemoryMb: VmMemoryMb.optional(),
   slots: z.array(InventorySlot),
 });
 export type InventoryHost = z.infer<typeof InventoryHost>;

@@ -97,7 +97,7 @@ import {
 } from "./proxmox-probe";
 import { describeVm, nodeOf, parseKeepList, retireAdoptedMarks } from "./existing-nodes";
 import { fetchFluxNodeStatus, type FluxNodeStatus } from "./flux-node-status";
-import { ExistingVm } from "./messages";
+import { ExistingVm, VmMemoryMb } from "./messages";
 import {
   DEFAULT_API_PORT,
   MAX_API_PORT,
@@ -1248,7 +1248,7 @@ export async function askHosts(
     for (const vm of unplaced.values()) {
       console.log(`  ⚠ ${vm.vmid} ${vm.name} was not given a slot — it is not marked, and the hub knows nothing about it.`);
     }
-    hosts.push({ name, storageImages, storageIso, slots });
+    hosts.push({ name, storageImages, storageIso, ...(was?.vmMemoryMb ? { vmMemoryMb: was.vmMemoryMb } : {}), slots });
   }
 
   // Printed as WAN IP → ports, because that is the shape of the port-forward the
@@ -1465,7 +1465,7 @@ interface OperatorDir {
  * and of an older hand-written layout: a row the wizard cannot re-offer as a default is
  * simply not offered, never a refusal — `doctor` is the linter.
  */
-function hostsFromInventory(inventoryText: string): HostAnswer[] {
+export function hostsFromInventory(inventoryText: string): HostAnswer[] {
   let raw: unknown;
   try {
     raw = JSON.parse(inventoryText);
@@ -1500,6 +1500,10 @@ function hostsFromInventory(inventoryText: string): HostAnswer[] {
       ...(typeof r.network === "string" ? { network: r.network } : {}),
       storageImages: typeof r.storageImages === "string" ? r.storageImages : "",
       storageIso: typeof r.storageIso === "string" ? r.storageIso : "",
+      ...((): { vmMemoryMb?: VmMemoryMb } => {
+        const vm = VmMemoryMb.safeParse(r.vmMemoryMb);
+        return vm.success && r.vmMemoryMb !== undefined ? { vmMemoryMb: vm.data } : {};
+      })(),
       slots,
     });
   }

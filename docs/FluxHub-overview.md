@@ -218,7 +218,8 @@ distinct from `HOSTS` in `config.env`, which is the *signed attestation* of whic
 you are allowed to serve from. Both must agree.
 
 **Host fields:** `name` (the globally-unique `ProxmoxHost.name`), `nodeName` (the Proxmox
-node the agent provisions on), `apiUrl`, `network`, `storageImages`, `storageIso`, `slots[]`.
+node the agent provisions on), `apiUrl`, `network`, `storageImages`, `storageIso`, optional
+`vmMemoryMb` (per-tier RAM for new VMs, read by the agent only), `slots[]`.
 
 **Slot fields:** `tier`, `vmName`, `ipAddress`, `lanIp`, `gateway`, `apiPort`, plus
 optional `network`, `storagePool`, `vlan`, `vmId`, `dns1`/`dns2`, `priceCents`,

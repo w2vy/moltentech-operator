@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { askHosts, type Ask, type AskUntil } from "./cli";
+import { askHosts, hostsFromInventory, type Ask, type AskUntil } from "./cli";
 import { describeVm, parseKeepList, retireAdoptedMarks } from "./existing-nodes";
 import { parseFluxNodeStatus } from "./flux-node-status";
 import { existingNodeCandidates, qemuVms, tierForVm, REQUIRED_PRIVS, type ProxmoxSurvey } from "./proxmox-probe";
@@ -311,4 +311,30 @@ test("askHosts: typing a live port for a NEW node warns (but does not block)", a
   } finally {
     console.log = log;
   }
+});
+
+test("host vmMemoryMb survives render → agent schema → re-read → re-run", async () => {
+  const vmMemoryMb = { cumulus: 7680, nimbus: 32000 };
+  const current: HostAnswer[] = [
+    { name: "pve40", storageImages: "local-lvm", storageIso: "local", vmMemoryMb, slots: [slot("mt-184-c9")] },
+  ];
+  const json = renderInventoryJson({ hosts: current } as unknown as Answers);
+  assert.deepEqual(InventoryHost.array().parse(JSON.parse(json))[0]!.vmMemoryMb, vmMemoryMb);
+  assert.deepEqual(hostsFromInventory(json)[0]!.vmMemoryMb, vmMemoryMb);
+  // Never written when unset, and a malformed hand edit is dropped rather than carried.
+  assert.ok(!("vmMemoryMb" in JSON.parse(renderInventoryJson({ hosts: [{ ...current[0]!, vmMemoryMb: undefined }] } as unknown as Answers))[0]));
+  assert.equal(hostsFromInventory(json.replace('"cumulus": 7680', '"cumulus": "7680"'))[0]!.vmMemoryMb, undefined);
+
+  const { ask, askUntil } = scripted([]);
+  const hosts = await askHosts(ask, askUntil, {
+    prefix: "mt-",
+    tiers: [],
+    minimums: { cumulus: 250 },
+    survey: { nodes: ["pve40"], storages: {}, vms: { pve40: [] } },
+    hub,
+    current,
+    portInUse: async () => false,
+    nodeStatus: async () => null,
+  });
+  assert.deepEqual(hosts[0]!.vmMemoryMb, vmMemoryMb);
 });
