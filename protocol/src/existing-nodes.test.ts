@@ -7,6 +7,7 @@ import { existingNodeCandidates, qemuVms, tierForVm, REQUIRED_PRIVS, type Proxmo
 import { renderInventoryJson, type Answers, type HostAnswer } from "./scaffold";
 import { InventoryHost } from "./messages";
 
+const MiB = 1024 ** 2;
 const GiB = 1024 ** 3;
 // Measured on pve40 2026-09-23: an ArcaneOS cumulus VM lists 4 cpus, 8 GiB, 220 GiB.
 const cumulusRow = { vmid: 104, name: "flux-node-1", status: "running", cpus: 4, maxmem: 8 * GiB, maxdisk: 220 * GiB };
@@ -17,6 +18,10 @@ test("tier sizing matches arcane-mage's TIER_CONFIG, largest tier first", () => 
   assert.equal(tierForVm({ cpus: 16, maxmem: 64 * GiB, maxdisk: 880 * GiB }), "stratus");
   assert.equal(tierForVm({ cpus: 16, maxmem: 64 * GiB, maxdisk: 300 * GiB }), "cumulus", "disk caps it");
   assert.equal(tierForVm({ cpus: 2, maxmem: 8 * GiB, maxdisk: 220 * GiB }), undefined);
+  // Built at the headroom sizes (and hand-resized VMs at them) still match their tier.
+  assert.equal(tierForVm({ cpus: 4, maxmem: 7680 * MiB, maxdisk: 220 * GiB }), "cumulus");
+  assert.equal(tierForVm({ cpus: 8, maxmem: 32000 * MiB, maxdisk: 440 * GiB }), "nimbus");
+  assert.equal(tierForVm({ cpus: 4, maxmem: 7168 * MiB, maxdisk: 220 * GiB }), undefined, "under the cumulus size");
 });
 
 test("candidates skip undersized, already-declared and hub-built VMs", () => {

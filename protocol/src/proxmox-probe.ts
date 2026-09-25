@@ -231,13 +231,15 @@ export function qemuVms(rows: QemuRow[]): QemuVm[] {
 }
 
 /**
- * The VM size each tier is built at — arcane-mage's `TIER_CONFIG` (`provisioner.py`), which is
- * also FluxOS's floor. Largest first, so the first match is the best tier a VM can hold.
+ * The VM size each tier is built at — arcane-mage's `TIER_CONFIG` (`provisioner.py`). Memory is
+ * just above what FluxOS benchmarks require (cumulus 7680 MB reports 7.3 against a gate of 7;
+ * nimbus 32000 MB ≈ 30.25 against 30), not the nominal 8/32 GB, so the host keeps RAM for
+ * itself. Largest first, so the first match is the best tier a VM can hold.
  */
 export const TIER_VM_SIZES: Array<{ tier: string; cores: number; memMb: number; diskGb: number }> = [
   { tier: "stratus", cores: 16, memMb: 65536, diskGb: 880 },
-  { tier: "nimbus", cores: 8, memMb: 32768, diskGb: 440 },
-  { tier: "cumulus", cores: 4, memMb: 8192, diskGb: 220 },
+  { tier: "nimbus", cores: 8, memMb: 32000, diskGb: 440 },
+  { tier: "cumulus", cores: 4, memMb: 7680, diskGb: 220 },
 ];
 
 /** The largest tier this VM is sized for, or undefined when it is under cumulus. */
