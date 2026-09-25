@@ -14,7 +14,7 @@
  * same generator, and the tests drive the same one the operator does.
  */
 import { ProviderSlug, VM_NAME_PREFIX_RULE, VmNamePrefix } from "./common";
-import { FOUNDATION_VM_PREFIX, type ExistingVm } from "./messages";
+import { FOUNDATION_VM_PREFIX, type ExistingVm, type VmMemoryMb } from "./messages";
 
 import { TIER_FLOORS_CENTS } from "./config-lint";
 
@@ -50,6 +50,8 @@ export interface HostAnswer {
    * credentials and cannot check that — `fh-agent doctor` does, where the creds are. */
   storageImages: string;
   storageIso: string;
+  /** Hand-edited in inventory.json, never prompted; carried through a re-run untouched. */
+  vmMemoryMb?: VmMemoryMb;
   slots: SlotAnswer[];
 }
 
@@ -807,6 +809,7 @@ export function renderInventoryJson(a: Answers): string {
     network: h.network ?? DEFAULT_NETWORK,
     storageImages: h.storageImages,
     storageIso: h.storageIso,
+    ...(h.vmMemoryMb ? { vmMemoryMb: h.vmMemoryMb } : {}),
     slots: h.slots.map((s) => ({
       tier: s.tier,
       vmName: s.vmName,

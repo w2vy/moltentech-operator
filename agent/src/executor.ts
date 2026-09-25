@@ -4,7 +4,7 @@ import { writeFileSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
-import type { Job, FailureClass, InventoryHost } from "@moltentech/protocol";
+import type { Job, FailureClass, InventoryHost, VmMemoryMb } from "@moltentech/protocol";
 import type { AgentConfig } from "./config";
 import { reloadInventory } from "./config";
 import { checkOwnerAuth } from "./owner-auth";
@@ -110,6 +110,9 @@ export function buildProvisionYaml(job: Job, cfg: AgentConfig, vmIdOverride?: nu
   if (slot.vmTags) L.push(`      tags: ${yamlStr(slot.vmTags)}`);
   if (slot.vmDescription) L.push(`      description: ${yamlStr(slot.vmDescription)}`);
   if (slot.diskLimit != null) L.push(`      disk_limit: ${slot.diskLimit}`);
+  // Host-level, opt-in: only the inventory host row carries it (never .env.operator).
+  const memoryMb = inventoryHost?.vmMemoryMb?.[slot.tier as keyof VmMemoryMb];
+  if (memoryMb != null) L.push(`      memory_mb: ${memoryMb}`);
   if (slot.cpuLimit != null) L.push(`      cpu_limit: ${slot.cpuLimit}`);
   if (slot.networkLimit != null) L.push(`      network_limit: ${slot.networkLimit}`);
 

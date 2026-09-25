@@ -512,3 +512,19 @@ test("provision precedence is slot → inventory host → .env.operator", () => 
   assert.equal(inventoryHostFor([{ ...pve20, name: "pve20", nodeName: "node20" }], "pve20")?.nodeName, "node20");
   assert.equal(inventoryHostFor([pve20], "pve99"), undefined);
 });
+
+test("host vmMemoryMb: opt-in per tier, omitted everywhere else", () => {
+  const job = jobWith(plainConfig());
+  const hyp = (doc: unknown) => (doc as { nodes: Array<{ hypervisor: Record<string, unknown> }> }).nodes[0]!.hypervisor;
+  const pve35 = { name: "pve35", nodeName: "pve35", vmMemoryMb: { cumulus: 7680, nimbus: 32000 }, slots: [] };
+  assert.equal(job.slot.tier, "cumulus");
+
+  assert.equal(hyp(safeLoad(buildProvisionYaml(job, cfg, undefined, pve35))).memory_mb, 7680);
+  // Another tier on the same host, a tier the host does not override, and no host row:
+  // no key at all, so arcane-mage keeps its tier default.
+  const nimbus = { ...job, slot: { ...job.slot, tier: "nimbus" } } as Job;
+  assert.equal(hyp(safeLoad(buildProvisionYaml(nimbus, cfg, undefined, pve35))).memory_mb, 32000);
+  const stratus = { ...job, slot: { ...job.slot, tier: "stratus" } } as Job;
+  assert.ok(!("memory_mb" in hyp(safeLoad(buildProvisionYaml(stratus, cfg, undefined, pve35)))));
+  assert.ok(!("memory_mb" in hyp(safeLoad(buildProvisionYaml(job, cfg)))));
+});
