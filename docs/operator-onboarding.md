@@ -312,6 +312,42 @@ stops. A redundant pull *is* the cheap check, which is why there is no separate 
 
 ---
 
+### 0.6 Small-RAM hosts (16 GB / 32 GB desktops)
+
+Skip this if the host has RAM to spare. It is for a host whose RAM is about what its nodes
+need — two Cumulus on 16 GB, or one Nimbus on 32 GB. Proxmox itself uses about 1.5 GB, and a
+host that swaps fails the FluxOS disk-write benchmark (`ddwrite` under the floor).
+
+1. **Smaller VMs** — `vmMemoryMb` on the inventory host (Step 5); `fh-toolkit init` offers it.
+2. **KSM, more eager** (two or more VMs). Flux VMs share many identical pages; KSM merged
+   1–3 GB on a 16 GB host with two Cumulus. It does nothing for a host with ONE VM.
+   ```bash
+   apt install ksm-control-daemon          # ksmtuned; on by default in Proxmox
+   sed -i 's/^#\?KSM_THRES_COEF=.*/KSM_THRES_COEF=50/' /etc/ksmtuned.conf
+   systemctl restart ksmtuned
+   ```
+3. **zram** — 2 GB of compressed swap in RAM, used before any disk swap:
+   ```bash
+   apt install zram-tools
+   printf 'ALGO=zstd\nSIZE=2048\nPRIORITY=100\n' > /etc/default/zramswap
+   systemctl restart zramswap
+   ```
+4. **Swap on the SSD — required for ONE VM on a host its size** (e.g. one Nimbus on 32 GB).
+   The first boot downloads the chain and briefly uses nearly all of the VM's RAM; on a
+   32 GB host with only zram the host killed the VM 6 minutes in. With 4 GB of SSD swap it
+   came through (low point 58 MB free, then the guest gave back ~20 GB). A thin volume in
+   the VM pool works — keep the pool's volumes within its size (a 440 GB node disk + 4 GB
+   swap fits a 445 GB pool; a larger swap would overcommit it):
+   ```bash
+   lvcreate -V 4G -T <vg>/<thinpool> -n swap      # e.g. ssd/data
+   mkswap /dev/<vg>/swap
+   echo '/dev/<vg>/swap none swap sw,pri=10 0 0' >> /etc/fstab
+   swapon -a && swapon --show                      # zram prio 100 first, SSD 10 second
+   ```
+   A VM killed during its first boot can come back with fluxd and FluxOS disagreeing on the
+   RPC password (`incorrect password attempt from 127.0.0.1` in fluxd, `status code 401` in
+   fluxbench). Rebuild it rather than repair it.
+
 ## Step 1 — Generate your signing key + config
 
 
@@ -870,13 +906,14 @@ readable inside the agent container.
   spinning disk). Honoured at provision from agent **0.11.24**; older agents reported them to
   Flux Hub and provisioned with the env value regardless — `fh-agent version` before you rely
   on a host-level value.
-- `vmMemoryMb` (optional, e.g. `{ "cumulus": 7680, "nimbus": 32000 }`) sizes NEW VMs on
+- `vmMemoryMb` (optional, e.g. `{ "cumulus": 7680, "nimbus": 31744 }`) sizes NEW VMs on
   this host below the tier default (8192 / 32768 / 65536 MB). Use it only on a host that
   would otherwise overcommit RAM — a swapping host fails FluxOS's disk-write benchmark. A
-  guest sees ~3 % less than it is given, so these two values are the smallest that pass
-  (cumulus reports 7.3 against a gate of 7, nimbus ~30.25 against 30). A running VM keeps
-  its size until it is rebuilt. Not prompted by `fh-toolkit init`; add it by hand, and a
-  re-run keeps it. Agent **0.11.31** or newer.
+  guest sees ~3 % less than it is given; measured: cumulus 7680 → 7.3 (gate 7; 7424 → 7.0
+  passes with no margin, 7168 fails), nimbus 31744 → 30.0 (gate 30; 31232 fails). A running
+  VM keeps its size until it is rebuilt. `fh-toolkit init` offers it when it can read the
+  host's RAM (0.6.3+), and says when the host also needs KSM, zram or swap — see
+  [Step 0.6](#06-small-ram-hosts-16-gb--32-gb-desktops). A re-run keeps it. Agent **0.11.31** or newer.
 - ⚠️ **Repeat `network` and `storagePool` on every SLOT.** FH builds your `Slot` rows from
   the per-slot fields only, so a host-level-only value leaves every Slot row with an empty
   `storagePool`/`network` — silently, and `doctor` still passes because it checks the
