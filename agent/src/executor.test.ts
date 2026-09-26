@@ -528,3 +528,10 @@ test("host vmMemoryMb: opt-in per tier, omitted everywhere else", () => {
   assert.ok(!("memory_mb" in hyp(safeLoad(buildProvisionYaml(stratus, cfg, undefined, pve35)))));
   assert.ok(!("memory_mb" in hyp(safeLoad(buildProvisionYaml(job, cfg)))));
 });
+
+test("the Proxmox token never goes on arcane-mage's command line (argv is world-readable)", async () => {
+  const { arcaneMageArgv } = await import("./executor");
+  const argv = arcaneMageArgv(["refresh-iso", "--json", "--node", "pve50"], "https://pve50:8006");
+  assert.deepEqual(argv, ["refresh-iso", "--url", "https://pve50:8006", "--json", "--node", "pve50"]);
+  assert.ok(!argv.includes("--token"));
+});

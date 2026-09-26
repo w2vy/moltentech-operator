@@ -216,12 +216,23 @@ export function redactToken(text: string, secret?: string): string {
   return text.split(secret).join("<redacted>");
 }
 
+/**
+ * argv for an arcane-mage call. The token is deliberately NOT here: argv is readable by any
+ * process on the host (`/proc/<pid>/cmdline`, `ps`), and on 2026-09-26 the pve50 onboarding
+ * showed `--token fh-agent@pve!agent=<secret>` in the agent container's process list for the
+ * whole 9-minute ISO refresh. arcane-mage reads the token from stdin when `--token` is absent
+ * and stdin is not a terminal (`_resolve_connection`), so `runArcaneMage` writes it there.
+ */
+export function arcaneMageArgv(args: string[], url: string): string[] {
+  const [subcommand, ...rest] = args;
+  return [subcommand!, "--url", url, ...rest];
+}
+
 function runArcaneMage(args: string[], cfg: AgentConfig, timeoutMs: number): Promise<AmResult> {
   const token = `${cfg.proxmox.tokenId}=${cfg.proxmox.tokenSecret}`;
-  const [subcommand, ...rest] = args;
-  const fullArgs = [subcommand!, "--url", cfg.proxmox.url!, "--token", token, ...rest];
+  const fullArgs = arcaneMageArgv(args, cfg.proxmox.url!);
   return new Promise((resolve) => {
-    execFile("arcane-mage", fullArgs, { timeout: timeoutMs }, (error, stdout, stderr) => {
+    const child = execFile("arcane-mage", fullArgs, { timeout: timeoutMs }, (error, stdout, stderr) => {
       // Scrub HERE, at the single choke point, rather than at each of the ~6 call sites
       // that build a message — every one of them (success and failure, message, stdout,
       // stderr) is downstream of this, so one redaction covers all of them and a future
@@ -239,6 +250,10 @@ function runArcaneMage(args: string[], cfg: AgentConfig, timeoutMs: number): Pro
       const out = scrub(stdout);
       resolve({ error: scrubbed, stdout: out, stderr: scrub(stderr), json: parseAmJson(out) });
     });
+    // The token, then EOF: arcane-mage reads stdin to the end, so it must be closed.
+    // An EPIPE (the child died before reading) surfaces through the exit callback above.
+    child.stdin?.on("error", () => {});
+    child.stdin?.end(token + "\n");
   });
 }
 
