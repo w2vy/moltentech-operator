@@ -185,6 +185,8 @@ export interface ProxmoxSurvey {
    * is simply absent, so the existing-node scan offers nothing there rather than failing init.
    */
   vms?: Record<string, QemuVm[]>;
+  /** Node name -> total RAM in MB (`GET /nodes/<node>/status`). Best-effort, like `vms`. */
+  memoryMb?: Record<string, number>;
 }
 
 /** One VM from `GET /nodes/<node>/qemu`, narrowed to what the existing-node scan reads. */
@@ -462,6 +464,14 @@ export async function probeProxmox(
   }
 
   for (const node of survey.nodes) {
+    // Host RAM, for sizing VMs on a host that cannot fit the tier's default (askHosts).
+    try {
+      const st = await get<{ memory?: { total?: number } }>(creds, `/api2/json/nodes/${node}/status`);
+      const total = st?.memory?.total;
+      if (typeof total === "number" && total > 0) (survey.memoryMb ??= {})[node] = Math.floor(total / 1048576);
+    } catch {
+      /* best-effort */
+    }
     try {
       const rows = await get<StorageRow[]>(creds, `/api2/json/nodes/${node}/storage`);
       const disks = await get<DiskInfo[]>(creds, `/api2/json/nodes/${node}/disks/list`).catch(

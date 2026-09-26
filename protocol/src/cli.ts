@@ -102,6 +102,7 @@ import {
   proxmoxAlive,
   tokenSetupCommands,
 } from "./proxmox-token";
+import { HOST_RESERVE_MB, planVmMemory } from "./vm-memory";
 import { describeVm, nodeOf, parseKeepList, retireAdoptedMarks } from "./existing-nodes";
 import { fetchFluxNodeStatus, type FluxNodeStatus } from "./flux-node-status";
 import { ExistingVm, VmMemoryMb } from "./messages";
@@ -304,7 +305,7 @@ function buildLine(): string {
  */
 async function withPrompts<T>(
   ctx: Ctx,
-  fn: (ask: Ask, askUntil: AskUntil, askHidden: Ask) => Promise<T>
+  fn: (ask: Ask, askUntil: AskUntil, askHidden: AskHidden) => Promise<T>
 ): Promise<T> {
   // ⚠️ Refuse a non-terminal stdin rather than reading from it. Piping answers in LOOKS
   // like it works: readline resolves the first question, then stdin hits EOF and every
@@ -359,22 +360,38 @@ async function withPrompts<T>(
     }
   };
   /**
-   * `ask` with the typed answer not echoed — for a password. Readline has no mute switch,
-   * so this swaps its output writer for the one question. A fake `rl` in tests has no
-   * writer to swap and simply echoes.
+   * `ask` with the typed answer NOT echoed — for a password or a token secret. Readline has no
+   * mute switch, so for this one question every write to the terminal is swallowed except the
+   * line break. Returns null when the input cannot be hidden (not a terminal); the caller then
+   * decides — a password is never asked for visibly.
+   *
+   * ⚠️ 0.6.1 swapped readline's `_writeToOutput`, which this Node no longer has, and silently
+   * fell back to a visible prompt: a root password was echoed on the first live run (09-26).
    */
-  const askHidden: Ask = async (q, def) => {
-    const w = rl as unknown as { _writeToOutput?: (s: string) => void; output?: NodeJS.WritableStream };
-    const original = w._writeToOutput;
-    if (!original) return ask(q, def);
-    const prompt = def ? `${q} [${def}]: ` : `${q}: `;
-    w._writeToOutput = (s: string) => {
-      if (s.startsWith(prompt) || s.includes("\n")) original.call(rl, s.startsWith(prompt) ? prompt : "\n");
-    };
+  const askHidden: AskHidden = async (q) => {
+    if (closed) die("stdin closed before the questions were finished — nothing was written.");
+    const out = (rl as unknown as { output?: NodeJS.WriteStream }).output;
+    if (!out || typeof out.write !== "function" || !out.isTTY) return null;
+    const write = out.write;
+    out.write(`${q}: `);
+    out.write = ((chunk: unknown, ...rest: unknown[]) => {
+      const s = typeof chunk === "string" ? chunk : Buffer.isBuffer(chunk) ? chunk.toString() : "";
+      const cb = rest.find((r) => typeof r === "function") as (() => void) | undefined;
+      if (s.includes("\n")) return write.call(out, "\n", cb as never);
+      cb?.();
+      return true;
+    }) as typeof out.write;
+    let onClosed: (() => void) | undefined;
     try {
-      return await ask(q, def);
+      const answer = await Promise.race([
+        rl.question(""),
+        new Promise<null>((resolve) => rl.once("close", (onClosed = () => resolve(null)))),
+      ]);
+      if (answer === null) die("stdin closed before the questions were finished — nothing was written.");
+      return answer.trim();
     } finally {
-      w._writeToOutput = original;
+      out.write = write;
+      if (onClosed) rl.off("close", onClosed);
     }
   };
   try {
@@ -438,6 +455,8 @@ async function fetchMtPubkey(mtBaseUrl: string, fetchImpl: typeof fetch = fetch)
 }
 
 export type Ask = (q: string, def?: string) => Promise<string>;
+/** A question whose answer is not echoed; null when this terminal cannot hide it. */
+export type AskHidden = (q: string) => Promise<string | null>;
 /**
  * `problem` may go to the network (the hub's name check), so it may return a promise.
  * A sync validator is the common case and needs no wrapping.
@@ -809,7 +828,7 @@ export interface ProxmoxSetupDeps {
 export async function askProxmox(
   ask: Ask,
   defaults: ProxmoxDefaults = {},
-  askHidden: Ask = ask,
+  askHidden: AskHidden = async () => null,
   deps: ProxmoxSetupDeps = { alive: proxmoxAlive, create: createAgentToken }
 ): Promise<ProxmoxAnswers> {
   // Step 0.1 has already produced these by the time init runs, and leaving them for
@@ -884,7 +903,10 @@ export async function askProxmox(
           ? "  PROXMOX_TOKEN_SECRET (Enter keeps the current one)"
           : "  PROXMOX_TOKEN_SECRET (Enter keeps the one you typed)"
         : "  PROXMOX_TOKEN_SECRET (printed once when you created it)";
-      proxmoxTokenSecret = (await ask(secretPrompt)) || proxmoxTokenSecret;
+      // Hidden where the terminal allows it; a secret (unlike a password) may still be typed
+      // visibly on one that doesn't, as it always was.
+      const hidden = await askHidden(secretPrompt);
+      proxmoxTokenSecret = (hidden ?? (await ask(secretPrompt))) || proxmoxTokenSecret;
     }
 
     if (!proxmoxUrl || !proxmoxTokenId || !proxmoxTokenSecret) {
@@ -916,6 +938,50 @@ export async function askProxmox(
 }
 
 /**
+ * Offer the follow-up prompts only to a person at a terminal: the session, or a one-shot
+ * with a TTY. Never to a scripted run (--answers) or a test's scripted readline.
+ */
+function canOffer(ctx: Ctx, answersPath: string | undefined): boolean {
+  return !answersPath && (ctx.interactive === true || (Boolean(process.stdin.isTTY) && !ctx.rl));
+}
+
+/** The value from either paste: the bare key, or the whole `COALITION_SIGNING_KEY=…` line. */
+export function parseSigningKeyPaste(s: string): string {
+  let v = s.trim();
+  const eq = v.match(/^(?:export\s+)?COALITION_SIGNING_KEY\s*=\s*/);
+  if (eq) v = v.slice(eq[0].length);
+  if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) v = v.slice(1, -1);
+  return v.trim();
+}
+
+/**
+ * Step 1 of "Next, in order", done from here: print manifest.json to paste at /onboard, then
+ * take the COALITION_SIGNING_KEY that /onboard shows ONCE and write it into secrets.env.
+ * Each is skippable — editing secrets.env in another terminal works just as well.
+ */
+async function offerOnboardSteps(ctx: Ctx, dir: string, mtBaseUrl: string): Promise<void> {
+  await withPrompts(ctx, async (ask, _askUntil, askHidden) => {
+    const show = await ask(`\nShow manifest.json now, to paste at ${mtBaseUrl}/onboard? (Y/n)`, "Y");
+    if (!show.toLowerCase().startsWith("n")) {
+      console.log("\n" + readFileSync(join(dir, "manifest.json"), "utf8").trimEnd() + "\n");
+      console.log(`  → paste it at ${mtBaseUrl}/onboard and sign; it shows COALITION_SIGNING_KEY once.`);
+    }
+    const q =
+      "Paste COALITION_SIGNING_KEY here (the value, or the whole COALITION_SIGNING_KEY=… line) — " +
+      "Enter to skip and edit secrets.env yourself";
+    const pasted = (await askHidden(q)) ?? (await ask(q));
+    const key = parseSigningKeyPaste(pasted);
+    if (!key) {
+      console.log("  → skipped. Put it in secrets.env as COALITION_SIGNING_KEY=… before `env`.");
+      return;
+    }
+    const path = join(dir, "secrets.env");
+    writeFileSync(path, upsertEnvLine(readFileSync(path, "utf8"), "COALITION_SIGNING_KEY", key), { mode: 0o600 });
+    console.log("  ✓ COALITION_SIGNING_KEY written to secrets.env. Next: `fh-toolkit doctor`, then `fh-toolkit env`.");
+  });
+}
+
+/**
  * The operator has no token. Offer to create it through the API (root@pam password, used for
  * this one login and never stored); otherwise, or when that fails, print the four `pveum`
  * lines to paste as root. Returns the new token, or undefined when the operator will create it
@@ -923,7 +989,7 @@ export async function askProxmox(
  */
 async function createTokenOrExplain(
   ask: Ask,
-  askHidden: Ask,
+  askHidden: AskHidden,
   deps: ProxmoxSetupDeps,
   url: string
 ): Promise<{ tokenId: string; tokenSecret: string } | undefined> {
@@ -934,8 +1000,10 @@ async function createTokenOrExplain(
     )
   ).toLowerCase();
   if (create.startsWith("y")) {
-    const password = await askHidden("  root@pam password");
-    if (password) {
+    const password = await askHidden("  root@pam password (not shown as you type)");
+    if (password === null) {
+      console.log("    ✗ this terminal cannot hide what you type, so the root password is not asked for here.");
+    } else if (password) {
       try {
         const made = await deps.create(url, { username: "root@pam", password });
         console.log(`    ✓ created ${made.tokenId} (role ${AGENT_ROLE} at /). Secret captured — it is not shown.`);
@@ -1369,7 +1437,25 @@ export async function askHosts(
     for (const vm of unplaced.values()) {
       console.log(`  ⚠ ${vm.vmid} ${vm.name} was not given a slot — it is not marked, and the hub knows nothing about it.`);
     }
-    hosts.push({ name, storageImages, storageIso, ...(was?.vmMemoryMb ? { vmMemoryMb: was.vmMemoryMb } : {}), slots });
+    let vmMemoryMb = was?.vmMemoryMb;
+    const hostMb = survey?.memoryMb?.[name];
+    const plan = !vmMemoryMb && hostMb ? planVmMemory(hostMb, slots.map((s) => s.tier)) : undefined;
+    if (plan) {
+      // Asked, not silently applied: it changes what gets built, and an operator adding RAM
+      // next week should be able to say no.
+      const sizes = Object.entries(plan.vmMemoryMb).map(([tier, mb]) => `${tier} ${mb} MB`).join(", ");
+      console.log(
+        `  ${name} has ${hostMb} MB of RAM. At the default VM sizes its nodes leave the host ` +
+          `${plan.freeAtDefault} MB — it would swap, and swapping fails the Flux disk benchmark.`
+      );
+      console.log(
+        `  Smaller VMs still pass the RAM check: ${sizes} (host keeps ${plan.freeSqueezed} MB` +
+          `${plan.freeSqueezed < HOST_RESERVE_MB ? " — still tight; zram + KSM help, see the operator docs" : ""}).`
+      );
+      const yes = (await ask(`  Build ${name}'s VMs at ${sizes}? (Y/n)`, "Y")).toLowerCase();
+      if (!yes.startsWith("n")) vmMemoryMb = plan.vmMemoryMb as VmMemoryMb;
+    }
+    hosts.push({ name, storageImages, storageIso, ...(vmMemoryMb ? { vmMemoryMb } : {}), slots });
   }
 
   // Printed as WAN IP → ports, because that is the shape of the port-forward the
@@ -2541,6 +2627,7 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
           ? "         WORLD-READABLE, and yours holds your Stripe key."
           : "         WORLD-READABLE, and yours holds your signing keys."
       );
+      if (canOffer(ctx, answersPath)) await offerOnboardSteps(ctx, dir, answers.mtBaseUrl);
       return 0;
     }
     case "doctor": {
@@ -3157,6 +3244,12 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
           `Wrote ${outPath} (${pairs.length} vars). Contains SECRETS — do NOT commit; ` +
             `import it into your Flux app's Environment Variables.`
         );
+        if (canOffer(ctx, undefined)) {
+          const show = await withPrompts(ctx, (ask) =>
+            ask("Show env.json now, to paste into Flux's Import Environment Variables? It contains SECRETS (y/N)", "N")
+          );
+          if (show.toLowerCase().startsWith("y")) process.stdout.write("\n" + out + "\n");
+        }
       } else {
         process.stdout.write(out);
       }
@@ -3434,6 +3527,8 @@ async function session(ctx: Ctx): Promise<number> {
       break; // Ctrl-C on the prompt
     }
     if (line === null || line === undefined) break;
+    // `# …` is a note to self (or to whoever reads the transcript), not a command.
+    if (line.trim().startsWith("#")) continue;
     const argv = tokenize(line);
     if (argv.length === 0) continue;
     const [cmd, ...args] = argv;
