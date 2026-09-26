@@ -106,20 +106,22 @@ test("a taken slug and a taken prefix are re-asked at the prompt, not discovered
     if (req.vmNamePrefix === "fh-") r.vmNamePrefix = { value: "fh-", available: false, reason: "reserved" };
     return r;
   };
-  //           env  lvl  slug(taken) slug   prefix(taken) prefix(bad fmt) prefix(reserved: offline rule) prefix  name  loc contact owner y app
-  const { ctx, transcript } = ctxFor(dir, ["1", "2", "moltentech", "molten-two", "mt-", "MT-", "fh-", "m2-", "", "", "", "1Owner", "y", ""], hub);
+  // A prefix the HUB holds goes back to the slug (Enter keeps it); a malformed or reserved one is just re-asked.
+  //           env  lvl  slug(taken) slug   prefix(taken) slug(keep) prefix(bad fmt) prefix(reserved: offline rule) prefix  name  loc contact owner y app
+  const { ctx, transcript } = ctxFor(dir, ["1", "2", "moltentech", "molten-two", "mt-", "", "MT-", "fh-", "m2-", "", "", "", "1Owner", "y", ""], hub);
   const { result, log } = await quiet(() => runCommand("slug", ["--dir", dir], ctx));
   assert.equal(result, 0);
   const env = parseConfigEnv(readFileSync(join(dir, "config.env"), "utf8"));
   assert.equal(env.PROVIDER_SLUG, "molten-two");
   assert.equal(env.PROVIDER_VM_PREFIX, "m2-");
   assert.equal(env.MT_BASE_URL, "https://fluxhub.moltentech.us");
-  // The prompt was repeated twice for the slug and four times for the prefix.
-  assert.equal((transcript().match(/Provider slug/g) ?? []).length, 2);
+  // The slug was asked three times (taken, then again after the taken prefix) and the prefix four.
+  assert.equal((transcript().match(/Provider slug/g) ?? []).length, 3);
   assert.equal((transcript().match(/VM name prefix \(/g) ?? []).length, 4);
   const t = log;
   assert.match(t, /slug "moltentech" is already registered/);
   assert.match(t, /prefix "mt-" is already registered/);
+  assert.match(t, /back to the slug \(Enter keeps it\)/);
   assert.match(t, /"MT-" is not a usable VM name prefix/);
   assert.match(t, /"fh-" is reserved for Foundation nodes/);
 });

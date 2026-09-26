@@ -712,7 +712,8 @@ export async function askIdentity(
     console.log("  1) Flux Hub Supporter — your own nodes, plus Foundation nodes on your idle");
     console.log("     capacity. Nothing for sale, no Stripe account needed.");
     console.log("  2) Flux Hub Operator  — the above, plus hardware rented out through the");
-    console.log("     marketplace. You are merchant of record on your own Stripe account.");
+    console.log("     marketplace. Customers pay by card on your own Stripe account (you are");
+    console.log("     merchant of record) and/or in FLUX straight to your wallet.");
     const levelAnswer = await ask("  choose 1 or 2", "2");
     level = levelAnswer.startsWith("1") ? "supporter" : "operator";
     console.log(`  → Flux Hub ${level === "supporter" ? "Supporter" : "Operator"}\n`);
@@ -721,26 +722,43 @@ export async function askIdentity(
   // The slug the operator already IS excludes their own rows from every "taken", so a
   // re-run in a scaffolded directory does not report the operator's own name back at them.
   const hub = hubNames(ctx, mtBaseUrl, defaults.providerSlug);
-  const providerSlug = await askUntil(
-    "Provider slug (lowercase, PERMANENT once ingested)",
-    async (v) => {
-      if (defaults.slugLocked && defaults.providerSlug && v !== defaults.providerSlug) {
-        return (
-          `config.env says PROVIDER_SLUG=${defaults.providerSlug}. The slug is your identity on the hub — ` +
-          "a different one is a NEW provider, not a rename. Keep it (Enter), or re-run with --force if a new provider is what you mean."
-        );
-      }
-      return slugProblem(v) ?? (await hub.blocking({ slug: v }));
-    },
-    defaults.providerSlug
-  );
-  // The namespace every VM name lives in. Pinned by the hub at first ingest, like the
-  // slug — so it is checked against the hub at the one moment it is still free to change.
-  const vmNamePrefix = await askUntil(
-    `VM name prefix (${VM_NAME_PREFIX_RULE}; PERMANENT once ingested)`,
-    async (v) => vmNamePrefixProblem(v) ?? (await hub.blocking({ vmNamePrefix: v })),
-    defaults.vmNamePrefix ?? suggestVmNamePrefix(providerSlug)
-  );
+  // A prefix the hub already holds sends the operator back to the SLUG (Enter keeps it):
+  // the prefix default is derived from the slug, so a different slug is the usual way to a
+  // free prefix. A malformed prefix is just asked again. (tom, 2026-09-26 — `ms-` was held by
+  // a retired provider, and the only way on was to invent a prefix unrelated to the slug.)
+  let providerSlug = defaults.providerSlug ?? "";
+  let vmNamePrefix = "";
+  for (;;) {
+    providerSlug = await askUntil(
+      "Provider slug (lowercase, PERMANENT once ingested)",
+      async (v) => {
+        if (defaults.slugLocked && defaults.providerSlug && v !== defaults.providerSlug) {
+          return (
+            `config.env says PROVIDER_SLUG=${defaults.providerSlug}. The slug is your identity on the hub — ` +
+            "a different one is a NEW provider, not a rename. Keep it (Enter), or re-run with --force if a new provider is what you mean."
+          );
+        }
+        return slugProblem(v) ?? (await hub.blocking({ slug: v }));
+      },
+      providerSlug || undefined
+    );
+    // The namespace every VM name lives in. Pinned by the hub at first ingest, like the
+    // slug — so it is checked against the hub at the one moment it is still free to change.
+    let taken: string | undefined;
+    vmNamePrefix = await askUntil(
+      `VM name prefix (${VM_NAME_PREFIX_RULE}; PERMANENT once ingested)`,
+      async (v) => {
+        const shape = vmNamePrefixProblem(v);
+        if (shape) return shape;
+        taken = await hub.blocking({ vmNamePrefix: v });
+        return undefined;
+      },
+      defaults.vmNamePrefix ?? suggestVmNamePrefix(providerSlug)
+    );
+    if (!taken) break;
+    console.log(`    ${taken}`);
+    console.log("    → back to the slug (Enter keeps it); the prefix is asked again after it.");
+  }
   const providerName = await ask("Display name", defaults.providerName ?? providerSlug);
   // A look-alike display name is advisory: the hub accepts it and flags it for an admin.
   hub.advise(await hub.check({ name: providerName }));
@@ -2305,10 +2323,19 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
       // the only way MANIFEST_KEY can be filled at all.
       const keyPath = join(dir, "manifest-key.pem");
       if (!existsSync(keyPath)) {
-        die(
+        const missing =
           `${keyPath} not found. Run \`fh-toolkit keygen\` first — your signing key is your ` +
-            `provider identity, and init fills MANIFEST_KEY and MANIFEST_PUBKEY from it.`
+          `provider identity, and init fills MANIFEST_KEY and MANIFEST_PUBKEY from it.`;
+        // At a terminal, offer to do it: a brand-new directory has no key by definition, and
+        // stopping only to be told to type one command is the whole of this step's friction.
+        // A scripted run (--answers) still stops — it must not mint an identity unasked.
+        if (answersPath || !process.stdin.isTTY) die(missing);
+        const make = await withPrompts(ctx, (ask) =>
+          ask("No signing key (manifest-key.pem) here yet. Generate it now? (Y/n)", "Y")
         );
+        if (make.toLowerCase().startsWith("n")) die(missing);
+        await runCommand("keygen", ["--dir", dir], ctx);
+        console.log("");
       }
 
       // ⭐ ...and so is the overwrite check. It used to be derived from `generateAll()`,
@@ -3348,6 +3375,28 @@ function writeHistory(dir: string, history: readonly string[]): void {
 }
 
 /**
+ * Inside the session a command is typed WITHOUT the `fh-toolkit ` prefix, so every hint the
+ * commands print (`fh-toolkit keygen`, `fh-toolkit doctor --check-proxmox`) is rewritten to
+ * what the operator would actually type at the prompt. Only backticked commands; wrapper
+ * flags (`fh-toolkit --refresh`) run in the HOST shell and are left alone.
+ */
+export function sessionText(s: string): string {
+  return s.replace(/`fh-toolkit (?!-)/g, "`");
+}
+
+/** Pass everything the commands print through `fn`; returns the undo. */
+function rewriteConsole(fn: (s: string) => string): () => void {
+  const { log, error } = console;
+  const map = (a: unknown[]) => a.map((x) => (typeof x === "string" ? fn(x) : x));
+  console.log = (...a: unknown[]) => log(...map(a));
+  console.error = (...a: unknown[]) => error(...map(a));
+  return () => {
+    console.log = log;
+    console.error = error;
+  };
+}
+
+/**
  * The interactive session. One `docker run -it` for many commands, which buys three
  * things a one-shot cannot: a real TTY for `init`'s prompts, state carried between
  * commands (see `Ctx`), and one mount decision instead of one per command.
@@ -3389,6 +3438,7 @@ async function session(ctx: Ctx): Promise<number> {
     if (argv.length === 0) continue;
     const [cmd, ...args] = argv;
     if (cmd === "exit" || cmd === "quit") break;
+    const restore = rewriteConsole(sessionText);
     try {
       await runCommand(cmd, args, ctx);
     } catch (e) {
@@ -3396,6 +3446,8 @@ async function session(ctx: Ctx): Promise<number> {
       // `die` throws rather than exits.
       if (e instanceof CliError) console.error(`error: ${e.message}`);
       else console.error(`error: ${(e as Error).message ?? String(e)}`);
+    } finally {
+      restore();
     }
     console.log("");
   }
