@@ -113,6 +113,12 @@ enable ProxMox Clustering. The agent automatically detects is Cluster mode is en
 
 ### 0.1 Create an API token
 
+💡 **No token yet? `fh-toolkit init` (and `fh-toolkit proxmox`) can do this step for you.** After you give the
+Proxmox URL it checks the host answers, then asks whether you already have a token. Say **n** and it offers to
+create `fh-agent@pve!agent` through the API, using the root@pam password once. The password isn't echoed or saved.
+Or it prints the four commands below to paste into an ssh session, then asks for the two values, with the id
+defaulting to `fh-agent@pve!agent`. A root account with two-factor login can only use the commands.
+
 ⚠️ **A path-scoped token cannot work.** Scoping a token to `/nodes/<host>` looks
 tempting on a cluster, but `VM.Allocate` is checked on `/vms/<vmid>` or `/pool/<pool>`,
 the vmid namespace is cluster-wide, and pools are the only supported partition — which

@@ -95,6 +95,13 @@ import {
   existingNodeCandidates,
   tierForVm,
 } from "./proxmox-probe";
+import {
+  AGENT_ROLE,
+  AGENT_TOKEN_ID,
+  createAgentToken,
+  proxmoxAlive,
+  tokenSetupCommands,
+} from "./proxmox-token";
 import { describeVm, nodeOf, parseKeepList, retireAdoptedMarks } from "./existing-nodes";
 import { fetchFluxNodeStatus, type FluxNodeStatus } from "./flux-node-status";
 import { ExistingVm, VmMemoryMb } from "./messages";
@@ -297,7 +304,7 @@ function buildLine(): string {
  */
 async function withPrompts<T>(
   ctx: Ctx,
-  fn: (ask: Ask, askUntil: AskUntil) => Promise<T>
+  fn: (ask: Ask, askUntil: AskUntil, askHidden: Ask) => Promise<T>
 ): Promise<T> {
   // ⚠️ Refuse a non-terminal stdin rather than reading from it. Piping answers in LOOKS
   // like it works: readline resolves the first question, then stdin hits EOF and every
@@ -351,8 +358,27 @@ async function withPrompts<T>(
       console.log(`    ${why}`);
     }
   };
+  /**
+   * `ask` with the typed answer not echoed — for a password. Readline has no mute switch,
+   * so this swaps its output writer for the one question. A fake `rl` in tests has no
+   * writer to swap and simply echoes.
+   */
+  const askHidden: Ask = async (q, def) => {
+    const w = rl as unknown as { _writeToOutput?: (s: string) => void; output?: NodeJS.WritableStream };
+    const original = w._writeToOutput;
+    if (!original) return ask(q, def);
+    const prompt = def ? `${q} [${def}]: ` : `${q}: `;
+    w._writeToOutput = (s: string) => {
+      if (s.startsWith(prompt) || s.includes("\n")) original.call(rl, s.startsWith(prompt) ? prompt : "\n");
+    };
+    try {
+      return await ask(q, def);
+    } finally {
+      w._writeToOutput = original;
+    }
+  };
   try {
-    return await fn(ask, askUntil);
+    return await fn(ask, askUntil, askHidden);
   } finally {
     rl.off("close", onClose);
     own?.close();
@@ -756,7 +782,18 @@ export interface ProxmoxDefaults {
   tokenSecret?: string;
 }
 
-export async function askProxmox(ask: Ask, defaults: ProxmoxDefaults = {}): Promise<ProxmoxAnswers> {
+/** Network-touching steps of `askProxmox`, injectable so the flow can be tested offline. */
+export interface ProxmoxSetupDeps {
+  alive: typeof proxmoxAlive;
+  create: typeof createAgentToken;
+}
+
+export async function askProxmox(
+  ask: Ask,
+  defaults: ProxmoxDefaults = {},
+  askHidden: Ask = ask,
+  deps: ProxmoxSetupDeps = { alive: proxmoxAlive, create: createAgentToken }
+): Promise<ProxmoxAnswers> {
   // Step 0.1 has already produced these by the time init runs, and leaving them for
   // later meant the agent could not make a single Proxmox call until the operator
   // hand-edited .env.operator. Asked, not derived — init holds no cluster to ask.
@@ -784,6 +821,9 @@ export async function askProxmox(ask: Ask, defaults: ProxmoxDefaults = {}): Prom
   let proxmoxTokenId = defaults.tokenId ?? "";
   let proxmoxTokenSecret = defaults.tokenSecret ?? "";
   let survey: ProxmoxSurvey | undefined;
+  // Only an operator with NO token configured is asked whether they have one. A re-run over
+  // an existing .env.operator already has the answer.
+  let askedHaveToken = Boolean(defaults.tokenSecret);
   for (;;) {
     proxmoxUrl = await ask(
       "  Proxmox URL (an IP always works; a name must resolve INSIDE the container) — or `skip`",
@@ -794,16 +834,40 @@ export async function askProxmox(ask: Ask, defaults: ProxmoxDefaults = {}): Prom
       console.log("  → skipped. Fill PROXMOX_* in .env.operator, then `fh-toolkit doctor --check-proxmox`.");
       break;
     }
-    proxmoxTokenId = await ask("  PROXMOX_TOKEN_ID", proxmoxTokenId || "fh-agent@pve!agent");
-    // The captured secret is deliberately NOT offered back as a default: `ask` echoes
-    // defaults in brackets, and a retry loop would then print the token secret to the
-    // terminal on every round. Enter re-uses it without showing it.
-    const secretPrompt = proxmoxTokenSecret
-      ? defaults.tokenSecret && proxmoxTokenSecret === defaults.tokenSecret
-        ? "  PROXMOX_TOKEN_SECRET (Enter keeps the current one)"
-        : "  PROXMOX_TOKEN_SECRET (Enter keeps the one you typed)"
-      : "  PROXMOX_TOKEN_SECRET (printed once when you created it)";
-    proxmoxTokenSecret = (await ask(secretPrompt)) || proxmoxTokenSecret;
+    // Set when this pass created the token: its id and secret are already in hand, so the
+    // two prompts below are skipped once, and a later retry asks them as usual.
+    let justCreated = false;
+    if (!askedHaveToken) {
+      // Prove the URL before asking anything that depends on it. Unauthenticated, so it
+      // works before a token exists — a 401 is Proxmox answering.
+      const alive = await deps.alive(proxmoxUrl);
+      if (!alive.ok) {
+        console.log(`    ✗ ${alive.detail}`);
+        continue;
+      }
+      console.log("    ✓ Proxmox answers there.");
+      askedHaveToken = true;
+      const have = (await ask("  Do you already have a Proxmox API token for the agent? (y/N)", "N")).toLowerCase();
+      if (!have.startsWith("y")) {
+        const created = await createTokenOrExplain(ask, askHidden, deps, proxmoxUrl);
+        if (created) {
+          ({ tokenId: proxmoxTokenId, tokenSecret: proxmoxTokenSecret } = created);
+          justCreated = true;
+        }
+      }
+    }
+    if (!justCreated) {
+      proxmoxTokenId = await ask("  PROXMOX_TOKEN_ID", proxmoxTokenId || AGENT_TOKEN_ID);
+      // The captured secret is deliberately NOT offered back as a default: `ask` echoes
+      // defaults in brackets, and a retry loop would then print the token secret to the
+      // terminal on every round. Enter re-uses it without showing it.
+      const secretPrompt = proxmoxTokenSecret
+        ? defaults.tokenSecret && proxmoxTokenSecret === defaults.tokenSecret
+          ? "  PROXMOX_TOKEN_SECRET (Enter keeps the current one)"
+          : "  PROXMOX_TOKEN_SECRET (Enter keeps the one you typed)"
+        : "  PROXMOX_TOKEN_SECRET (printed once when you created it)";
+      proxmoxTokenSecret = (await ask(secretPrompt)) || proxmoxTokenSecret;
+    }
 
     if (!proxmoxUrl || !proxmoxTokenId || !proxmoxTokenSecret) {
       console.log("    all three are needed to verify the token.");
@@ -831,6 +895,45 @@ export async function askProxmox(ask: Ask, defaults: ProxmoxDefaults = {}): Prom
   }
 
   return { proxmoxUrl, proxmoxTokenId, proxmoxTokenSecret, survey };
+}
+
+/**
+ * The operator has no token. Offer to create it through the API (root@pam password, used for
+ * this one login and never stored); otherwise, or when that fails, print the four `pveum`
+ * lines to paste as root. Returns the new token, or undefined when the operator will create it
+ * by hand and type what `user token add` printed.
+ */
+async function createTokenOrExplain(
+  ask: Ask,
+  askHidden: Ask,
+  deps: ProxmoxSetupDeps,
+  url: string
+): Promise<{ tokenId: string; tokenSecret: string } | undefined> {
+  const create = (
+    await ask(
+      `  Create ${AGENT_TOKEN_ID} now? Uses the root@pam password once — not saved anywhere (y/N)`,
+      "N"
+    )
+  ).toLowerCase();
+  if (create.startsWith("y")) {
+    const password = await askHidden("  root@pam password");
+    if (password) {
+      try {
+        const made = await deps.create(url, { username: "root@pam", password });
+        console.log(`    ✓ created ${made.tokenId} (role ${AGENT_ROLE} at /). Secret captured — it is not shown.`);
+        return made;
+      } catch (e) {
+        console.log(`    ✗ ${(e as Error).message}`);
+      }
+    }
+  }
+  console.log(
+    "\n  Run these as root on the Proxmox host (paste into an ssh session). The last line prints the\n" +
+      "  secret ONCE — copy it, then enter the two values below.\n"
+  );
+  for (const line of tokenSetupCommands()) console.log(`    ${line}`);
+  console.log("");
+  return undefined;
 }
 
 /**
@@ -1284,7 +1387,7 @@ export async function askHosts(
 }
 
 async function askAnswers(ctx: Ctx): Promise<Answers> {
-  return withPrompts(ctx, async (ask, askUntil) => {
+  return withPrompts(ctx, async (ask, askUntil, askHidden) => {
     console.log("fh-toolkit init — this writes every onboarding file from your answers.\n");
 
     const id = await askIdentity(ctx, ask, askUntil);
@@ -1299,7 +1402,7 @@ async function askAnswers(ctx: Ctx): Promise<Answers> {
     }
     const minimums = liveMinimums ?? TIER_FLOORS_CENTS;
 
-    const proxmox = await askProxmox(ask);
+    const proxmox = await askProxmox(ask, {}, askHidden);
 
     // ── Pricing, before inventory ────────────────────────────────────────────────
     // What you SELL is a business decision; what hardware you have is a stock-take.
@@ -1903,8 +2006,12 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
             ? `fh-toolkit proxmox — ${od.operatorPath} exists; Enter keeps each current value.\n`
             : "fh-toolkit proxmox — the agent's Proxmox credentials; `inventory` adds the hosts.\n"
         );
-        const p = await withPrompts(ctx, (ask) =>
-          askProxmox(ask, { url: opEnv.PROXMOX_URL, tokenId: opEnv.PROXMOX_TOKEN_ID, tokenSecret: opEnv.PROXMOX_TOKEN_SECRET })
+        const p = await withPrompts(ctx, (ask, _askUntil, askHidden) =>
+          askProxmox(
+            ask,
+            { url: opEnv.PROXMOX_URL, tokenId: opEnv.PROXMOX_TOKEN_ID, tokenSecret: opEnv.PROXMOX_TOKEN_SECRET },
+            askHidden
+          )
         );
         ({ proxmoxUrl: url, proxmoxTokenId: tokenId, proxmoxTokenSecret: tokenSecret } = p);
         if (!url) {
