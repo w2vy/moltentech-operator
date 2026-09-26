@@ -102,7 +102,7 @@ import {
   proxmoxAlive,
   tokenSetupCommands,
 } from "./proxmox-token";
-import { HOST_RESERVE_MB, planVmMemory } from "./vm-memory";
+import { planVmMemory, vmMemoryAdvice } from "./vm-memory";
 import { describeVm, nodeOf, parseKeepList, retireAdoptedMarks } from "./existing-nodes";
 import { fetchFluxNodeStatus, type FluxNodeStatus } from "./flux-node-status";
 import { ExistingVm, VmMemoryMb } from "./messages";
@@ -1440,20 +1440,13 @@ export async function askHosts(
     let vmMemoryMb = was?.vmMemoryMb;
     const hostMb = survey?.memoryMb?.[name];
     const plan = !vmMemoryMb && hostMb ? planVmMemory(hostMb, slots.map((s) => s.tier)) : undefined;
-    if (plan) {
+    if (plan && hostMb) {
       // Asked, not silently applied: it changes what gets built, and an operator adding RAM
       // next week should be able to say no.
-      const sizes = Object.entries(plan.vmMemoryMb).map(([tier, mb]) => `${tier} ${mb} MB`).join(", ");
-      console.log(
-        `  ${name} has ${hostMb} MB of RAM. At the default VM sizes its nodes leave the host ` +
-          `${plan.freeAtDefault} MB — it would swap, and swapping fails the Flux disk benchmark.`
-      );
-      console.log(
-        `  Smaller VMs still pass the RAM check: ${sizes} (host keeps ${plan.freeSqueezed} MB` +
-          `${plan.freeSqueezed < HOST_RESERVE_MB ? " — still tight; zram + KSM help, see the operator docs" : ""}).`
-      );
-      const yes = (await ask(`  Build ${name}'s VMs at ${sizes}? (Y/n)`, "Y")).toLowerCase();
-      if (!yes.startsWith("n")) vmMemoryMb = plan.vmMemoryMb as VmMemoryMb;
+      const advice = vmMemoryAdvice(name, hostMb, plan, slots.length);
+      for (const line of advice.lines) console.log(`  ${line}`);
+      const answer = (await ask(`  ${advice.question}`, advice.defaultYes ? "Y" : "N")).toLowerCase();
+      if (answer.startsWith("y")) vmMemoryMb = plan.vmMemoryMb as VmMemoryMb;
     }
     hosts.push({ name, storageImages, storageIso, ...(vmMemoryMb ? { vmMemoryMb } : {}), slots });
   }
