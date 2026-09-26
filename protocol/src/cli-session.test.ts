@@ -85,3 +85,13 @@ test("⭐ an unknown flag throws, so the session prompts again instead of exitin
     );
   }
 });
+
+test("session hints drop the `fh-toolkit ` prefix; wrapper flags keep it", async () => {
+  const { sessionText } = await import("./cli");
+  assert.equal(
+    sessionText("Run `fh-toolkit keygen` first, then `fh-toolkit doctor --check-proxmox`."),
+    "Run `keygen` first, then `doctor --check-proxmox`."
+  );
+  assert.equal(sessionText("fix: `fh-toolkit --update-wrapper`"), "fix: `fh-toolkit --update-wrapper`");
+  assert.equal(sessionText("fh-toolkit 0.6.2"), "fh-toolkit 0.6.2");
+});
