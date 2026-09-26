@@ -28,17 +28,28 @@ export async function refreshIsoOnce(
   let latestIso: string | undefined;
   for (const host of hosts) {
     const storageIso = host.storageIso ?? cfg.host.storageIso;
+    // Said BEFORE, because this can take many minutes (a first run downloads ~3 GB into the
+    // container, checksums it and uploads it) and nothing else is logged meanwhile. Found on the
+    // pve50 onboarding (2026-09-26): 9 silent minutes looked like a hung agent, and no job is
+    // claimed until this loop finishes.
+    console.log(
+      `[agent] checking the FluxLive ISO on ${host.nodeName} (storage ${storageIso}) — a new one is ` +
+        `downloaded (~3 GB) and uploaded first; jobs start after this`
+    );
+    const started = Date.now();
     try {
       const result: IsoRefreshResult = await refreshIsoFn(host.nodeName, storageIso, cfg.host.arcaneIso, cfg);
+      const took = `${Math.round((Date.now() - started) / 1000)}s`;
       if (!result.ok) {
-        console.error(`[agent] ISO refresh failed on ${host.nodeName}: ${result.error}`);
+        console.error(`[agent] ISO refresh failed on ${host.nodeName} after ${took}: ${result.error}`);
         continue;
       }
       latestIso = result.iso;
+      if (!result.changed) console.log(`[agent] FluxLive ISO on ${host.nodeName} is current (${result.iso}, ${took})`);
       if (result.changed) {
         console.log(
           `[agent] staged new ArcaneOS ISO ${result.iso} on ${host.nodeName} ` +
-            `(build ${result.build}, ${result.severity} severity)`
+            `(build ${result.build}, ${result.severity} severity, ${took})`
         );
       }
     } catch (err) {
