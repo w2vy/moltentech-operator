@@ -10,7 +10,7 @@ import {
   type PveRequest,
   type PveResponse,
 } from "./proxmox-token";
-import { askProxmox, type Ask } from "./cli";
+import { askProxmox, type Ask, type AskHidden } from "./cli";
 import { REQUIRED_PRIVS } from "./proxmox-probe";
 
 const ok = (data: unknown): PveResponse => ({ status: 200, reason: "OK", body: JSON.stringify({ data }) });
@@ -142,7 +142,7 @@ test("no token → create it: password asked hidden, id/secret never asked", asy
     [/retry, or `skip`/, "skip"],
   ]);
   let hiddenAsked = "";
-  const askHidden: Ask = async (q) => ((hiddenAsked = q), "pw");
+  const askHidden: AskHidden = async (q) => ((hiddenAsked = q), "pw");
   const r = await quiet(() =>
     askProxmox(ask, {}, askHidden, {
       alive: async () => ({ ok: true }),
@@ -213,4 +213,21 @@ test("an operator with a token configured is not asked whether they have one", a
     })
   );
   assert.ok(!asked.some((q) => /already have/.test(q)));
+});
+
+test("form requests carry Content-Length — pveproxy refuses chunked bodies (HTTP 501)", async () => {
+  const { pveRequestParts } = await import("./proxmox-token");
+  const { body, headers } = pveRequestParts({ form: { username: "root@pam", password: "p w" } });
+  assert.equal(headers["Content-Length"], String(Buffer.byteLength(body!)));
+  assert.equal(headers["Content-Type"], "application/x-www-form-urlencoded");
+  assert.equal(pveRequestParts({}).headers["Content-Length"], undefined);
+});
+
+test("the COALITION_SIGNING_KEY paste accepts the bare value or the whole line", async () => {
+  const { parseSigningKeyPaste } = await import("./cli");
+  assert.equal(parseSigningKeyPaste("abc123=="), "abc123==");
+  assert.equal(parseSigningKeyPaste("COALITION_SIGNING_KEY=abc123=="), "abc123==");
+  assert.equal(parseSigningKeyPaste('  COALITION_SIGNING_KEY = "abc123=="  '), "abc123==");
+  assert.equal(parseSigningKeyPaste("export COALITION_SIGNING_KEY='k'"), "k");
+  assert.equal(parseSigningKeyPaste(""), "");
 });

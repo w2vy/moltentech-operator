@@ -72,13 +72,27 @@ export type PveRequest = (
   opts?: { form?: Record<string, string>; ticket?: string; csrf?: string }
 ) => Promise<PveResponse>;
 
+/** Body and headers for a Proxmox API call — pure, so the header rules are testable. */
+export function pveRequestParts(opts: { form?: Record<string, string>; ticket?: string; csrf?: string } = {}): {
+  body: string | undefined;
+  headers: Record<string, string>;
+} {
+  const body = opts.form ? new URLSearchParams(opts.form).toString() : undefined;
+  const headers: Record<string, string> = {};
+  if (body !== undefined) {
+    headers["Content-Type"] = "application/x-www-form-urlencoded";
+    // pveproxy refuses chunked uploads ("HTTP 501 chunked transfer encoding not supported"),
+    // which is what node sends when no length is given. Found on the first live run, 09-26.
+    headers["Content-Length"] = String(Buffer.byteLength(body));
+  }
+  if (opts.ticket) headers.Cookie = `PVEAuthCookie=${opts.ticket}`;
+  if (opts.csrf) headers.CSRFPreventionToken = opts.csrf;
+  return { body, headers };
+}
+
 export const pveRequest: PveRequest = (method, url, path, opts = {}) =>
   new Promise((resolve, reject) => {
-    const body = opts.form ? new URLSearchParams(opts.form).toString() : undefined;
-    const headers: Record<string, string> = {};
-    if (body) headers["Content-Type"] = "application/x-www-form-urlencoded";
-    if (opts.ticket) headers.Cookie = `PVEAuthCookie=${opts.ticket}`;
-    if (opts.csrf) headers.CSRFPreventionToken = opts.csrf;
+    const { body, headers } = pveRequestParts(opts);
     const req = https.request(new URL(`${url}${path}`), { method, agent: insecureAgent, headers }, (res) => {
       let data = "";
       res.on("data", (c) => (data += c));
