@@ -111,7 +111,7 @@ fh-toolkit() {
   # FH_WRAPPER lets the container tell a current wrapper from a stale one; `doctor`
   # reports the mismatch. /etc/hosts read-only so hostnames resolve inside the container
   # as they do at your prompt — see operator-onboarding.md Step 0.5 for the loopback edge.
-  docker run --rm -i $tty -e FH_WRAPPER=8 -v "$PWD:/work" \
+  docker run --rm -i $tty -e FH_WRAPPER=9 -v "$PWD:/work" \
     -v /etc/hosts:/etc/hosts:ro -u "$(id -u):$(id -g)" "$img" "$@"
 }
 ```
@@ -1088,7 +1088,7 @@ key. `fh-agent` is a shell function on the host, so it can.
 
 | Want to | Run | which is |
 |---|---|---|
-| start it | `fh-agent start` | `docker compose up -d` |
+| start it (pulls the newest build first) | `fh-agent start` | `docker compose pull` + `docker compose up -d` |
 | is it running? | `fh-agent status` | `docker compose ps` + running version + drift note |
 | watch it | `fh-agent logs` (Ctrl-C stops watching, not the agent) | `docker compose logs -f` |
 | recent logs only | `fh-agent logs --tail 50` | `docker compose logs --tail 50` |

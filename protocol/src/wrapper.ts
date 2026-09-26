@@ -29,7 +29,7 @@ export const TOOLKIT_IMAGE = "ghcr.io/w2vy/fh-toolkit:latest";
  * from a stale one from one predating the handshake entirely (`undefined`). That is the
  * whole point of the exercise — a stale wrapper used to be undetectable from either side.
  */
-export const WRAPPER_VERSION = 8;
+export const WRAPPER_VERSION = 9;
 
 /** Where `--update-wrapper` installs, unless the operator overrides it. */
 export const WRAPPER_RC = "${FH_TOOLKIT_RC:-$HOME/.fh-toolkit.sh}";
@@ -261,6 +261,11 @@ fh-agent() {
       ;;
     start)
       fh-agent-compose-dir || return 1
+      # Pull first: a host that pulled the tag before keeps that copy, and a bare \`up -d\`
+      # starts it. On 2026-09-26 a fresh staging onboarding started agent 0.11.31 although
+      # :staging had moved to 0.11.34. When the image is current the pull costs ~1s; when
+      # it cannot reach the registry, start anyway on what is here.
+      docker compose pull || echo "note: could not pull — starting the image already on this host." >&2
       docker compose up -d
       ;;
     stop)
@@ -375,9 +380,10 @@ fh-agent-compose-dir() {
   fi
 }
 
-# The one verb that PULLS: fetch the tag and recreate the loop on it, printing the running
-# version on either side so you can see whether anything moved. \`fh-agent doctor\` only ever
-# reports (fh-agent-image-drift) — taking the build is yours to ask for, as \`fh-agent update\`.
+# Fetch the tag and recreate the loop on it, printing the running version on either side so
+# you can see whether anything moved. \`start\` also pulls (a first start should never run a
+# stale cached tag); \`restart\` does not — it is for re-reading .env.operator, not for taking
+# a new build. \`fh-agent doctor\` only ever reports (fh-agent-image-drift).
 fh-agent-update() {
   fh-agent-compose-dir || return 1
   echo "before: $(fh-agent-running-version)"

@@ -395,7 +395,9 @@ test("⭐ fh-agent start/stop/status/logs are the compose lifecycle, by name", (
   const box = shellBox();
   operatorDir(box);
   box.run("fh-agent start");
-  assert.deepEqual(composeCalls(box), ["up -d"]);
+  // Pull first, so a host holding an older copy of the tag never starts it (09-26: a fresh
+  // staging onboarding started 0.11.31 while :staging was 0.11.34). `restart` does not pull.
+  assert.deepEqual(composeCalls(box), ["pull", "up -d"]);
 
   const b2 = shellBox();
   operatorDir(b2);
