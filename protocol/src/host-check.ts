@@ -21,7 +21,12 @@
  * It also compares the VMs Proxmox has with the inventory (a VM that runs a size the next
  * rebuild will change, e.g. pve65 at 7424 while the inventory said 7680), and names running
  * VMs the inventory does not know (gateways) — listed, and counted in the RAM arithmetic.
+ *
+ * `--room` asks the other question: could this host take one more node? It tries stratus,
+ * nimbus, cumulus in turn against spare RAM (clean, or at the squeezed size with the steps
+ * above), free space in the VM storage, and free CPU threads, and names the largest that fits.
  */
+import { TIER_VM_SIZES } from "./proxmox-probe";
 import { HOST_RESERVE_MB, SMALL_RAM_DOCS, TIER_DEFAULT_MB, TIER_SQUEEZED_MB } from "./vm-memory";
 
 /** zram below this is flagged. 2048 MB shows in /proc/swaps as ~2047. */
@@ -50,7 +55,12 @@ export function plannedVms(host: HostCheckInput): { tier: string; mb: number }[]
     .map((s) => ({ tier: s.tier, mb: host.vmMemoryMb?.[s.tier] ?? TIER_DEFAULT_MB[s.tier]! }));
 }
 
-export function hostCheckScript(host: HostCheckInput, version: string): string {
+export interface HostCheckOptions {
+  /** Report the largest tier that one more node could be, instead of the steps. */
+  room?: boolean;
+}
+
+export function hostCheckScript(host: HostCheckInput, version: string, opts: HostCheckOptions = {}): string {
   const vms = plannedVms(host);
   const vmMb = vms.reduce((a, v) => a + v.mb, 0);
   const squeezedMb = vms.reduce((a, v) => a + Math.min(v.mb, TIER_SQUEEZED_MB[v.tier]!), 0);
@@ -59,13 +69,21 @@ export function hostCheckScript(host: HostCheckInput, version: string): string {
   const vmList = vms.map((v) => `${v.tier} ${v.mb}`).join(", ") || "none";
   const slotSizes = host.slots
     .filter((s) => s.vmName && TIER_DEFAULT_MB[s.tier] !== undefined)
-    .map((s) => `${s.vmName} ${host.vmMemoryMb?.[s.tier] ?? TIER_DEFAULT_MB[s.tier]!}`)
+    .map((s) => `${s.vmName} ${host.vmMemoryMb?.[s.tier] ?? TIER_DEFAULT_MB[s.tier]!} ${s.tier}`)
     .join("\n");
+  // tier, default MB, squeezed MB, disk GB, cores — largest first.
+  const tierTable = TIER_VM_SIZES.map(
+    (t) => `${t.tier} ${t.memMb} ${TIER_SQUEEZED_MB[t.tier] ?? t.memMb} ${t.diskGb} ${t.cores}`
+  ).join("\n");
   return `#!/bin/bash
 # fh-toolkit host-check for ${host.name} (fh-toolkit ${version}).
 # Run it ON the Proxmox host, as root:   fh-toolkit host-check ${host.name} | ssh root@<host> bash
-# Read-only: it changes nothing. It prints the small-RAM steps this host is missing
-# (${SMALL_RAM_DOCS}).
+# Read-only: it changes nothing. ${
+    opts.room
+      ? "It reports the largest node this host has room to add."
+      : `It prints the small-RAM steps this host is missing
+# (${SMALL_RAM_DOCS}).`
+  }
 R="\${HC_ROOT:-}"
 HOST=${shq(host.name)}
 POOL=${shq(host.storageImages)}
@@ -75,9 +93,40 @@ SQUEEZED_MB=${squeezedMb}
 VM_LIST=${shq(vmList)}
 SQUEEZE_JSON=${shq(JSON.stringify(squeeze))}
 SLOT_SIZES=${shq(slotSizes)}
+TIER_TABLE=${shq(tierTable)}
+ROOM=${opts.room ? 1 : 0}
 todo=0
 say() { printf '%-5s %s\\n' "$1" "$2"; [ "$1" = TODO ] && todo=$((todo + 1)); return 0; }
 cmd() { printf '        %s\\n' "$@"; }
+# Disks under a block device (a partition, LV, zpool member or file's filesystem), by name.
+disks_of() { lsblk -nrso NAME,TYPE "$1" 2>/dev/null | awk '$2 == "disk" { print $1 }' | sort -u; }
+# "sda (HDD)": a disk and what it is.
+disk_kind() {
+  case "$1" in nvme*) echo "$1 (NVMe)"; return ;; zd*) echo "$1 (ZFS volume)"; return ;; esac
+  case "$(cat "$R/sys/block/$1/queue/rotational" 2>/dev/null)" in 1) echo "$1 (HDD)" ;; 0) echo "$1 (SSD)" ;; *) echo "$1" ;; esac
+}
+
+# The VM storage: its type, its disks, and its free space in GB (empty when unknown).
+vg=""; tp=""; pool_disks=""
+stype=$(awk -v p="$POOL" '$1 ~ /:$/ && $2 == p { sub(/:$/, "", $1); print $1 }' "$R/etc/pve/storage.cfg" 2>/dev/null)
+field() { awk -v p="$POOL" -v k="$1" '$1 ~ /:$/ { on = ($2 == p) } on && $1 == k { print $2 }' "$R/etc/pve/storage.cfg" 2>/dev/null; }
+case "$stype" in
+  lvmthin|lvm) vg=$(field vgname); tp=$(field thinpool)
+    for pv in $(pvs --noheadings -o pv_name -S "vg_name=$vg" 2>/dev/null); do pool_disks="$pool_disks $(disks_of "$pv")"; done ;;
+  zfspool) zp=$(field pool)
+    for v in $(zpool list -vHP "\${zp%%/*}" 2>/dev/null | awk '$1 ~ /^\\/dev\\// { print $1 }'); do pool_disks="$pool_disks $(disks_of "$v")"; done ;;
+  dir) pool_disks=$(disks_of "$(findmnt -nvo SOURCE -T "$R$(field path)" 2>/dev/null)") ;;
+esac
+pool_disks=$(echo $pool_disks)
+pool_gb=""; used_gb=""; pool_free_gb=""
+case "$stype" in
+  lvmthin) pool_gb=$(lvs --noheadings --units g --nosuffix -o lv_size "$vg/$tp" 2>/dev/null | awk '{ printf "%d", $1 }')
+    used_gb=$(lvs --noheadings --units g --nosuffix -o lv_size -S "pool_lv=$tp" "$vg" 2>/dev/null | awk '{ s += $1 } END { printf "%d", s }')
+    [ -n "$pool_gb" ] && pool_free_gb=$((pool_gb - \${used_gb:-0})) ;;
+  lvm) pool_free_gb=$(vgs --noheadings --units g --nosuffix -o vg_free "$vg" 2>/dev/null | awk '{ printf "%d", $1 }') ;;
+  zfspool) pool_free_gb=$(zfs get -Hp -o value available "$zp" 2>/dev/null | awk '{ printf "%d", $1 / 1073741824 }') ;;
+  dir) pool_free_gb=$(df -BG --output=avail "$R$(field path)" 2>/dev/null | awk 'NR == 2 { printf "%d", $1 }') ;;
+esac
 
 mem_mb=$(awk '/^MemTotal:/ { print int($2 / 1024) }' "$R/proc/meminfo")
 # ZFS keeps a cache (ARC) in RAM, by default up to half of it; count its ceiling.
@@ -90,17 +139,19 @@ fi
 
 # The VMs Proxmox has, against the inventory. Running VMs it does not know (a gateway) use RAM
 # too, so they count; their lines print after the summary.
-others=""; other_mb=0; vm_lines=()
+others=""; other_mb=0; vm_lines=(); vcpus=0; built=" "
 for f in "$R"/etc/pve/qemu-server/*.conf; do
   [ -e "$f" ] || continue
   id=$(basename "$f" .conf)
-  read -r vname vmem pmem < <(awk '/^\\[/ { sec = $1 }
+  read -r vname vmem vcpu pmem < <(awk '/^\\[/ { sec = $1 }
     sec == "" && $1 == "name:" { n = $2 } sec == "" && $1 == "memory:" { m = $2 }
+    sec == "" && $1 == "cores:" { c = $2 } sec == "" && $1 == "sockets:" { k = $2 }
     sec == "[PENDING]" && $1 == "memory:" { p = $2 }
-    END { print (n == "" ? "-" : n), (m == "" ? 512 : m), p }' "$f")
+    END { print (n == "" ? "-" : n), (m == "" ? 512 : m), (c == "" ? 1 : c) * (k == "" ? 1 : k), p }' "$f")
   # A Foundation idle-fill VM is the slot's name with "fh-" in front.
-  planned=$(printf '%s\\n' "$SLOT_SIZES" | awk -v n="$vname" -v m="\${vname#fh-}" '$1 == n || $1 == m { print $2; exit }')
+  read -r slot planned < <(printf '%s\\n' "$SLOT_SIZES" | awk -v n="$vname" -v m="\${vname#fh-}" '$1 == n || $1 == m { print $1, $2; exit }')
   if [ -n "$planned" ]; then
+    built="$built$slot "; vcpus=$((vcpus + vcpu))
     if [ -n "$pmem" ] && [ "$pmem" = "$planned" ]; then
       vm_lines+=("$(say WARN "VM $vname ($id): $planned MB is pending - it applies when the VM is shut down and started.")")
     elif [ "$vmem" != "$planned" ]; then
@@ -109,7 +160,7 @@ for f in "$R"/etc/pve/qemu-server/*.conf; do
             "qm set $id --memory $planned    # or the inventory's size - then shut the VM down and start it")")
     fi
   elif [ -e "$R/var/run/qemu-server/$id.pid" ]; then
-    others="\${others:+$others, }$vname ($id) $vmem MB"; other_mb=$((other_mb + vmem))
+    others="\${others:+$others, }$vname ($id) $vmem MB"; other_mb=$((other_mb + vmem)); vcpus=$((vcpus + vcpu))
   fi
 done
 [ -n "$others" ] && vm_lines+=("$(say NOTE "Running VMs not in the inventory, counted: $others.")")
@@ -119,6 +170,44 @@ extra=""
 [ "$arc_mb" -gt 0 ] && extra="$extra, ZFS cache up to $arc_mb MB"
 echo "$HOST: $mem_mb MB RAM; planned VMs ($VM_LIST MB) = $VM_MB MB$extra; leaving $free_mb MB for Proxmox."
 [ \${#vm_lines[@]} -gt 0 ] && printf '%s\\n' "\${vm_lines[@]}"
+
+# --- --room: the largest node one more slot could be ---------------------------------------
+if [ "$ROOM" = 1 ]; then
+  # Slots in the inventory with no VM yet still need their disk and threads.
+  while read -r slot _mb tier; do
+    [ -z "$slot" ] && continue
+    case "$built" in *" $slot "*) continue ;; esac
+    read -r _t _d _s dgb tc < <(printf '%s\\n' "$TIER_TABLE" | awk -v t="$tier" '$1 == t')
+    vcpus=$((vcpus + \${tc:-0})); [ -n "$pool_free_gb" ] && pool_free_gb=$((pool_free_gb - \${dgb:-0}))
+  done <<< "$SLOT_SIZES"
+  threads=$(grep -c '^processor' "$R/proc/cpuinfo" 2>/dev/null); free_threads=$((\${threads:-0} - vcpus))
+  echo
+  echo "Room for one more node, largest first:"
+  best=""; best_mb=""
+  while read -r tier dmb smb dgb tc; do
+    tight=$((mem_mb - SQUEEZED_MB - other_mb - arc_min_mb - smb))
+    if [ $((free_mb - dmb)) -ge ${HOST_RESERVE_MB} ]; then ram="RAM ok at $dmb MB"; fit=1
+    elif [ "$tight" -ge ${SQUEEZED_FLOOR_MB} ]; then ram="RAM tight - at $smb MB, with the small-RAM steps"; fit=2
+    else ram="RAM short by $((${SQUEEZED_FLOOR_MB} - tight)) MB even at $smb MB"; fit=0; fi
+    if [ -z "$pool_free_gb" ]; then disk="disk unknown ('$POOL' free space)"
+    elif [ "$pool_free_gb" -ge "$dgb" ]; then disk="disk ok ($dgb of $pool_free_gb GB free)"
+    else disk="disk short ($dgb GB needed, $pool_free_gb free)"; fit=0; fi
+    if [ "$free_threads" -ge "$tc" ]; then cpu="CPU ok ($tc of $free_threads threads free)"
+    else cpu="CPU short ($tc threads needed, $free_threads free)"; fit=0; fi
+    if [ "$fit" -gt 0 ]; then
+      say YES "$tier: $ram; $disk; $cpu."
+      if [ -z "$best" ]; then best=$tier; [ "$fit" -eq 2 ] && best_mb=$smb; fi
+    else say NO "$tier: $ram; $disk; $cpu."; fi
+  done <<< "$TIER_TABLE"
+  echo
+  if [ -z "$best" ]; then echo "$HOST: no room for another node."
+  elif [ -n "$best_mb" ]; then
+    echo "$HOST: the largest that fits is one $best, at $best_mb MB (vmMemoryMb) with the small-RAM steps."
+    echo "Add the slot with fh-toolkit inventory, then run fh-toolkit host-check $HOST for the steps."
+  else echo "$HOST: the largest that fits is one $best."; fi
+  echo "(Threads, not cores: FluxOS benchmarks EPS itself, and a stratus wants about 16 physical cores.)"
+  exit 0
+fi
 if [ "$NVM" -eq 0 ] || [ "$free_mb" -ge ${HOST_RESERVE_MB} ]; then
   say OK "RAM fits (Proxmox keeps ${HOST_RESERVE_MB} MB or more) - nothing to do."
   exit 0
@@ -136,14 +225,6 @@ if [ "$arc_mb" -gt $((${ARC_CAP_MB} + 64)) ]; then
 elif [ "$arc_mb" -gt 0 ]; then
   say OK "0. ZFS cache (ARC): capped at $arc_mb MB."
 fi
-
-# Disks under a block device (a partition, LV, zpool member or file's filesystem), by name.
-disks_of() { lsblk -nrso NAME,TYPE "$1" 2>/dev/null | awk '$2 == "disk" { print $1 }' | sort -u; }
-# "sda (HDD)": a disk and what it is.
-disk_kind() {
-  case "$1" in nvme*) echo "$1 (NVMe)"; return ;; zd*) echo "$1 (ZFS volume)"; return ;; esac
-  case "$(cat "$R/sys/block/$1/queue/rotational" 2>/dev/null)" in 1) echo "$1 (HDD)" ;; 0) echo "$1 (SSD)" ;; *) echo "$1" ;; esac
-}
 
 # --- 1. zram -----------------------------------------------------------------------------
 zram_mb=0; zram_prio=-999; disk_prio=-999; disk_mb=0; swap_devs=""
@@ -186,17 +267,6 @@ else
 fi
 
 # --- 3. Swap on a disk the VMs do not benchmark on ----------------------------------------
-vg=""; tp=""; pool_disks=""
-stype=$(awk -v p="$POOL" '$1 ~ /:$/ && $2 == p { sub(/:$/, "", $1); print $1 }' "$R/etc/pve/storage.cfg" 2>/dev/null)
-field() { awk -v p="$POOL" -v k="$1" '$1 ~ /:$/ { on = ($2 == p) } on && $1 == k { print $2 }' "$R/etc/pve/storage.cfg" 2>/dev/null; }
-case "$stype" in
-  lvmthin|lvm) vg=$(field vgname); tp=$(field thinpool)
-    for pv in $(pvs --noheadings -o pv_name -S "vg_name=$vg" 2>/dev/null); do pool_disks="$pool_disks $(disks_of "$pv")"; done ;;
-  zfspool) zp=$(field pool)
-    for v in $(zpool list -vHP "\${zp%%/*}" 2>/dev/null | awk '$1 ~ /^\\/dev\\// { print $1 }'); do pool_disks="$pool_disks $(disks_of "$v")"; done ;;
-  dir) pool_disks=$(disks_of "$(findmnt -nvo SOURCE -T "$R$(field path)" 2>/dev/null)") ;;
-esac
-pool_disks=$(echo $pool_disks)
 on_pool=0; off_pool=0; on_zvol=""; swap_on=""
 for d in $swap_devs; do
   for disk in $(disks_of "$d"); do
@@ -228,8 +298,6 @@ else
   if [ "$stype" = zfspool ]; then
     echo "      No fallback on ZFS: swap on a ZFS volume can hang the host. Without a spare disk, use zram and step 4."
   elif [ "$stype" = lvmthin ] && [ -n "$tp" ]; then
-    pool_gb=$(lvs --noheadings --units g --nosuffix -o lv_size "$vg/$tp" 2>/dev/null | awk '{ printf "%d", $1 }')
-    used_gb=$(lvs --noheadings --units g --nosuffix -o lv_size -S "pool_lv=$tp" "$vg" 2>/dev/null | awk '{ s += $1 } END { printf "%d", s }')
     echo "      Fallback - a thin volume in the VM pool (costs some ddwrite at boot peaks). Pool $vg/$tp is \${pool_gb:-?} GiB,"
     echo "      volumes in it \${used_gb:-?} GiB: keep node disks + swap within the pool."
     cmd "lvcreate -V 4G -T $vg/$tp -n swap" \\

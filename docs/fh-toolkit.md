@@ -949,6 +949,20 @@ pending), and `NOTE` for running VMs the inventory does not know, such as a gate
 and counted in the RAM arithmetic. A host whose VMs leave Proxmox 2 GB or more gets `OK RAM fits` and no steps. It
 changes nothing; re-run it after each step.
 
+**Room for one more node** — `--room` asks whether the host could take another slot, and how
+big:
+
+```sh
+fh-toolkit host-check pve1 --room | ssh root@pve1 bash
+```
+
+It tries stratus, nimbus and cumulus, largest first, against three things: spare RAM (`ok` at
+the full size, `tight` at the smallest size with the steps above, or `short`), free space in
+the VM storage (slots in the inventory with no VM yet are taken off first), and free CPU
+threads. Each tier gets a `YES` or `NO` line with the reasons, then the largest that fits.
+Threads are counted, not EPS — FluxOS benchmarks that itself, and a stratus wants about 16
+physical cores.
+
 ## `sign`
 
 ```

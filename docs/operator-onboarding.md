@@ -325,7 +325,9 @@ their commands:
 fh-toolkit host-check pve1 | ssh root@pve1 bash
 ```
 It also flags a VM whose size differs from what the inventory would rebuild it at, and lists
-running VMs the inventory does not know (a gateway, say) and counts their RAM.
+running VMs the inventory does not know (a gateway, say) and counts their RAM. Thinking of
+adding a node? `fh-toolkit host-check pve1 --room` names the largest tier the host has RAM,
+disk and CPU threads for.
 
 **On ZFS, first cap its cache.** ZFS keeps a read cache (the ARC) in RAM — by default up to
 half of it. On a tight host cap it at 1 GB (`host-check` prints the commands as step 0). Swap
