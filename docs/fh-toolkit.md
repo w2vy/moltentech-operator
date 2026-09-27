@@ -959,7 +959,9 @@ fh-toolkit host-check pve1 --room nimbus | ssh root@pve1 bash
 
 `--room nimbus` gives RAM, disk and CPU for that one node; for whatever is short it lists the
 fix with its size — a non-node VM (a gateway) above 2 GB shrunk to 2 GB, a larger SSD — and
-says whether that closes the gap. Then it prints the steps for the host with the node added.
+says whether that closes the gap. Then it prints the steps for the host with the node added,
+and ends with everything it takes, in order — e.g. `1. shrink OPNsense-186 to 2048 MB`,
+`2. do the steps: 1. zram, 2. KSM, 4. VM sizes` — or why it cannot fit.
 
 It tries stratus, nimbus and cumulus, largest first, against three things: spare RAM (`ok` at
 the full size, `tight` at the smallest size with the steps above, or `short`), free space in

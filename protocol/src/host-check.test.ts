@@ -464,12 +464,27 @@ test("--room nimbus on pve20: RAM short, the gateway named as the fix with its s
   assert.match(out, /- that is enough \(2048 MB of 635\)\./);
   assert.match(out, /^OK +Disk: 440 of 1080 GB free\./m);
   assert.match(out, /^WARN +CPU ok, but 32\.8 of 32 threads \(0\.8 over, 2\.5%\)\./m);
-  assert.match(out, /pve20: one more nimbus does not fit as it stands - the fixes are above\./);
+
   // Then the steps for pve20 with 4 nimbus: KSM (off here) and smaller VMs.
   assert.match(out, /With it, pve20's VMs = 128000 MB, leaving -3259 MB for Proxmox\./);
   assert.match(out, /^TODO +2\. KSM: 4 VMs share identical pages/m);
   assert.match(out, /^TODO +4\. VM sizes: .*Host keeps -2235 MB, plus ~2700 MB KSM saves:\n.*vmMemoryMb \{"nimbus":31744\} on pve20/m);
   assert.doesNotMatch(out, /Room for one more node/);
+  // Last, everything it takes, in order: the RAM fix, then the steps by name.
+  assert.match(
+    out,
+    /pve20: one more nimbus fits once you:\n  1\. shrink OPNsense-186 to 2048 MB\n  2\. do the steps: 1\. zram, 2\. KSM, 4\. VM sizes\nThen add it with fh-toolkit inventory, and build it alone, after the other VMs have settled\.\n$/
+  );
+});
+
+test("--room cumulus with room to spare: fits, nothing to do first", () => {
+  const out = run(pve65, { memMb: 64000, swaps: [], threads: 32, pool: [2000, 0] }, { room: true, roomTier: "cumulus" });
+  assert.match(out, /pve65: one more cumulus fits\.\nThen add it with fh-toolkit inventory/);
+});
+
+test("--room nimbus with no fix big enough: says it does not fit, and why", () => {
+  const out = run({ ...pve65, slots: [{ tier: "cumulus", vmName: "a" }] }, { memMb: 15871, swaps: [], threads: 16, pool: [2000, 0] }, { room: true, roomTier: "nimbus" });
+  assert.match(out, /pve65: one more nimbus does not fit: RAM is short by \d+ MB, more than shrinking other VMs frees\.\n$/);
 });
 
 test("ksmtuned stopped is a TODO even with the right coefficient", () => {

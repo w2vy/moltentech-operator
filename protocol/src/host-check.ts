@@ -134,7 +134,12 @@ PLAN_SQUEEZED_MB=${plan.reduce((a, v) => a + Math.min(v.mb, TIER_SQUEEZED_MB[v.t
 PLAN_NEW_MB=${planTier ? plan[plan.length - 1]!.mb : 0}
 PLAN_SQUEEZE_JSON=${shq(JSON.stringify(planSqueeze))}
 todo=0
-say() { printf '%-5s %s\\n' "$1" "$2"; [ "$1" = TODO ] && todo=$((todo + 1)); return 0; }
+# A TODO is also remembered by its step ("1. zram"), for --room <tier>'s closing list.
+say() {
+  printf '%-5s %s\\n' "$1" "$2"
+  [ "$1" = TODO ] && { todo=$((todo + 1)); todo_names="\${todo_names:+$todo_names, }\${2%%:*}"; }
+  return 0
+}
 cmd() { printf '        %s\\n' "$@"; }
 # Disks under a block device (a partition, LV, zpool member or file's filesystem), by name.
 disks_of() { lsblk -nrso NAME,TYPE "$1" 2>/dev/null | awk '$2 == "disk" { print $1 }' | sort -u; }
@@ -280,38 +285,50 @@ for P in $POOLS; do
 done
 on=""; [ "$POOLS" != "$room_pool" ] && on=" on $room_pool"
 
+# The last lines of --room <tier>: everything it takes, in order, after all of it is printed.
+plan_verdict() {
+  local n=0 f
+  echo
+  if [ -n "$plan_blocked" ]; then echo "$HOST: one more $PLAN_TIER does not fit: $plan_blocked."; return; fi
+  [ "$todo" -gt 0 ] && plan_fixes+=("do the steps: $todo_names")
+  if [ \${#plan_fixes[@]} -eq 0 ]; then echo "$HOST: one more $PLAN_TIER fits."
+  else
+    echo "$HOST: one more $PLAN_TIER fits once you:"
+    for f in "\${plan_fixes[@]}"; do n=$((n + 1)); echo "  $n. $f"; done
+  fi
+  echo "Then add it with fh-toolkit inventory, and build it alone, after the other VMs have settled."
+}
+
 # --- --room <tier>: one more node of that tier, what is short and what would fix it --------
 if [ -n "$PLAN_TIER" ]; then
   read -r _t dmb smb dgb tc < <(printf '%s\\n' "$TIER_TABLE" | awk -v t="$PLAN_TIER" '$1 == t')
   echo
   echo "One more $PLAN_TIER, at $PLAN_NEW_MB MB:"
-  short=0
+  plan_fixes=(); plan_blocked=""
   # RAM: clean at the planned size; else tight at the smallest sizes, with the KSM the others save.
   tight=$((mem_mb - SQUEEZED_MB - other_mb - arc_min_mb - smb + ksm_credit))
   ksm_txt=""; [ "$ksm_credit" -gt 0 ] && ksm_txt=", counting ~$ksm_credit MB KSM saves the others"
   if [ $((free_mb - PLAN_NEW_MB)) -ge ${HOST_RESERVE_MB} ]; then say OK "RAM: fits at $PLAN_NEW_MB MB."
   elif [ "$tight" -ge ${SQUEEZED_FLOOR_MB} ]; then say OK "RAM: fits tight - VMs at their smallest sizes and the small-RAM steps below$ksm_txt."
   else
-    need=$((${SQUEEZED_FLOOR_MB} - tight)); short=1
+    need=$((${SQUEEZED_FLOOR_MB} - tight)); shrunk=""
     say NO "RAM: short by $need MB, even at the smallest sizes$ksm_txt. What would close it:"
     have=0
     for o in $other_vms; do
       IFS=: read -r on_name on_id on_mb <<< "$o"
       [ "$on_mb" -gt ${OTHER_VM_MIN_MB} ] || continue
-      gain=$((on_mb - ${OTHER_VM_MIN_MB})); have=$((have + gain))
+      gain=$((on_mb - ${OTHER_VM_MIN_MB})); have=$((have + gain)); shrunk="\${shrunk:+$shrunk and }$on_name"
       cmd "$on_name ($on_id) from $on_mb to ${OTHER_VM_MIN_MB} MB frees $gain MB:  qm set $on_id --memory ${OTHER_VM_MIN_MB}, then shut it down and start it"
     done
-    if [ "$have" -ge "$need" ]; then cmd "- that is enough ($have MB of $need)."
-    else cmd "- not enough ($have MB of $need): take a slot off $HOST, or add RAM."; fi
+    if [ "$have" -ge "$need" ]; then cmd "- that is enough ($have MB of $need)."; plan_fixes+=("shrink $shrunk to ${OTHER_VM_MIN_MB} MB")
+    else cmd "- not enough ($have MB of $need): take a slot off $HOST, or add RAM."; plan_blocked="RAM is short by $need MB, more than shrinking other VMs frees"; fi
   fi
   if [ -z "$pool_free_gb" ]; then say WARN "Disk: free space in '$POOLS' unknown - $dgb GB needed."
   elif [ "$pool_free_gb" -ge "$dgb" ]; then say OK "Disk: $dgb of $pool_free_gb GB free$on."
-  else say NO "Disk: $dgb GB needed, $pool_free_gb free$on - short by $((dgb - pool_free_gb)) GB: a larger or extra SSD."; short=1; fi
+  else say NO "Disk: $dgb GB needed, $pool_free_gb free$on - short by $((dgb - pool_free_gb)) GB: a larger or extra SSD."
+    plan_fixes+=("add at least $((dgb - pool_free_gb)) GB of SSD"); fi
   c=$(cpu_for "$tc")
-  case "$c" in "CPU short"*) say NO "$c."; short=1 ;; *", but "*) say WARN "$c." ;; *) say OK "$c." ;; esac
-  echo
-  if [ "$short" = 1 ]; then echo "$HOST: one more $PLAN_TIER does not fit as it stands - the fixes are above."
-  else echo "$HOST: one more $PLAN_TIER fits. Add it with fh-toolkit inventory, and build it alone, after the other VMs have settled."; fi
+  case "$c" in "CPU short"*) say NO "$c."; plan_blocked="one $PLAN_TIER needs $tc threads and the host has $threads" ;; *", but "*) say WARN "$c." ;; *) say OK "$c." ;; esac
   [ "$ksm_young" = 1 ] && echo "KSM started $(ago "$young_for") ago and is still merging (saving $ksm_mb MB so far) - run this again in 5 minutes."
   # Then the steps for the host with it: the plan grows by the new slot.
   NVM=$PLAN_NVM; VM_MB=$PLAN_VM_MB; SQUEEZED_MB=$PLAN_SQUEEZED_MB; SQUEEZE_JSON=$PLAN_SQUEEZE_JSON
@@ -355,6 +372,7 @@ if [ "$ROOM" = 1 ]; then
 fi
 if [ "$NVM" -eq 0 ] || [ "$free_mb" -ge ${HOST_RESERVE_MB} ]; then
   say OK "RAM fits (Proxmox keeps ${HOST_RESERVE_MB} MB or more) - nothing to do."
+  [ -n "$PLAN_TIER" ] && plan_verdict
   exit 0
 fi
 echo "That is under the ${HOST_RESERVE_MB} MB Proxmox should keep. The steps, in order:"
@@ -462,7 +480,10 @@ else
   say TODO "4. VM sizes: still short - build smaller VMs (they pass the RAM check). Host keeps $((mem_mb - SQUEEZED_MB - other_mb - arc_mb)) MB, plus ~$ksm_credit MB KSM saves:"
   cmd "fh-toolkit inventory    # set vmMemoryMb $SQUEEZE_JSON on $HOST"
 fi
-echo
-if [ "$todo" -eq 0 ]; then echo "$HOST: nothing left to do."; else echo "$HOST: $todo step(s) to do. Re-run this after them."; fi
+if [ -n "$PLAN_TIER" ]; then plan_verdict
+else
+  echo
+  if [ "$todo" -eq 0 ]; then echo "$HOST: nothing left to do."; else echo "$HOST: $todo step(s) to do. Re-run this after them."; fi
+fi
 `;
 }
