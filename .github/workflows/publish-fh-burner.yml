@@ -32,17 +32,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # libguestfs boots a small appliance to edit the image; KVM makes that fast, and
-      # it reads the host kernel, which Ubuntu ships root-only.
-      - name: Install libguestfs
+      # The image is edited through qemu-nbd + chroot (see build-image.sh for why not
+      # libguestfs), so the build needs root, qemu-nbd and the nbd module.
+      - name: Install qemu-utils
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq libguestfs-tools qemu-utils >/dev/null
-          sudo chmod 0644 /boot/vmlinuz-*
-          [ -e /dev/kvm ] && sudo chmod 0666 /dev/kvm || echo "no /dev/kvm — libguestfs falls back to TCG (slower)"
+          sudo apt-get install -y -qq qemu-utils >/dev/null
 
       - name: Build image
-        run: burner/build-image.sh dist
+        run: |
+          sudo burner/build-image.sh dist
+          sudo chown -R "$(id -u):$(id -g)" dist
 
       - id: ver
         run: echo "v=$(cat burner/VERSION)" >> "$GITHUB_OUTPUT"
