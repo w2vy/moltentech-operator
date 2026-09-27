@@ -48,6 +48,8 @@ function run(host: HostCheckInput, fake: FakeHost): string {
   put("etc/pve/storage.cfg", STORAGE_CFG);
   put("etc/ksmtuned.conf", fake.ksmCoef === undefined ? "# KSM_THRES_COEF=20\n" : `KSM_THRES_COEF=${fake.ksmCoef}\n`);
   put("sys/kernel/mm/ksm/pages_sharing", "262144\n");
+  put("sys/block/sda/queue/rotational", "1\n");
+  put("sys/block/sdb/queue/rotational", "0\n");
   const bin = join(root, "bin");
   const stub = (name: string, body: string) => {
     put(`bin/${name}`, `#!/bin/bash\n${body}\n`);
@@ -104,7 +106,7 @@ test("pve65 as tuned (zram 2 GB prio 100, KSM coef 50, HDD swap): every step OK"
   });
   assert.match(out, /^OK +1\. zram: 2047 MB, priority 100/m);
   assert.match(out, /^OK +2\. KSM: .*sharing 1024 MB/m);
-  assert.match(out, /^OK +3\. Disk swap: 8192 MB, off the VM disk \(sdb\)/m);
+  assert.match(out, /^OK +3\. Disk swap: 8192 MB on sda \(HDD\), off the VM disk \(sdb\)/m);
   assert.match(out, /^OK +4\. VM sizes/m);
   assert.match(out, /pve65: nothing left to do/);
 });
@@ -152,7 +154,7 @@ test("pve50 as fixed (swap is a thin LV in the VM pool): WARN, not TODO", () => 
       ["/dev/dm-20", "partition", 4095, 10],
     ],
   });
-  assert.match(out, /^WARN +3\. Disk swap: 4095 MB, but on the VM disk \(sdb\)/m);
+  assert.match(out, /^WARN +3\. Disk swap: 4095 MB on sdb \(SSD\) - the VM disk\. If benchmarks fail on ddwrite/m);
   assert.match(out, /pve50: nothing left to do/);
 });
 
@@ -164,7 +166,18 @@ test("swap on its own NVMe: OK", () => {
       ["/dev/nvme0n1", "partition", 8192, 10],
     ],
   });
-  assert.match(out, /^OK +3\. Disk swap: 8192 MB, off the VM disk/m);
+  assert.match(out, /^OK +3\. Disk swap: 8192 MB on nvme0n1 \(NVMe\), off the VM disk \(sdb\)/m);
+});
+
+test("VM storage the script cannot map to a disk (e.g. zfspool): WARN, never a false OK", () => {
+  const out = run({ ...pve50, storageImages: "local-zfs" }, {
+    memMb: 31999,
+    swaps: [
+      ["/dev/zram0", "partition", 2047, 100],
+      ["/dev/dm-9", "partition", 8192, -2],
+    ],
+  });
+  assert.match(out, /^WARN +3\. Disk swap: 8192 MB on sda \(HDD\), but cannot tell which disk VM storage 'local-zfs' \(not in storage.cfg\)/m);
 });
 
 test("ksmtuned stopped is a TODO even with the right coefficient", () => {

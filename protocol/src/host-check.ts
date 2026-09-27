@@ -76,6 +76,11 @@ echo
 
 # Disks under a block device (a partition, LV or file's filesystem), by name.
 disks_of() { lsblk -nrso NAME,TYPE "$1" 2>/dev/null | awk '$2 == "disk" { print $1 }' | sort -u; }
+# "sda (HDD)": a disk and what it is.
+disk_kind() {
+  case "$1" in nvme*) echo "$1 (NVMe)"; return ;; esac
+  case "$(cat "$R/sys/block/$1/queue/rotational" 2>/dev/null)" in 1) echo "$1 (HDD)" ;; 0) echo "$1 (SSD)" ;; *) echo "$1" ;; esac
+}
 
 # --- 1. zram -----------------------------------------------------------------------------
 zram_mb=0; zram_prio=-999; disk_prio=-999; disk_mb=0; swap_devs=""
@@ -127,17 +132,20 @@ case "$stype" in
   dir) pool_disks=$(disks_of "$(findmnt -nvo SOURCE -T "$R$(field path)" 2>/dev/null)") ;;
 esac
 pool_disks=$(echo $pool_disks)
-on_pool=0; off_pool=0
+on_pool=0; off_pool=0; swap_on=""
 for d in $swap_devs; do
   for disk in $(disks_of "$d"); do
     case " $pool_disks " in *" $disk "*) on_pool=1 ;; *) off_pool=1 ;; esac
+    swap_on="\${swap_on:+$swap_on, }$(disk_kind "$disk")"
   done
 done
 need="recommended"; [ "$NVM" -eq 1 ] && need="REQUIRED - one VM's first boot peaks while it downloads the chain, and was killed without it"
-if [ "$disk_mb" -ge $((${DISK_SWAP_MIN_MB} - 64)) ] && [ "$off_pool" -eq 1 ]; then
-  say OK "3. Disk swap: $disk_mb MB, off the VM disk\${pool_disks:+ ($pool_disks)}."
+if [ "$disk_mb" -ge $((${DISK_SWAP_MIN_MB} - 64)) ] && [ -z "$pool_disks" ]; then
+  say WARN "3. Disk swap: $disk_mb MB on \${swap_on:-?}, but cannot tell which disk VM storage '$POOL' (\${stype:-not in storage.cfg}) uses - check it is not that one."
+elif [ "$disk_mb" -ge $((${DISK_SWAP_MIN_MB} - 64)) ] && [ "$off_pool" -eq 1 ]; then
+  say OK "3. Disk swap: $disk_mb MB on $swap_on, off the VM disk ($pool_disks)."
 elif [ "$disk_mb" -ge $((${DISK_SWAP_MIN_MB} - 64)) ] && [ "$on_pool" -eq 1 ]; then
-  say WARN "3. Disk swap: $disk_mb MB, but on the VM disk ($pool_disks). If benchmarks fail on ddwrite, move swap to a small SSD/NVMe of its own (an M.2 PCIe card works)."
+  say WARN "3. Disk swap: $disk_mb MB on $swap_on - the VM disk. If benchmarks fail on ddwrite, move swap to a small SSD/NVMe of its own (an M.2 PCIe card works)."
 else
   if [ -n "$pool_disks" ]; then where="VM disk: $pool_disks"; else where="VM storage '$POOL'"; fi
   say TODO "3. Disk swap: $disk_mb MB - want ${DISK_SWAP_MIN_MB} MB or more, on a disk the VMs do not use ($need). $where."
