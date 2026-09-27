@@ -24,6 +24,8 @@ interface FakeHost {
   /** CPU threads in /proc/cpuinfo (default 16), and the thin pool's size / volumes in GB. */
   threads?: number;
   pool?: [number, number];
+  /** sda is a PERC virtual disk. */
+  raid?: boolean;
 }
 
 const STORAGE_CFG = `dir: local
@@ -37,6 +39,14 @@ lvmthin: local-lvm
 lvmthin: ssd
 \tthinpool data
 \tvgname ssd
+\tcontent images,rootdir
+
+lvm: ss1
+\tvgname ss1
+\tcontent images,rootdir
+
+lvm: ss2
+\tvgname ss2
 \tcontent images,rootdir
 
 zfspool: local-zfs
@@ -62,6 +72,7 @@ function run(host: HostCheckInput, fake: FakeHost, opts: HostCheckOptions = {}):
   put("proc/cpuinfo", Array.from({ length: fake.threads ?? 16 }, (_, i) => `processor\t: ${i}\n`).join(""));
   put("sys/block/sda/queue/rotational", "1\n");
   put("sys/block/sdb/queue/rotational", "0\n");
+  if (fake.raid) put("sys/block/sda/device/model", "PERC H710       \n");
   if (fake.zfs) {
     put("proc/spl/kstat/zfs/arcstats", `c_min 4 ${fake.zfs.arcMinMb * 1048576}\nc_max 4 ${fake.zfs.arcMaxMb * 1048576}\n`);
   }
@@ -80,12 +91,15 @@ function run(host: HostCheckInput, fake: FakeHost, opts: HostCheckOptions = {}):
   /dev/dm-9|/dev/pve/swap) printf 'dm-9 lvm\\nsda3 part\\nsda disk\\n' ;;
   /dev/dm-20|/dev/ssd/swap) printf 'dm-20 lvm\\nssd-data-tpool lvm\\nsdb disk\\n' ;;
   /dev/sdb) printf 'sdb disk\\n' ;;
+  /dev/sdc) printf 'sdc disk\\n' ;;
+  /dev/sdd) printf 'sdd disk\\n' ;;
   /dev/nvme0n1) printf 'nvme0n1 disk\\n' ;;
   /dev/sdb3) printf 'sdb3 part\\nsdb disk\\n' ;;
   /dev/zd0) printf 'zd0 disk\\n' ;;
 esac`
   );
-  stub("pvs", `case "$*" in *vg_name=ssd*) echo "  /dev/sdb" ;; *vg_name=pve*) echo "  /dev/sda3" ;; esac`);
+  stub("pvs", `case "$*" in *vg_name=ssd*) echo "  /dev/sdb" ;; *vg_name=pve*) echo "  /dev/sda3" ;; *vg_name=ss1*) echo "  /dev/sdc" ;; *vg_name=ss2*) echo "  /dev/sdd" ;; esac`);
+  stub("vgs", `case "$*" in *ss1*) echo "  13.70" ;; *ss2*) echo "  893.00" ;; esac`);
   const [poolGb, usedGb] = fake.pool ?? [445.13, 440];
   stub("lvs", `case "$*" in *-S*) printf '  ${usedGb}\\n' ;; *) printf '  ${poolGb}\\n' ;; esac`);
   stub("systemctl", `exit ${fake.ksmtunedActive === false ? 3 : 0}`);
@@ -145,7 +159,7 @@ test("fresh 2-cumulus box at default sizes: zram, KSM and smaller VMs to do", ()
   assert.match(out, /systemctl stop zramswap; echo 1 > \/sys\/block\/zram0\/reset/);
   assert.match(out, /printf 'ALGO=zstd\\nSIZE=2048\\nPRIORITY=100\\n'/);
   assert.match(out, /^TODO +2\. KSM: 2 VMs .*KSM_THRES_COEF=20, want 50/m);
-  assert.match(out, /sed -i 's\/\^#\\\?KSM_THRES_COEF=/);
+  assert.match(out, /sed -i '\/KSM_THRES_COEF=\/d' \/etc\/ksmtuned\.conf; echo KSM_THRES_COEF=50 >> \/etc\/ksmtuned\.conf/);
   assert.match(out, /^TODO +4\. VM sizes: .*\n.*vmMemoryMb \{"cumulus":7680\} on pve65/m);
   assert.match(out, /pve65: 3 step\(s\) to do/);
 });
@@ -313,6 +327,32 @@ test("--room: gateways and short threads can leave no room", () => {
   );
   assert.match(out, /^NO +cumulus: RAM short .*CPU short \(4 threads needed, -2 free\)/m);
   assert.match(out, /pve65: no room for another node\./);
+});
+
+test("the printed KSM command works on the shipped '# KSM_THRES_COEF=20' line", () => {
+  const out = run({ ...pve65, vmMemoryMb: undefined }, { memMb: 15871, swaps: [] });
+  const line = out.split("\n").find((l) => l.includes("sed -i '/KSM_THRES_COEF=/d'"))!.trim();
+  const dir = tmpDir("fh-hostcheck-ksm-");
+  const conf = join(dir, "ksmtuned.conf");
+  writeFileSync(conf, "# KSM_MONITOR_INTERVAL=60\n# KSM_THRES_COEF=20\n# KSM_THRES_CONST=2048\n");
+  execFileSync("bash", ["-c", line.split("/etc/ksmtuned.conf").join(conf)]);
+  assert.equal(execFileSync("bash", ["-c", `grep -c '^KSM_THRES_COEF=50$' ${conf}; grep -c KSM_THRES_COEF ${conf}`], { encoding: "utf8" }), "1\n1\n");
+});
+
+test("slots on their own storage (pve40: ss1, ss2): their disks are the VM disks, not the host's storageImages", () => {
+  const host: HostCheckInput = {
+    name: "pve40",
+    storageImages: "local-lvm",
+    slots: [
+      { tier: "cumulus", vmName: "a", storagePool: "ss1" },
+      { tier: "cumulus", vmName: "b", storagePool: "ss2" },
+    ],
+  };
+  const out = run(host, { memMb: 15871, swaps: [["/dev/dm-9", "partition", 8192, -2]], raid: true });
+  assert.match(out, /^OK +3\. Disk swap: 8192 MB on sda \(RAID\), off the VM disk \(sdc sdd\)\./m);
+  const room = run(host, { memMb: 64000, swaps: [], threads: 32, vms: [] }, { room: true });
+  // a and b are not built: 220 GB each off ss1 (13 → -207) and ss2 (893 → 673); ss2 has the most.
+  assert.match(room, /^YES +nimbus: .*disk ok \(440 of 673 GB free on ss2\)/m);
 });
 
 test("ksmtuned stopped is a TODO even with the right coefficient", () => {

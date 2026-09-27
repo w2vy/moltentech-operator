@@ -347,7 +347,8 @@ its own.
    1–3 GB on a 16 GB host with two Cumulus. It does nothing for a host with ONE VM.
    ```bash
    apt install ksm-control-daemon          # ksmtuned; on by default in Proxmox
-   sed -i 's/^#\?KSM_THRES_COEF=.*/KSM_THRES_COEF=50/' /etc/ksmtuned.conf
+   sed -i '/KSM_THRES_COEF=/d' /etc/ksmtuned.conf    # the shipped line is "# KSM_THRES_COEF=20"
+   echo KSM_THRES_COEF=50 >> /etc/ksmtuned.conf
    systemctl restart ksmtuned
    ```
 3. **At least 4 GB of disk swap, off the VM disk — required for ONE VM on a host its size**
