@@ -958,10 +958,22 @@ fh-toolkit host-check pve1 --room | ssh root@pve1 bash
 
 It tries stratus, nimbus and cumulus, largest first, against three things: spare RAM (`ok` at
 the full size, `tight` at the smallest size with the steps above, or `short`), free space in
-the VM storage (slots in the inventory with no VM yet are taken off first), and free CPU
-threads. Each tier gets a `YES` or `NO` line with the reasons, then the largest that fits.
-Threads are counted, not EPS — FluxOS benchmarks that itself, and a stratus wants about 16
-physical cores.
+the VM storage (slots in the inventory with no VM yet are taken off first; each storage the
+slots use is tried), and CPU threads not taken by nodes (plus 16 physical cores for a
+stratus). Each tier gets a `YES` or `NO` line with the reasons, then the largest that fits.
+
+`tight` counts what KSM saves the node VMs already there — what it saves now, or about 900 MB
+per VM after the first, whichever is more — but not the new VM's own share, because its first
+boot comes before KSM merges it; so a tight answer also says to build it alone. When KSM was
+set up under an hour ago and is still saving less than that, it says to run `--room` again in
+5 minutes. The summary line shows how settled KSM is: its full scans, how long ksmtuned has
+run, and when its config last changed.
+
+**CPU.** Both modes count node VMs at their full vCPUs (a tier's core count is a hard
+requirement) and other VMs — a gateway, say — at their busiest 30 minutes of the last month,
+from Proxmox's own history. Over the host's threads is a `WARN` that says by how much, e.g.
+`CPU: 65.7 of 64 threads (1.7 over, 2.6%)`: node cores are all busy at once only during
+benchmarks. EPS itself is not checked — FluxOS benchmarks that.
 
 ## `sign`
 

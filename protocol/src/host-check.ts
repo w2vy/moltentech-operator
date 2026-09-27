@@ -22,9 +22,15 @@
  * rebuild will change, e.g. pve65 at 7424 while the inventory said 7680), and names running
  * VMs the inventory does not know (gateways) — listed, and counted in the RAM arithmetic.
  *
+ * CPU: node VMs count at their full vCPUs (a tier's core count is a hard requirement); other
+ * VMs at their busiest 30 minutes of the last month, from Proxmox's own history (gateways idle
+ * at ~0.4 of a core). Over the host's threads is a WARN with the size of it — 1.6 over 64
+ * threads is not 0.4 over 4.
+ *
  * `--room` asks the other question: could this host take one more node? It tries stratus,
  * nimbus, cumulus in turn against spare RAM (clean, or at the squeezed size with the steps
- * above), free space in the VM storage, and free CPU threads, and names the largest that fits.
+ * above and a KSM credit), free space in the VM storage, and free CPU threads (and physical
+ * cores for a stratus), and names the largest that fits.
  */
 import { TIER_VM_SIZES } from "./proxmox-probe";
 import { HOST_RESERVE_MB, SMALL_RAM_DOCS, TIER_DEFAULT_MB, TIER_SQUEEZED_MB } from "./vm-memory";
@@ -37,6 +43,13 @@ export const DISK_SWAP_MIN_MB = 4096;
 export const SQUEEZED_FLOOR_MB = 200;
 /** The ZFS ARC cap for a tight host; ARC min goes to half of it (a max at or under min is ignored). */
 export const ARC_CAP_MB = 1024;
+/**
+ * What KSM saves per node VM after the first, when it cannot be read yet: pve65 (2 × cumulus)
+ * ~0.9 GB, pve40 (16 × cumulus) 20.4 GB = ~1.3 GB each (2026-09-27). The lower one.
+ */
+export const KSM_PER_VM_MB = 900;
+/** Physical cores a tier needs beyond its threads: stratus EPS is per thread, and HT threads fall short. */
+export const TIER_PHYSICAL_CORES: Record<string, number> = { stratus: 16 };
 
 export interface HostCheckInput {
   name: string;
@@ -77,9 +90,9 @@ export function hostCheckScript(host: HostCheckInput, version: string, opts: Hos
     .filter((s) => s.vmName && TIER_DEFAULT_MB[s.tier] !== undefined)
     .map((s) => `${s.vmName} ${host.vmMemoryMb?.[s.tier] ?? TIER_DEFAULT_MB[s.tier]!} ${s.tier} ${s.storagePool || host.storageImages}`)
     .join("\n");
-  // tier, default MB, squeezed MB, disk GB, cores — largest first.
+  // tier, default MB, squeezed MB, disk GB, cores, physical cores — largest first.
   const tierTable = TIER_VM_SIZES.map(
-    (t) => `${t.tier} ${t.memMb} ${TIER_SQUEEZED_MB[t.tier] ?? t.memMb} ${t.diskGb} ${t.cores}`
+    (t) => `${t.tier} ${t.memMb} ${TIER_SQUEEZED_MB[t.tier] ?? t.memMb} ${t.diskGb} ${t.cores} ${TIER_PHYSICAL_CORES[t.tier] ?? 0}`
   ).join("\n");
   return `#!/bin/bash
 # fh-toolkit host-check for ${host.name} (fh-toolkit ${version}).
@@ -151,9 +164,27 @@ if [ -n "$(zpool list -H -o name 2>/dev/null)" ]; then
   arc_mb=\${arc_mb:-0}; arc_min_mb=\${arc_min_mb:-0}
 fi
 
+# Tenths as "1.6"; CPU is counted in tenths of a thread.
+f10() {
+  local v=$1 sign=""; [ "$v" -lt 0 ] && { sign=-; v=$((-v)); }
+  if [ $((v % 10)) -eq 0 ]; then printf '%s%d' "$sign" $((v / 10)); else printf '%s%d.%d' "$sign" $((v / 10)) $((v % 10)); fi
+}
+# A VM's busiest 30 minutes of the last month, in tenths of a thread; empty with no history.
+busiest10() {
+  pvesh get "/nodes/localhost/qemu/$1/rrddata" --timeframe month --cf AVERAGE --output-format json 2>/dev/null |
+    tr '{}' '\n\n' | awk -F, '{ c = ""; m = ""
+      for (i = 1; i <= NF; i++) { split($i, kv, ":"); gsub(/"/, "", kv[1]); if (kv[1] == "cpu") c = kv[2]; if (kv[1] == "maxcpu") m = kv[2] }
+      if (c != "" && m != "") { n++; v = c * m; if (v > max) max = v } }
+      END { if (n) printf "%d", max * 10 + 0.999 }'
+}
+threads=$(grep -c '^processor' "$R/proc/cpuinfo" 2>/dev/null); threads=\${threads:-0}
+phys=$(awk '/^physical id/ { p = $4 } /^core id/ { print p ":" $4 }' "$R/proc/cpuinfo" 2>/dev/null | sort -u | wc -l)
+[ "$phys" -gt 0 ] || phys=$threads
+ksm_mb=$(( $(cat "$R/sys/kernel/mm/ksm/pages_sharing" 2>/dev/null || echo 0) * 4 / 1024 ))
+
 # The VMs Proxmox has, against the inventory. Running VMs it does not know (a gateway) use RAM
 # too, so they count; their lines print after the summary.
-others=""; other_mb=0; vm_lines=(); vcpus=0; built=" "
+others=""; other_mb=0; vm_lines=(); node_cpu=0; other_cpu10=0; other_cpus=""; built=" "; nodes_built=0
 for f in "$R"/etc/pve/qemu-server/*.conf; do
   [ -e "$f" ] || continue
   id=$(basename "$f" .conf)
@@ -165,7 +196,7 @@ for f in "$R"/etc/pve/qemu-server/*.conf; do
   # A Foundation idle-fill VM is the slot's name with "fh-" in front.
   read -r slot planned < <(printf '%s\\n' "$SLOT_SIZES" | awk -v n="$vname" -v m="\${vname#fh-}" '$1 == n || $1 == m { print $1, $2; exit }')
   if [ -n "$planned" ]; then
-    built="$built$slot "; vcpus=$((vcpus + vcpu))
+    built="$built$slot "; node_cpu=$((node_cpu + vcpu)); nodes_built=$((nodes_built + 1))
     if [ -n "$pmem" ] && [ "$pmem" = "$planned" ]; then
       vm_lines+=("$(say WARN "VM $vname ($id): $planned MB is pending - it applies when the VM is shut down and started.")")
     elif [ "$vmem" != "$planned" ]; then
@@ -174,47 +205,75 @@ for f in "$R"/etc/pve/qemu-server/*.conf; do
             "qm set $id --memory $planned    # or the inventory's size - then shut the VM down and start it")")
     fi
   elif [ -e "$R/var/run/qemu-server/$id.pid" ]; then
-    others="\${others:+$others, }$vname ($id) $vmem MB"; other_mb=$((other_mb + vmem)); vcpus=$((vcpus + vcpu))
+    others="\${others:+$others, }$vname ($id) $vmem MB"; other_mb=$((other_mb + vmem))
+    busy=$(busiest10 "$id"); [ -n "$busy" ] || busy=$((vcpu * 10))
+    other_cpu10=$((other_cpu10 + busy)); other_cpus="\${other_cpus:+$other_cpus, }$vname $(f10 "$busy")"
   fi
 done
 [ -n "$others" ] && vm_lines+=("$(say NOTE "Running VMs not in the inventory, counted: $others.")")
+# Slots in the inventory with no VM yet still need their threads and disk.
+while read -r slot _mb tier sp; do
+  [ -z "$slot" ] && continue
+  case "$built" in *" $slot "*) continue ;; esac
+  read -r _t _d _s dgb tc _p < <(printf '%s\\n' "$TIER_TABLE" | awk -v t="$tier" '$1 == t')
+  node_cpu=$((node_cpu + \${tc:-0})); [ -n "\${pfree[$sp]:-}" ] && pfree[$sp]=$((pfree[$sp] - \${dgb:-0}))
+done <<< "$SLOT_SIZES"
+cpu10=$((node_cpu * 10 + other_cpu10)); free_cpu10=$((threads * 10 - cpu10))
+if [ "$free_cpu10" -lt 0 ] && [ "$threads" -gt 0 ]; then
+  over=$((-free_cpu10))
+  vm_lines+=("$(say WARN "CPU: $(f10 $cpu10) of $threads threads ($(f10 $over) over, $(f10 $((over * 1000 / (threads * 10))))%) - nodes $node_cpu\${other_cpus:+ + other VMs at their busiest 30 min $(f10 $other_cpu10) ($other_cpus)}. Node cores are all busy at once only during benchmarks.")")
+fi
+# What KSM saves the node VMs: what it saves now, or the estimate for their number.
+ksm_credit=0; [ "$NVM" -ge 2 ] && ksm_credit=$(( (NVM - 1) * ${KSM_PER_VM_MB} ))
+[ "$ksm_mb" -gt "$ksm_credit" ] && ksm_credit=$ksm_mb
 free_mb=$((mem_mb - VM_MB - other_mb - arc_mb))
 extra=""
 [ "$other_mb" -gt 0 ] && extra="$extra, other running VMs $other_mb MB"
 [ "$arc_mb" -gt 0 ] && extra="$extra, ZFS cache up to $arc_mb MB"
-echo "$HOST: $mem_mb MB RAM; planned VMs ($VM_LIST MB) = $VM_MB MB$extra; leaving $free_mb MB for Proxmox."
+# How settled that saving is: KSM's full passes over memory, how long ksmtuned has run, and
+# when its config last changed. Under an hour and saving less than the built VMs should = young.
+ago() { local s=$1; if [ "$s" -lt 3600 ]; then echo "$((s / 60))m"; elif [ "$s" -lt 86400 ]; then echo "$((s / 3600))h"; else echo "$((s / 86400))d $((s % 86400 / 3600))h"; fi; }
+now=$(date +%s); ksm_note=""; ksm_young=0; young_for=999999
+scans=$(cat "$R/sys/kernel/mm/ksm/full_scans" 2>/dev/null)
+since=$(date -d "$(systemctl show ksmtuned -p ActiveEnterTimestamp --value 2>/dev/null)" +%s 2>/dev/null)
+conf_at=$(stat -c %Y "$R/etc/ksmtuned.conf" 2>/dev/null)
+ksm_when=""
+[ -n "$since" ] && [ "$since" -gt 0 ] && { ksm_when="$ksm_when, ksmtuned up $(ago $((now - since)))"; young_for=$((now - since)); }
+[ -n "$conf_at" ] && { ksm_when="$ksm_when, its config changed $(ago $((now - conf_at))) ago"; [ $((now - conf_at)) -lt "$young_for" ] && young_for=$((now - conf_at)); }
+[ "$ksm_mb" -gt 0 ] && ksm_note=" KSM is saving $ksm_mb MB on top (\${scans:-?} full scans$ksm_when)."
+[ "$young_for" -lt 3600 ] && [ "$nodes_built" -ge 2 ] && [ "$ksm_mb" -lt $(( (nodes_built - 1) * ${KSM_PER_VM_MB} )) ] && ksm_young=1
+echo "$HOST: $mem_mb MB RAM; planned VMs ($VM_LIST MB) = $VM_MB MB$extra; leaving $free_mb MB for Proxmox.$ksm_note"
 [ \${#vm_lines[@]} -gt 0 ] && printf '%s\\n' "\${vm_lines[@]}"
 
 # --- --room: the largest node one more slot could be ---------------------------------------
 if [ "$ROOM" = 1 ]; then
-  # Slots in the inventory with no VM yet still need their disk and threads.
-  while read -r slot _mb tier sp; do
-    [ -z "$slot" ] && continue
-    case "$built" in *" $slot "*) continue ;; esac
-    read -r _t _d _s dgb tc < <(printf '%s\\n' "$TIER_TABLE" | awk -v t="$tier" '$1 == t')
-    vcpus=$((vcpus + \${tc:-0})); [ -n "\${pfree[$sp]:-}" ] && pfree[$sp]=$((pfree[$sp] - \${dgb:-0}))
-  done <<< "$SLOT_SIZES"
   # A new slot can go on any of the storages; the one with the most free space.
   pool_free_gb=""; room_pool=""
   for P in $POOLS; do
     f=\${pfree[$P]:-}; [ -z "$f" ] && continue
     if [ -z "$pool_free_gb" ] || [ "$f" -gt "$pool_free_gb" ]; then pool_free_gb=$f; room_pool=$P; fi
   done
-  threads=$(grep -c '^processor' "$R/proc/cpuinfo" 2>/dev/null); free_threads=$((\${threads:-0} - vcpus))
   echo
   echo "Room for one more node, largest first:"
   best=""; best_mb=""
-  while read -r tier dmb smb dgb tc; do
-    tight=$((mem_mb - SQUEEZED_MB - other_mb - arc_min_mb - smb))
+  # The new VM's first boot comes before KSM merges it, so only the others' saving counts.
+  ksm_txt=""; [ "$ksm_credit" -gt 0 ] && ksm_txt=" and ~$ksm_credit MB KSM saves the others"
+  while read -r tier dmb smb dgb tc pc; do
+    tight=$((mem_mb - SQUEEZED_MB - other_mb - arc_min_mb - smb + ksm_credit))
     if [ $((free_mb - dmb)) -ge ${HOST_RESERVE_MB} ]; then ram="RAM ok at $dmb MB"; fit=1
-    elif [ "$tight" -ge ${SQUEEZED_FLOOR_MB} ]; then ram="RAM tight - at $smb MB, with the small-RAM steps"; fit=2
+    elif [ "$tight" -ge ${SQUEEZED_FLOOR_MB} ]; then ram="RAM tight - at $smb MB, with the small-RAM steps$ksm_txt"; fit=2
     else ram="RAM short by $((${SQUEEZED_FLOOR_MB} - tight)) MB even at $smb MB"; fit=0; fi
     on=""; [ "$POOLS" != "$room_pool" ] && on=" on $room_pool"
     if [ -z "$pool_free_gb" ]; then disk="disk unknown ('$POOLS' free space)"
     elif [ "$pool_free_gb" -ge "$dgb" ]; then disk="disk ok ($dgb of $pool_free_gb GB free$on)"
     else disk="disk short ($dgb GB needed, $pool_free_gb free$on)"; fit=0; fi
-    if [ "$free_threads" -ge "$tc" ]; then cpu="CPU ok ($tc of $free_threads threads free)"
-    else cpu="CPU short ($tc threads needed, $free_threads free)"; fit=0; fi
+    # Node threads are hard; other VMs' busiest 30 min over the top is a warning, as in the check.
+    node_free=$((threads - node_cpu))
+    if [ "$node_free" -lt "$tc" ]; then cpu="CPU short ($tc threads needed, $node_free not taken by nodes)"; fit=0
+    elif [ "$phys" -lt "$pc" ]; then cpu="CPU short ($tier wants $pc physical cores, the host has $phys)"; fit=0
+    elif [ "$free_cpu10" -lt $((tc * 10)) ]; then
+      cpu="CPU ok for nodes ($tc of $node_free threads), but $(f10 $((tc * 10 - free_cpu10))) over with other VMs at their busiest 30 min"
+    else cpu="CPU ok ($tc of $(f10 $free_cpu10) threads free)"; fi
     if [ "$fit" -gt 0 ]; then
       say YES "$tier: $ram; $disk; $cpu."
       if [ -z "$best" ]; then best=$tier; [ "$fit" -eq 2 ] && best_mb=$smb; fi
@@ -225,8 +284,10 @@ if [ "$ROOM" = 1 ]; then
   elif [ -n "$best_mb" ]; then
     echo "$HOST: the largest that fits is one $best, at $best_mb MB (vmMemoryMb) with the small-RAM steps."
     echo "Add the slot with fh-toolkit inventory, then run fh-toolkit host-check $HOST for the steps."
+    echo "Build it alone, after the other VMs have settled: a first boot briefly uses nearly all its RAM."
   else echo "$HOST: the largest that fits is one $best."; fi
-  echo "(Threads, not cores: FluxOS benchmarks EPS itself, and a stratus wants about 16 physical cores.)"
+  [ "$ksm_young" = 1 ] && echo "KSM started $(ago "$young_for") ago and is still merging (saving $ksm_mb MB so far) - run this again in 5 minutes."
+  echo "(FluxOS benchmarks EPS itself; this counts threads, and physical cores for a stratus.)"
   exit 0
 fi
 if [ "$NVM" -eq 0 ] || [ "$free_mb" -ge ${HOST_RESERVE_MB} ]; then
@@ -276,9 +337,8 @@ if [ "$NVM" -lt 2 ]; then
 else
   coef=$(sed -n 's/^KSM_THRES_COEF=\\([0-9]*\\).*/\\1/p' "$R/etc/ksmtuned.conf" 2>/dev/null | tail -1)
   coef=\${coef:-20}
-  shared_mb=$(( $(cat "$R/sys/kernel/mm/ksm/pages_sharing" 2>/dev/null || echo 0) * 4 / 1024 ))
   if systemctl is-active --quiet ksmtuned 2>/dev/null && [ "$coef" -ge 50 ]; then
-    say OK "2. KSM: ksmtuned running, KSM_THRES_COEF=$coef, sharing $shared_mb MB now."
+    say OK "2. KSM: ksmtuned running, KSM_THRES_COEF=$coef, sharing $ksm_mb MB now."
   else
     say TODO "2. KSM: $NVM VMs share identical pages; hold KSM on (KSM_THRES_COEF=$coef, want 50):"
     cmd "apt install ksm-control-daemon" \\
@@ -329,9 +389,9 @@ fi
 
 # --- 4. Smaller VMs -----------------------------------------------------------------------
 # The ARC shrinks toward its minimum when the VMs need the RAM, so count only that here.
-left_mb=$((mem_mb - SQUEEZED_MB - other_mb - arc_min_mb))
+left_mb=$((mem_mb - SQUEEZED_MB - other_mb - arc_min_mb + ksm_credit))
 if [ "$left_mb" -lt ${SQUEEZED_FLOOR_MB} ]; then
-  say TODO "4. VM sizes: even at the smallest sizes ($SQUEEZED_MB MB) the host keeps $left_mb MB, under the ~${SQUEEZED_FLOOR_MB} MB seen working. Too many VMs for this RAM:"
+  say TODO "4. VM sizes: even at the smallest sizes ($SQUEEZED_MB MB) the host keeps $left_mb MB (counting ~$ksm_credit MB KSM saves), under the ~${SQUEEZED_FLOOR_MB} MB seen working. Too many VMs for this RAM:"
   cmd "fh-toolkit inventory    # take a slot off $HOST - or add RAM"
 elif [ "$SQUEEZE_JSON" = "{}" ]; then
   say OK "4. VM sizes: already at the smallest size that passes the RAM check with margin."
