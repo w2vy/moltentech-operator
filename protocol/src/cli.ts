@@ -102,7 +102,7 @@ import {
   proxmoxAlive,
   tokenSetupCommands,
 } from "./proxmox-token";
-import { planVmMemory, vmMemoryAdvice } from "./vm-memory";
+import { planVmMemory, TIER_DEFAULT_MB, vmMemoryAdvice } from "./vm-memory";
 import { hostCheckScript } from "./host-check";
 import { describeVm, nodeOf, parseKeepList, retireAdoptedMarks } from "./existing-nodes";
 import { fetchFluxNodeStatus, type FluxNodeStatus } from "./flux-node-status";
@@ -3291,13 +3291,18 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
       rejectUnknownFlags("host-check", args, ["--dir", "--room"]);
       const od = readOperatorDir("host-check", dirFlag(args));
       const names = od.currentHosts.map((h) => h.name);
-      const positional = args.filter((a, i) => !a.startsWith("--") && args[i - 1] !== "--dir");
+      // `--room` may name a tier: `host-check pve20 --room nimbus`.
+      const roomAt = args.indexOf("--room");
+      const roomTier = roomAt >= 0 && TIER_DEFAULT_MB[args[roomAt + 1] ?? ""] !== undefined ? args[roomAt + 1] : undefined;
+      const positional = args.filter(
+        (a, i) => !a.startsWith("--") && args[i - 1] !== "--dir" && !(i === roomAt + 1 && roomTier !== undefined)
+      );
       if (names.length === 0) die(`no hosts in ${od.inventoryLabel} — run \`fh-toolkit inventory\` first.`);
       const name = positional[0] ?? (names.length === 1 ? names[0] : undefined);
       if (name === undefined) die(`which host? fh-toolkit host-check <host> — one of: ${names.join(", ")}`);
       const host = od.currentHosts.find((h) => h.name === name);
       if (!host) die(`${name} is not in ${od.inventoryLabel} — one of: ${names.join(", ")}`);
-      process.stdout.write(hostCheckScript(host, pkgVersion(), { room: args.includes("--room") }));
+      process.stdout.write(hostCheckScript(host, pkgVersion(), { room: roomAt >= 0, roomTier }));
       return 0;
     }
     // Which build am I? The image refreshes on a stamp file, so "the fix is merged"
@@ -3387,9 +3392,10 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
       console.log("            --set <supporter|operator> [--price <tier>=<usd>] [--stripe-key <k>] [--flux-address <t1…>]");
       console.log("            [--stripe-webhook <k>] [--dry-run] [--yes]");
       console.log("  doctor    [--dir <dir>] [--check-proxmox] [--check-stripe] [--check-hub]");
-      console.log("  host-check [<host>] [--room] [--dir <dir>]   small-RAM host (16/32 GB)? prints a read-only check");
+      console.log("  host-check [<host>] [--room [<tier>]] [--dir <dir>]  small-RAM host? prints a read-only check");
       console.log("            to run ON the host: fh-toolkit host-check pve1 | ssh root@pve1 bash");
-      console.log("            --room: the largest node (stratus/nimbus/cumulus) the host could add");
+      console.log("            --room: the largest node (stratus/nimbus/cumulus) the host could add;");
+      console.log("            --room nimbus: what one more nimbus is short of, the fixes, then the steps");
       console.log("  sign      [--dir <dir>] [--key <pem>] [--from-config <config.env>|--in <body.json>]");
       console.log("            [--out <manifest.json>] [--stdout]   defaults to what `init` wrote");
       console.log("  env       [--dir <dir>] [--from-config <config.env>] [--secrets <secrets.env>]");
