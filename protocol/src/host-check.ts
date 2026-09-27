@@ -137,7 +137,7 @@ need="recommended"; [ "$NVM" -eq 1 ] && need="REQUIRED - one VM's first boot pea
 if [ "$disk_mb" -ge $((${DISK_SWAP_MIN_MB} - 64)) ] && [ "$off_pool" -eq 1 ]; then
   say OK "3. Disk swap: $disk_mb MB, off the VM disk\${pool_disks:+ ($pool_disks)}."
 elif [ "$disk_mb" -ge $((${DISK_SWAP_MIN_MB} - 64)) ] && [ "$on_pool" -eq 1 ]; then
-  say WARN "3. Disk swap: $disk_mb MB, but on the VM disk ($pool_disks) - host swapping during a benchmark drags ddwrite. Better on its own SSD/NVMe."
+  say WARN "3. Disk swap: $disk_mb MB, but on the VM disk ($pool_disks). If benchmarks fail on ddwrite, move swap to a small SSD/NVMe of its own (an M.2 PCIe card works)."
 else
   if [ -n "$pool_disks" ]; then where="VM disk: $pool_disks"; else where="VM storage '$POOL'"; fi
   say TODO "3. Disk swap: $disk_mb MB - want ${DISK_SWAP_MIN_MB} MB or more, on a disk the VMs do not use ($need). $where."

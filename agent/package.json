@@ -1,6 +1,6 @@
 {
   "name": "@moltentech/operator-agent",
-  "version": "0.11.38",
+  "version": "0.11.39",
   "private": true,
   "type": "module",
   "license": "MIT",
