@@ -20,7 +20,7 @@
  *
  * It also compares the VMs Proxmox has with the inventory (a VM that runs a size the next
  * rebuild will change, e.g. pve65 at 7424 while the inventory said 7680), and names running
- * VMs the inventory does not know (gateways) — listed, not counted.
+ * VMs the inventory does not know (gateways) — listed, and counted in the RAM arithmetic.
  */
 import { HOST_RESERVE_MB, SMALL_RAM_DOCS, TIER_DEFAULT_MB, TIER_SQUEEZED_MB } from "./vm-memory";
 
@@ -87,12 +87,10 @@ if [ -n "$(zpool list -H -o name 2>/dev/null)" ]; then
   arc_min_mb=$(awk '$1 == "c_min" { print int($3 / 1048576) }' "$R/proc/spl/kstat/zfs/arcstats" 2>/dev/null)
   arc_mb=\${arc_mb:-0}; arc_min_mb=\${arc_min_mb:-0}
 fi
-free_mb=$((mem_mb - VM_MB - arc_mb))
-arc_note=""; [ "$arc_mb" -gt 0 ] && arc_note=" and ZFS cache up to $arc_mb MB"
-echo "$HOST: $mem_mb MB RAM; planned VMs ($VM_LIST MB) = $VM_MB MB$arc_note, leaving $free_mb MB for Proxmox."
 
-# The VMs Proxmox has, against the inventory.
-others=""
+# The VMs Proxmox has, against the inventory. Running VMs it does not know (a gateway) use RAM
+# too, so they count; their lines print after the summary.
+others=""; other_mb=0; vm_lines=()
 for f in "$R"/etc/pve/qemu-server/*.conf; do
   [ -e "$f" ] || continue
   id=$(basename "$f" .conf)
@@ -104,17 +102,23 @@ for f in "$R"/etc/pve/qemu-server/*.conf; do
   planned=$(printf '%s\\n' "$SLOT_SIZES" | awk -v n="$vname" -v m="\${vname#fh-}" '$1 == n || $1 == m { print $2; exit }')
   if [ -n "$planned" ]; then
     if [ -n "$pmem" ] && [ "$pmem" = "$planned" ]; then
-      say WARN "VM $vname ($id): $planned MB is pending - it applies when the VM is shut down and started."
+      vm_lines+=("$(say WARN "VM $vname ($id): $planned MB is pending - it applies when the VM is shut down and started.")")
     elif [ "$vmem" != "$planned" ]; then
-      say WARN "VM $vname ($id): runs $vmem MB, but the inventory builds it at $planned MB - the next rebuild changes it."
-      cmd "fh-toolkit inventory    # to keep $vmem MB: vmMemoryMb on $HOST" \\
-          "qm set $id --memory $planned    # or the inventory's size - then shut the VM down and start it"
+      vm_lines+=("$(say WARN "VM $vname ($id): runs $vmem MB, but the inventory builds it at $planned MB - the next rebuild changes it."
+        cmd "fh-toolkit inventory    # to keep $vmem MB: vmMemoryMb on $HOST" \\
+            "qm set $id --memory $planned    # or the inventory's size - then shut the VM down and start it")")
     fi
   elif [ -e "$R/var/run/qemu-server/$id.pid" ]; then
-    others="\${others:+$others, }$vname ($id) $vmem MB"
+    others="\${others:+$others, }$vname ($id) $vmem MB"; other_mb=$((other_mb + vmem))
   fi
 done
-[ -n "$others" ] && say NOTE "Running VMs not in the inventory (not counted here): $others."
+[ -n "$others" ] && vm_lines+=("$(say NOTE "Running VMs not in the inventory, counted: $others.")")
+free_mb=$((mem_mb - VM_MB - other_mb - arc_mb))
+extra=""
+[ "$other_mb" -gt 0 ] && extra="$extra, other running VMs $other_mb MB"
+[ "$arc_mb" -gt 0 ] && extra="$extra, ZFS cache up to $arc_mb MB"
+echo "$HOST: $mem_mb MB RAM; planned VMs ($VM_LIST MB) = $VM_MB MB$extra; leaving $free_mb MB for Proxmox."
+[ \${#vm_lines[@]} -gt 0 ] && printf '%s\\n' "\${vm_lines[@]}"
 if [ "$NVM" -eq 0 ] || [ "$free_mb" -ge ${HOST_RESERVE_MB} ]; then
   say OK "RAM fits (Proxmox keeps ${HOST_RESERVE_MB} MB or more) - nothing to do."
   exit 0
@@ -236,7 +240,7 @@ fi
 
 # --- 4. Smaller VMs -----------------------------------------------------------------------
 # The ARC shrinks toward its minimum when the VMs need the RAM, so count only that here.
-left_mb=$((mem_mb - SQUEEZED_MB - arc_min_mb))
+left_mb=$((mem_mb - SQUEEZED_MB - other_mb - arc_min_mb))
 if [ "$left_mb" -lt ${SQUEEZED_FLOOR_MB} ]; then
   say TODO "4. VM sizes: even at the smallest sizes ($SQUEEZED_MB MB) the host keeps $left_mb MB, under the ~${SQUEEZED_FLOOR_MB} MB seen working. Too many VMs for this RAM:"
   cmd "fh-toolkit inventory    # take a slot off $HOST - or add RAM"

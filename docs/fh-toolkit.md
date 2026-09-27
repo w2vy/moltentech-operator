@@ -946,7 +946,7 @@ step — `OK`, `TODO` (with the commands), `WARN` or `SKIP` — in the order of
 Before the steps it compares the VMs on the host with the inventory: `WARN` for a VM that
 runs a different size from the one the inventory rebuilds it at (or has a size change
 pending), and `NOTE` for running VMs the inventory does not know, such as a gateway — listed,
-not counted. A host whose VMs leave Proxmox 2 GB or more gets `OK RAM fits` and no steps. It
+and counted in the RAM arithmetic. A host whose VMs leave Proxmox 2 GB or more gets `OK RAM fits` and no steps. It
 changes nothing; re-run it after each step.
 
 ## `sign`

@@ -207,7 +207,7 @@ const pve65Zfs: HostCheckInput = { ...pve65, storageImages: "local-zfs", vmMemor
 
 test("ZFS at its default ARC: step 0 caps it, pool disk found, no swap fallback on ZFS", () => {
   const out = run(pve65Zfs, { memMb: 15871, swaps: [["/dev/zram0", "partition", 2047, 100]], ksmCoef: 50, zfs: { arcMaxMb: 7935, arcMinMb: 495 } });
-  assert.match(out, /= 14848 MB and ZFS cache up to 7935 MB, leaving -6912 MB/);
+  assert.match(out, /= 14848 MB, ZFS cache up to 7935 MB; leaving -6912 MB/);
   assert.match(out, /^TODO +0\. ZFS cache \(ARC\): up to 7935 MB/m);
   assert.match(out, /echo 1073741824 > \/sys\/module\/zfs\/parameters\/zfs_arc_max/);
   assert.match(out, /options zfs zfs_arc_min=536870912 zfs_arc_max=1073741824/);
@@ -243,7 +243,7 @@ test("too many VMs for the RAM, even at the smallest sizes: step 4 says so", () 
   assert.match(out, /take a slot off pve65/);
 });
 
-test("VMs on the host against the inventory: size drift, a pending size, and gateways listed not counted", () => {
+test("VMs on the host against the inventory: size drift, a pending size, and running gateways counted", () => {
   const host = { ...pve65, slots: [{ tier: "cumulus", vmName: "mt-65-1" }, { tier: "cumulus", vmName: "mt-65-2" }] };
   const out = run(host, {
     memMb: 15871,
@@ -259,7 +259,8 @@ test("VMs on the host against the inventory: size drift, a pending size, and gat
   assert.match(out, /^WARN +VM mt-65-1 \(101\): runs 7424 MB, but the inventory builds it at 7680 MB/m);
   assert.match(out, /qm set 101 --memory 7680/);
   assert.match(out, /^WARN +VM fh-mt-65-2 \(102\): 7680 MB is pending/m);
-  assert.match(out, /^NOTE +Running VMs not in the inventory \(not counted here\): opnsense \(110\) 2048 MB\.$/m);
+  assert.match(out, /^NOTE +Running VMs not in the inventory, counted: opnsense \(110\) 2048 MB\.$/m);
+  assert.match(out, /= 15360 MB, other running VMs 2048 MB; leaving -1537 MB for Proxmox\.\n/);
   assert.doesNotMatch(out, /old-test/);
 });
 
