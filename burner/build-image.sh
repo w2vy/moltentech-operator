@@ -4,6 +4,7 @@
 # the nbd kernel module, and network.
 #
 #   sudo build-image.sh <out-dir>   →  <out-dir>/fh-burner-<ver>.qcow2 (+ .sha256)
+#                                      <out-dir>/fh-burner-<ver>-host.sh (+ .sha256)
 #
 # The image is edited through qemu-nbd + chroot, which uses the build machine's own
 # network for apt — the method first proven on pve25. (libguestfs was tried first: its
@@ -69,5 +70,9 @@ cleanup; trap - EXIT
 name="fh-burner-$ver.qcow2"
 qemu-img convert -c -O qcow2 "$img" "$out/$name"
 (cd "$out" && sha256sum "$name" > "$name.sha256")
+# The host controller ships beside the image, same version, so `fh-toolkit burn` needs
+# nothing but the release and the burn-run inside the image matches the controller.
+install -m 0755 "$here/burn-host.sh" "$out/fh-burner-$ver-host.sh"
+(cd "$out" && sha256sum "fh-burner-$ver-host.sh" > "fh-burner-$ver-host.sh.sha256")
 rm -rf "$work"
 ls -l "$out"
