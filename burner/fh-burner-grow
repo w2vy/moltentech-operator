@@ -1,0 +1,12 @@
+#!/bin/sh
+# Grow the root partition and filesystem to fill the disk, once. The image ships
+# small (~3 GB) so the release download stays small; burn-host.sh resizes the
+# template's disk, and this makes the room usable on each clone's first boot.
+# (cloud-init would do this, but it is disabled: burn VMs have no datasource.)
+set -u
+root=$(findmnt -no SOURCE /)
+disk=/dev/$(lsblk -no PKNAME "$root")
+part=$(cat "/sys/class/block/$(basename "$root")/partition")
+growpart "$disk" "$part" || true   # exit 1 = NOCHANGE, already full size
+resize2fs "$root"
+touch /var/lib/fh-burner-grown

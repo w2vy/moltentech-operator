@@ -1,0 +1,67 @@
+name: Publish fh-burner
+
+# fh-burner is the VM image `fh-toolkit burn` boots on an empty Proxmox host to burn it
+# in before it carries nodes (burner/README.md). It is a disk image, not a container:
+# Proxmox hosts have no docker, so it ships as a GitHub RELEASE ASSET that the host
+# fetches with wget — this repo is public, so no login — and checks against the
+# .sha256 beside it.
+#
+# A pull request that touches burner/ builds the image and keeps it as a short-lived
+# workflow artifact, so it can be booted on a real host before anything is released.
+# Releasing is a manual dispatch from master only (Actions minutes are scarce, and a
+# release is what every operator's toolkit will point at). The tag is
+# `fh-burner-v<burner/VERSION>`; `gh release create` refuses an existing tag, so a
+# changed image cannot silently replace a released one — bump VERSION instead.
+
+on:
+  pull_request:
+    paths:
+      - "burner/**"
+      - ".github/workflows/publish-fh-burner.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: publish-fh-burner-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      # The image is edited through qemu-nbd + chroot (see build-image.sh for why not
+      # libguestfs), so the build needs root, qemu-nbd and the nbd module.
+      - name: Install qemu-utils
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq qemu-utils >/dev/null
+
+      - name: Build image
+        run: |
+          sudo burner/build-image.sh dist
+          sudo chown -R "$(id -u):$(id -g)" dist
+
+      - id: ver
+        run: echo "v=$(cat burner/VERSION)" >> "$GITHUB_OUTPUT"
+
+      - name: Keep the PR build (2 days) for a test boot
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: fh-burner-${{ steps.ver.outputs.v }}-pr${{ github.event.number }}
+          path: dist/
+          retention-days: 2
+          compression-level: 0 # already a compressed qcow2
+
+      - name: Release
+        if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          V: ${{ steps.ver.outputs.v }}
+        run: |
+          gh release create "fh-burner-v$V" dist/* \
+            --title "fh-burner $V" \
+            --notes "Burn-in VM image for \`fh-toolkit burn\`. Built from ${{ github.sha }}. Verify with the .sha256 beside it."

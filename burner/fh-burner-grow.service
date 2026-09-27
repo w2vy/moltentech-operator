@@ -1,0 +1,10 @@
+[Unit]
+Description=fh-burner: grow the root filesystem to the disk (first boot)
+ConditionPathExists=!/var/lib/fh-burner-grown
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/fh-burner-grow
+
+[Install]
+WantedBy=multi-user.target
