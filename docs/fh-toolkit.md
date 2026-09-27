@@ -935,14 +935,19 @@ With one host in the inventory the name can be left off. The script prints one l
 step — `OK`, `TODO` (with the commands), `WARN` or `SKIP` — in the order of
 [operator-onboarding.md Step 0.6](operator-onboarding.md#06-small-ram-hosts-16-gb--32-gb-desktops):
 
+0. ZFS only: the ARC capped at 1 GB (ZFS otherwise caches in up to half the RAM)
 1. zram, 2 GB, priority above any disk swap
 2. KSM held on (`KSM_THRES_COEF=50`) — two or more VMs only
-3. at least 4 GB of swap on a disk the VMs do not use (`WARN` when it is on the VM disk;
-   required for one VM)
-4. smaller VMs (`vmMemoryMb`) — last, because it spends the RAM check's margin
+3. at least 4 GB of swap on a disk the VMs do not use, named with its kind — `sda (HDD)`
+   (`WARN` when it is on the VM disk; `TODO` on a ZFS volume; required for one VM)
+4. smaller VMs (`vmMemoryMb`) — last, because it spends the RAM check's margin; or, when even
+   the smallest sizes leave under ~200 MB, too many VMs for the RAM
 
-A host whose VMs leave Proxmox 2 GB or more gets `OK RAM fits` and nothing else. It changes
-nothing; re-run it after each step.
+Before the steps it compares the VMs on the host with the inventory: `WARN` for a VM that
+runs a different size from the one the inventory rebuilds it at (or has a size change
+pending), and `NOTE` for running VMs the inventory does not know, such as a gateway — listed,
+not counted. A host whose VMs leave Proxmox 2 GB or more gets `OK RAM fits` and no steps. It
+changes nothing; re-run it after each step.
 
 ## `sign`
 
