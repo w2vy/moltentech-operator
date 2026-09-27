@@ -43,7 +43,8 @@ export interface HostCheckInput {
   /** The Proxmox storage id the VM disks go on (inventory `storageImages`). */
   storageImages: string;
   vmMemoryMb?: Record<string, number>;
-  slots: { tier: string; vmName?: string }[];
+  /** `storagePool` overrides `storageImages` for that slot's disk (pve40: ss1–ss4). */
+  slots: { tier: string; vmName?: string; storagePool?: string | null }[];
 }
 
 const shq = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
@@ -66,10 +67,15 @@ export function hostCheckScript(host: HostCheckInput, version: string, opts: Hos
   const squeezedMb = vms.reduce((a, v) => a + Math.min(v.mb, TIER_SQUEEZED_MB[v.tier]!), 0);
   const squeeze: Record<string, number> = {};
   for (const v of vms) if (v.mb > TIER_SQUEEZED_MB[v.tier]!) squeeze[v.tier] = TIER_SQUEEZED_MB[v.tier]!;
-  const vmList = vms.map((v) => `${v.tier} ${v.mb}`).join(", ") || "none";
+  // The storages the slots' disks go on — what the agent uses: the slot's pool, else the host's.
+  const pools = [...new Set(host.slots.map((s) => s.storagePool || host.storageImages))];
+  if (pools.length === 0) pools.push(host.storageImages);
+  const counts = new Map<string, number>();
+  for (const v of vms) counts.set(`${v.tier} ${v.mb}`, (counts.get(`${v.tier} ${v.mb}`) ?? 0) + 1);
+  const vmList = [...counts].map(([k, n]) => (n > 1 ? `${n} × ${k}` : k)).join(", ") || "none";
   const slotSizes = host.slots
     .filter((s) => s.vmName && TIER_DEFAULT_MB[s.tier] !== undefined)
-    .map((s) => `${s.vmName} ${host.vmMemoryMb?.[s.tier] ?? TIER_DEFAULT_MB[s.tier]!} ${s.tier}`)
+    .map((s) => `${s.vmName} ${host.vmMemoryMb?.[s.tier] ?? TIER_DEFAULT_MB[s.tier]!} ${s.tier} ${s.storagePool || host.storageImages}`)
     .join("\n");
   // tier, default MB, squeezed MB, disk GB, cores — largest first.
   const tierTable = TIER_VM_SIZES.map(
@@ -86,7 +92,7 @@ export function hostCheckScript(host: HostCheckInput, version: string, opts: Hos
   }
 R="\${HC_ROOT:-}"
 HOST=${shq(host.name)}
-POOL=${shq(host.storageImages)}
+POOLS=${shq(pools.join(" "))}
 NVM=${vms.length}
 VM_MB=${vmMb}
 SQUEEZED_MB=${squeezedMb}
@@ -103,30 +109,38 @@ disks_of() { lsblk -nrso NAME,TYPE "$1" 2>/dev/null | awk '$2 == "disk" { print 
 # "sda (HDD)": a disk and what it is.
 disk_kind() {
   case "$1" in nvme*) echo "$1 (NVMe)"; return ;; zd*) echo "$1 (ZFS volume)"; return ;; esac
+  # A RAID controller reports its virtual disks as spinning whatever is behind them.
+  case "$(cat "$R/sys/block/$1/device/model" 2>/dev/null)" in *PERC*|*RAID*|*MR9*|*LOGICAL*|*"Smart Array"*) echo "$1 (RAID)"; return ;; esac
   case "$(cat "$R/sys/block/$1/queue/rotational" 2>/dev/null)" in 1) echo "$1 (HDD)" ;; 0) echo "$1 (SSD)" ;; *) echo "$1" ;; esac
 }
 
-# The VM storage: its type, its disks, and its free space in GB (empty when unknown).
-vg=""; tp=""; pool_disks=""
-stype=$(awk -v p="$POOL" '$1 ~ /:$/ && $2 == p { sub(/:$/, "", $1); print $1 }' "$R/etc/pve/storage.cfg" 2>/dev/null)
-field() { awk -v p="$POOL" -v k="$1" '$1 ~ /:$/ { on = ($2 == p) } on && $1 == k { print $2 }' "$R/etc/pve/storage.cfg" 2>/dev/null; }
-case "$stype" in
-  lvmthin|lvm) vg=$(field vgname); tp=$(field thinpool)
-    for pv in $(pvs --noheadings -o pv_name -S "vg_name=$vg" 2>/dev/null); do pool_disks="$pool_disks $(disks_of "$pv")"; done ;;
-  zfspool) zp=$(field pool)
-    for v in $(zpool list -vHP "\${zp%%/*}" 2>/dev/null | awk '$1 ~ /^\\/dev\\// { print $1 }'); do pool_disks="$pool_disks $(disks_of "$v")"; done ;;
-  dir) pool_disks=$(disks_of "$(findmnt -nvo SOURCE -T "$R$(field path)" 2>/dev/null)") ;;
-esac
-pool_disks=$(echo $pool_disks)
-pool_gb=""; used_gb=""; pool_free_gb=""
-case "$stype" in
-  lvmthin) pool_gb=$(lvs --noheadings --units g --nosuffix -o lv_size "$vg/$tp" 2>/dev/null | awk '{ printf "%d", $1 }')
-    used_gb=$(lvs --noheadings --units g --nosuffix -o lv_size -S "pool_lv=$tp" "$vg" 2>/dev/null | awk '{ s += $1 } END { printf "%d", s }')
-    [ -n "$pool_gb" ] && pool_free_gb=$((pool_gb - \${used_gb:-0})) ;;
-  lvm) pool_free_gb=$(vgs --noheadings --units g --nosuffix -o vg_free "$vg" 2>/dev/null | awk '{ printf "%d", $1 }') ;;
-  zfspool) pool_free_gb=$(zfs get -Hp -o value available "$zp" 2>/dev/null | awk '{ printf "%d", $1 / 1073741824 }') ;;
-  dir) pool_free_gb=$(df -BG --output=avail "$R$(field path)" 2>/dev/null | awk 'NR == 2 { printf "%d", $1 }') ;;
-esac
+# The VM storages: their disks, and each one's free space in GB (unset when unknown).
+# stype/vg/tp/zp describe the first, for the swap fallback in step 3.
+field() { awk -v p="$1" -v k="$2" '$1 ~ /:$/ { on = ($2 == p) } on && $1 == k { print $2 }' "$R/etc/pve/storage.cfg" 2>/dev/null; }
+declare -A pfree
+pool_disks=""; stype=""; vg=""; tp=""; zp=""; POOL=\${POOLS%% *}
+for P in $POOLS; do
+  t=$(awk -v p="$P" '$1 ~ /:$/ && $2 == p { sub(/:$/, "", $1); print $1 }' "$R/etc/pve/storage.cfg" 2>/dev/null)
+  pv_vg=$(field "$P" vgname); pv_tp=$(field "$P" thinpool); pv_zp=$(field "$P" pool); free=""; size=""; used=""
+  case "$t" in
+    lvmthin|lvm)
+      for pv in $(pvs --noheadings -o pv_name -S "vg_name=$pv_vg" 2>/dev/null); do pool_disks="$pool_disks $(disks_of "$pv")"; done
+      if [ "$t" = lvmthin ]; then
+        size=$(lvs --noheadings --units g --nosuffix -o lv_size "$pv_vg/$pv_tp" 2>/dev/null | awk '{ printf "%d", $1 }')
+        used=$(lvs --noheadings --units g --nosuffix -o lv_size -S "pool_lv=$pv_tp" "$pv_vg" 2>/dev/null | awk '{ s += $1 } END { printf "%d", s }')
+        [ -n "$size" ] && free=$((size - \${used:-0}))
+      else free=$(vgs --noheadings --units g --nosuffix -o vg_free "$pv_vg" 2>/dev/null | awk '{ printf "%d", $1 }'); fi ;;
+    zfspool)
+      for v in $(zpool list -vHP "\${pv_zp%%/*}" 2>/dev/null | awk '$1 ~ /^\\/dev\\// { print $1 }'); do pool_disks="$pool_disks $(disks_of "$v")"; done
+      free=$(zfs get -Hp -o value available "$pv_zp" 2>/dev/null | awk '{ printf "%d", $1 / 1073741824 }') ;;
+    dir)
+      pool_disks="$pool_disks $(disks_of "$(findmnt -nvo SOURCE -T "$R$(field "$P" path)" 2>/dev/null)")"
+      free=$(df -BG --output=avail "$R$(field "$P" path)" 2>/dev/null | awk 'NR == 2 { printf "%d", $1 }') ;;
+  esac
+  [ -n "$free" ] && pfree[$P]=$free
+  if [ "$P" = "$POOL" ]; then stype=$t; vg=$pv_vg; tp=$pv_tp; zp=$pv_zp; pool_gb=\${size:-}; used_gb=\${used:-}; fi
+done
+pool_disks=$(echo $(printf '%s\\n' $pool_disks | sort -u))
 
 mem_mb=$(awk '/^MemTotal:/ { print int($2 / 1024) }' "$R/proc/meminfo")
 # ZFS keeps a cache (ARC) in RAM, by default up to half of it; count its ceiling.
@@ -174,12 +188,18 @@ echo "$HOST: $mem_mb MB RAM; planned VMs ($VM_LIST MB) = $VM_MB MB$extra; leavin
 # --- --room: the largest node one more slot could be ---------------------------------------
 if [ "$ROOM" = 1 ]; then
   # Slots in the inventory with no VM yet still need their disk and threads.
-  while read -r slot _mb tier; do
+  while read -r slot _mb tier sp; do
     [ -z "$slot" ] && continue
     case "$built" in *" $slot "*) continue ;; esac
     read -r _t _d _s dgb tc < <(printf '%s\\n' "$TIER_TABLE" | awk -v t="$tier" '$1 == t')
-    vcpus=$((vcpus + \${tc:-0})); [ -n "$pool_free_gb" ] && pool_free_gb=$((pool_free_gb - \${dgb:-0}))
+    vcpus=$((vcpus + \${tc:-0})); [ -n "\${pfree[$sp]:-}" ] && pfree[$sp]=$((pfree[$sp] - \${dgb:-0}))
   done <<< "$SLOT_SIZES"
+  # A new slot can go on any of the storages; the one with the most free space.
+  pool_free_gb=""; room_pool=""
+  for P in $POOLS; do
+    f=\${pfree[$P]:-}; [ -z "$f" ] && continue
+    if [ -z "$pool_free_gb" ] || [ "$f" -gt "$pool_free_gb" ]; then pool_free_gb=$f; room_pool=$P; fi
+  done
   threads=$(grep -c '^processor' "$R/proc/cpuinfo" 2>/dev/null); free_threads=$((\${threads:-0} - vcpus))
   echo
   echo "Room for one more node, largest first:"
@@ -189,9 +209,10 @@ if [ "$ROOM" = 1 ]; then
     if [ $((free_mb - dmb)) -ge ${HOST_RESERVE_MB} ]; then ram="RAM ok at $dmb MB"; fit=1
     elif [ "$tight" -ge ${SQUEEZED_FLOOR_MB} ]; then ram="RAM tight - at $smb MB, with the small-RAM steps"; fit=2
     else ram="RAM short by $((${SQUEEZED_FLOOR_MB} - tight)) MB even at $smb MB"; fit=0; fi
-    if [ -z "$pool_free_gb" ]; then disk="disk unknown ('$POOL' free space)"
-    elif [ "$pool_free_gb" -ge "$dgb" ]; then disk="disk ok ($dgb of $pool_free_gb GB free)"
-    else disk="disk short ($dgb GB needed, $pool_free_gb free)"; fit=0; fi
+    on=""; [ "$POOLS" != "$room_pool" ] && on=" on $room_pool"
+    if [ -z "$pool_free_gb" ]; then disk="disk unknown ('$POOLS' free space)"
+    elif [ "$pool_free_gb" -ge "$dgb" ]; then disk="disk ok ($dgb of $pool_free_gb GB free$on)"
+    else disk="disk short ($dgb GB needed, $pool_free_gb free$on)"; fit=0; fi
     if [ "$free_threads" -ge "$tc" ]; then cpu="CPU ok ($tc of $free_threads threads free)"
     else cpu="CPU short ($tc threads needed, $free_threads free)"; fit=0; fi
     if [ "$fit" -gt 0 ]; then
@@ -261,7 +282,7 @@ else
   else
     say TODO "2. KSM: $NVM VMs share identical pages; hold KSM on (KSM_THRES_COEF=$coef, want 50):"
     cmd "apt install ksm-control-daemon" \\
-        "sed -i 's/^#\\\\?KSM_THRES_COEF=.*/KSM_THRES_COEF=50/' /etc/ksmtuned.conf" \\
+        "sed -i '/KSM_THRES_COEF=/d' /etc/ksmtuned.conf; echo KSM_THRES_COEF=50 >> /etc/ksmtuned.conf" \\
         "systemctl enable --now ksmtuned; systemctl restart ksmtuned"
   fi
 fi
@@ -283,13 +304,13 @@ if [ -n "$on_zvol" ]; then
       "mkswap -L fhswap /dev/<disk>    # CHECK <disk> - mkswap erases it" \\
       "echo 'LABEL=fhswap none swap sw,pri=10 0 0' >> /etc/fstab; swapon -a; swapon --show"
 elif [ "$disk_mb" -ge $((${DISK_SWAP_MIN_MB} - 64)) ] && [ -z "$pool_disks" ]; then
-  say WARN "3. Disk swap: $disk_mb MB on \${swap_on:-?}, but cannot tell which disk VM storage '$POOL' (\${stype:-not in storage.cfg}) uses - check it is not that one."
+  say WARN "3. Disk swap: $disk_mb MB on \${swap_on:-?}, but cannot tell which disk VM storage '$POOLS' (\${stype:-not in storage.cfg}) uses - check it is not that one."
 elif [ "$disk_mb" -ge $((${DISK_SWAP_MIN_MB} - 64)) ] && [ "$off_pool" -eq 1 ]; then
   say OK "3. Disk swap: $disk_mb MB on $swap_on, off the VM disk ($pool_disks)."
 elif [ "$disk_mb" -ge $((${DISK_SWAP_MIN_MB} - 64)) ] && [ "$on_pool" -eq 1 ]; then
   say WARN "3. Disk swap: $disk_mb MB on $swap_on - the VM disk. If benchmarks fail on ddwrite, move swap to a small SSD/NVMe of its own (an M.2 PCIe card works)."
 else
-  if [ -n "$pool_disks" ]; then where="VM disk: $pool_disks"; else where="VM storage '$POOL'"; fi
+  if [ -n "$pool_disks" ]; then where="VM disk: $pool_disks"; else where="VM storage '$POOLS'"; fi
   say TODO "3. Disk swap: $disk_mb MB - want ${DISK_SWAP_MIN_MB} MB or more, on a disk the VMs do not use ($need). $where."
   echo "      Best - a separate SSD/NVMe (an M.2 card works; it need not boot). CHECK <disk> - mkswap erases it:"
   cmd "lsblk -d -o NAME,TRAN,SIZE,MODEL" \\
