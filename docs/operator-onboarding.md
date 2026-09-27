@@ -324,16 +324,17 @@ their commands:
 ```sh
 fh-toolkit host-check pve1 | ssh root@pve1 bash
 ```
+It also flags a VM whose size differs from what the inventory would rebuild it at, and lists
+running VMs the inventory does not know (a gateway, say) and counts their RAM. Thinking of
+adding a node? `fh-toolkit host-check pve1 --room` names the largest tier the host has RAM,
+disk and CPU threads for.
 
-1. **Smaller VMs** — `vmMemoryMb` on the inventory host (Step 5); `fh-toolkit init` offers it.
-2. **KSM, more eager** (two or more VMs). Flux VMs share many identical pages; KSM merged
-   1–3 GB on a 16 GB host with two Cumulus. It does nothing for a host with ONE VM.
-   ```bash
-   apt install ksm-control-daemon          # ksmtuned; on by default in Proxmox
-   sed -i 's/^#\?KSM_THRES_COEF=.*/KSM_THRES_COEF=50/' /etc/ksmtuned.conf
-   systemctl restart ksmtuned
-   ```
-3. **zram** — 2 GB of compressed swap in RAM, used before any disk swap:
+**On ZFS, first cap its cache.** ZFS keeps a read cache (the ARC) in RAM — by default up to
+half of it. On a tight host cap it at 1 GB (`host-check` prints the commands as step 0). Swap
+on a ZFS volume can hang the host when memory runs short, so disk swap on ZFS needs a disk of
+its own.
+
+1. **zram** — 2 GB of compressed swap in RAM, used before any disk swap:
    ```bash
    apt install zram-tools
    printf 'ALGO=zstd\nSIZE=2048\nPRIORITY=100\n' > /etc/default/zramswap
@@ -342,7 +343,14 @@ fh-toolkit host-check pve1 | ssh root@pve1 bash
    ```
    `apt` starts zram at its defaults before the file is written, and a plain `restart` cannot
    resize a device in use — hence the reset.
-4. **At least 4 GB of disk swap, off the VM disk — required for ONE VM on a host its size**
+2. **KSM, more eager** (two or more VMs). Flux VMs share many identical pages; KSM merged
+   1–3 GB on a 16 GB host with two Cumulus. It does nothing for a host with ONE VM.
+   ```bash
+   apt install ksm-control-daemon          # ksmtuned; on by default in Proxmox
+   sed -i 's/^#\?KSM_THRES_COEF=.*/KSM_THRES_COEF=50/' /etc/ksmtuned.conf
+   systemctl restart ksmtuned
+   ```
+3. **At least 4 GB of disk swap, off the VM disk — required for ONE VM on a host its size**
    (e.g. one Nimbus on 32 GB); recommended with two or more. Best is a disk of its own — a
    spare SSD, or an NVMe drive on a PCIe M.2 card (it need not boot) — so host swapping never
    competes with a benchmark. Check the device name first: `mkswap` erases it.
@@ -370,6 +378,10 @@ fh-toolkit host-check pve1 | ssh root@pve1 bash
    A VM killed during its first boot can come back with fluxd and FluxOS disagreeing on the
    RPC password (`incorrect password attempt from 127.0.0.1` in fluxd, `status code 401` in
    fluxbench). Rebuild it rather than repair it.
+
+4. **Smaller VMs** — `vmMemoryMb` on the inventory host (Step 5); `fh-toolkit init` offers it. Last,
+   because it spends the RAM check's margin. If even the smallest sizes leave the host under
+   ~200 MB, it has too many VMs for its RAM: take a slot off it, or add RAM.
 
 ## Step 1 — Generate your signing key + config
 

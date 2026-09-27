@@ -4,7 +4,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { hostCheckScript, plannedVms, type HostCheckInput } from "./host-check";
+import { hostCheckScript, plannedVms, type HostCheckInput, type HostCheckOptions } from "./host-check";
 import { tmpDir } from "./test-tmp";
 
 /**
@@ -17,6 +17,13 @@ interface FakeHost {
   swaps: [string, string, number, number][];
   ksmCoef?: number;
   ksmtunedActive?: boolean;
+  /** ZFS: a pool `rpool` on sdb3, and the ARC's max/min. */
+  zfs?: { arcMaxMb: number; arcMinMb: number };
+  /** /etc/pve/qemu-server/<id>.conf bodies; `running` writes the pid file. */
+  vms?: { id: number; conf: string; running?: boolean }[];
+  /** CPU threads in /proc/cpuinfo (default 16), and the thin pool's size / volumes in GB. */
+  threads?: number;
+  pool?: [number, number];
 }
 
 const STORAGE_CFG = `dir: local
@@ -31,9 +38,13 @@ lvmthin: ssd
 \tthinpool data
 \tvgname ssd
 \tcontent images,rootdir
+
+zfspool: local-zfs
+\tpool rpool/data
+\tcontent images,rootdir
 `;
 
-function run(host: HostCheckInput, fake: FakeHost): string {
+function run(host: HostCheckInput, fake: FakeHost, opts: HostCheckOptions = {}): string {
   const root = tmpDir("fh-hostcheck-");
   const put = (rel: string, text: string) => {
     mkdirSync(dirname(join(root, rel)), { recursive: true });
@@ -48,6 +59,16 @@ function run(host: HostCheckInput, fake: FakeHost): string {
   put("etc/pve/storage.cfg", STORAGE_CFG);
   put("etc/ksmtuned.conf", fake.ksmCoef === undefined ? "# KSM_THRES_COEF=20\n" : `KSM_THRES_COEF=${fake.ksmCoef}\n`);
   put("sys/kernel/mm/ksm/pages_sharing", "262144\n");
+  put("proc/cpuinfo", Array.from({ length: fake.threads ?? 16 }, (_, i) => `processor\t: ${i}\n`).join(""));
+  put("sys/block/sda/queue/rotational", "1\n");
+  put("sys/block/sdb/queue/rotational", "0\n");
+  if (fake.zfs) {
+    put("proc/spl/kstat/zfs/arcstats", `c_min 4 ${fake.zfs.arcMinMb * 1048576}\nc_max 4 ${fake.zfs.arcMaxMb * 1048576}\n`);
+  }
+  for (const vm of fake.vms ?? []) {
+    put(`etc/pve/qemu-server/${vm.id}.conf`, vm.conf);
+    if (vm.running) put(`var/run/qemu-server/${vm.id}.pid`, "1\n");
+  }
   const bin = join(root, "bin");
   const stub = (name: string, body: string) => {
     put(`bin/${name}`, `#!/bin/bash\n${body}\n`);
@@ -60,13 +81,22 @@ function run(host: HostCheckInput, fake: FakeHost): string {
   /dev/dm-20|/dev/ssd/swap) printf 'dm-20 lvm\\nssd-data-tpool lvm\\nsdb disk\\n' ;;
   /dev/sdb) printf 'sdb disk\\n' ;;
   /dev/nvme0n1) printf 'nvme0n1 disk\\n' ;;
+  /dev/sdb3) printf 'sdb3 part\\nsdb disk\\n' ;;
+  /dev/zd0) printf 'zd0 disk\\n' ;;
 esac`
   );
   stub("pvs", `case "$*" in *vg_name=ssd*) echo "  /dev/sdb" ;; *vg_name=pve*) echo "  /dev/sda3" ;; esac`);
-  stub("lvs", `case "$*" in *-S*) printf '  440.00\\n' ;; *) printf '  445.13\\n' ;; esac`);
+  const [poolGb, usedGb] = fake.pool ?? [445.13, 440];
+  stub("lvs", `case "$*" in *-S*) printf '  ${usedGb}\\n' ;; *) printf '  ${poolGb}\\n' ;; esac`);
   stub("systemctl", `exit ${fake.ksmtunedActive === false ? 3 : 0}`);
   stub("findmnt", "exit 1");
-  return execFileSync("bash", ["-c", hostCheckScript(host, "0.0.0-test")], {
+  stub(
+    "zpool",
+    fake.zfs
+      ? `case "$*" in *-vHP*) printf 'rpool\\t464G\\n\\t/dev/sdb3\\t464G\\n' ;; *) echo rpool ;; esac`
+      : "exit 1"
+  );
+  return execFileSync("bash", ["-c", hostCheckScript(host, "0.0.0-test", opts)], {
     env: { ...process.env, HC_ROOT: root, PATH: `${bin}:${process.env.PATH}` },
     encoding: "utf8",
   });
@@ -104,7 +134,7 @@ test("pve65 as tuned (zram 2 GB prio 100, KSM coef 50, HDD swap): every step OK"
   });
   assert.match(out, /^OK +1\. zram: 2047 MB, priority 100/m);
   assert.match(out, /^OK +2\. KSM: .*sharing 1024 MB/m);
-  assert.match(out, /^OK +3\. Disk swap: 8192 MB, off the VM disk \(sdb\)/m);
+  assert.match(out, /^OK +3\. Disk swap: 8192 MB on sda \(HDD\), off the VM disk \(sdb\)/m);
   assert.match(out, /^OK +4\. VM sizes/m);
   assert.match(out, /pve65: nothing left to do/);
 });
@@ -152,7 +182,7 @@ test("pve50 as fixed (swap is a thin LV in the VM pool): WARN, not TODO", () => 
       ["/dev/dm-20", "partition", 4095, 10],
     ],
   });
-  assert.match(out, /^WARN +3\. Disk swap: 4095 MB, but on the VM disk \(sdb\)/m);
+  assert.match(out, /^WARN +3\. Disk swap: 4095 MB on sdb \(SSD\) - the VM disk\. If benchmarks fail on ddwrite/m);
   assert.match(out, /pve50: nothing left to do/);
 });
 
@@ -164,7 +194,125 @@ test("swap on its own NVMe: OK", () => {
       ["/dev/nvme0n1", "partition", 8192, 10],
     ],
   });
-  assert.match(out, /^OK +3\. Disk swap: 8192 MB, off the VM disk/m);
+  assert.match(out, /^OK +3\. Disk swap: 8192 MB on nvme0n1 \(NVMe\), off the VM disk \(sdb\)/m);
+});
+
+test("VM storage the script cannot map to a disk (e.g. zfspool): WARN, never a false OK", () => {
+  const out = run({ ...pve50, storageImages: "nosuch" }, {
+    memMb: 31999,
+    swaps: [
+      ["/dev/zram0", "partition", 2047, 100],
+      ["/dev/dm-9", "partition", 8192, -2],
+    ],
+  });
+  assert.match(out, /^WARN +3\. Disk swap: 8192 MB on sda \(HDD\), but cannot tell which disk VM storage 'nosuch' \(not in storage.cfg\)/m);
+});
+
+const pve65Zfs: HostCheckInput = { ...pve65, storageImages: "local-zfs", vmMemoryMb: { cumulus: 7424 } };
+
+test("ZFS at its default ARC: step 0 caps it, pool disk found, no swap fallback on ZFS", () => {
+  const out = run(pve65Zfs, { memMb: 15871, swaps: [["/dev/zram0", "partition", 2047, 100]], ksmCoef: 50, zfs: { arcMaxMb: 7935, arcMinMb: 495 } });
+  assert.match(out, /= 14848 MB, ZFS cache up to 7935 MB; leaving -6912 MB/);
+  assert.match(out, /^TODO +0\. ZFS cache \(ARC\): up to 7935 MB/m);
+  assert.match(out, /echo 1073741824 > \/sys\/module\/zfs\/parameters\/zfs_arc_max/);
+  assert.match(out, /options zfs zfs_arc_min=536870912 zfs_arc_max=1073741824/);
+  assert.match(out, /^TODO +3\. Disk swap: 0 MB .*VM disk: sdb\./m);
+  assert.match(out, /No fallback on ZFS/);
+  assert.doesNotMatch(out, /lvcreate/);
+  assert.match(out, /^OK +4\. VM sizes/m);
+});
+
+test("ZFS with the ARC capped: step 0 OK", () => {
+  const out = run(pve65Zfs, { memMb: 15871, swaps: [["/dev/zram0", "partition", 2047, 100]], ksmCoef: 50, zfs: { arcMaxMb: 1024, arcMinMb: 512 } });
+  assert.match(out, /^OK +0\. ZFS cache \(ARC\): capped at 1024 MB/m);
+});
+
+test("swap on a ZFS volume: TODO, never OK", () => {
+  const out = run(pve65Zfs, {
+    memMb: 15871,
+    swaps: [
+      ["/dev/zram0", "partition", 2047, 100],
+      ["/dev/zd0", "partition", 8192, -2],
+    ],
+    ksmCoef: 50,
+    zfs: { arcMaxMb: 1024, arcMinMb: 512 },
+  });
+  assert.match(out, /^TODO +3\. Disk swap: 8192 MB on zd0 \(ZFS volume\) - swap on a ZFS volume can hang/m);
+  assert.match(out, /swapoff \/dev\/zd0;/);
+});
+
+test("too many VMs for the RAM, even at the smallest sizes: step 4 says so", () => {
+  const three = { ...pve65, slots: [{ tier: "cumulus" }, { tier: "cumulus" }, { tier: "cumulus" }] };
+  const out = run(three, { memMb: 15871, swaps: [["/dev/zram0", "partition", 2047, 100]], ksmCoef: 50 });
+  assert.match(out, /^TODO +4\. VM sizes: even at the smallest sizes \(23040 MB\) the host keeps -7169 MB/m);
+  assert.match(out, /take a slot off pve65/);
+});
+
+test("VMs on the host against the inventory: size drift, a pending size, and running gateways counted", () => {
+  const host = { ...pve65, slots: [{ tier: "cumulus", vmName: "mt-65-1" }, { tier: "cumulus", vmName: "mt-65-2" }] };
+  const out = run(host, {
+    memMb: 15871,
+    swaps: [["/dev/zram0", "partition", 2047, 100]],
+    ksmCoef: 50,
+    vms: [
+      { id: 101, conf: "name: mt-65-1\nmemory: 7424\n", running: true },
+      { id: 102, conf: "name: fh-mt-65-2\nmemory: 8192\n\n[PENDING]\nmemory: 7680\n", running: true },
+      { id: 110, conf: "name: opnsense\nmemory: 2048\n", running: true },
+      { id: 111, conf: "name: old-test\nmemory: 4096\n" },
+    ],
+  });
+  assert.match(out, /^WARN +VM mt-65-1 \(101\): runs 7424 MB, but the inventory builds it at 7680 MB/m);
+  assert.match(out, /qm set 101 --memory 7680/);
+  assert.match(out, /^WARN +VM fh-mt-65-2 \(102\): 7680 MB is pending/m);
+  assert.match(out, /^NOTE +Running VMs not in the inventory, counted: opnsense \(110\) 2048 MB\.$/m);
+  assert.match(out, /= 15360 MB, other running VMs 2048 MB; leaving -1537 MB for Proxmox\.\n/);
+  assert.doesNotMatch(out, /old-test/);
+});
+
+const pve25: HostCheckInput = {
+  name: "pve25",
+  storageImages: "ssd",
+  slots: [
+    { tier: "nimbus", vmName: "mt-25-n1" },
+    { tier: "nimbus", vmName: "mt-25-n2" },
+    { tier: "nimbus", vmName: "mt-25-n3" },
+  ],
+};
+const nimbusConf = (n: number) => ({ id: 100 + n, conf: `name: mt-25-n${n}\nmemory: 32768\ncores: 8\n`, running: true });
+
+test("--room: RAM, disk and threads for each tier; the largest that fits is named", () => {
+  const out = run(
+    pve25,
+    { memMb: 128843, swaps: [], threads: 40, pool: [1800, 880], vms: [nimbusConf(1), nimbusConf(2)] },
+    { room: true }
+  );
+  // n3 is not built yet: its 440 GB and 8 threads are taken off first → 480 GB, 16 threads free.
+  assert.match(out, /^NO +stratus: RAM short .*; disk short \(880 GB needed, 480 free\); CPU ok \(16 of 16 threads free\)\./m);
+  // 128 GB less 3 × 32768 leaves 30.5 GB: a 4th nimbus fits only squeezed; a cumulus fits clean.
+  assert.match(out, /^YES +nimbus: RAM tight - at 31744 MB, with the small-RAM steps; disk ok \(440 of 480 GB free\); CPU ok \(8 of 16 threads free\)\./m);
+  assert.match(out, /^YES +cumulus: RAM ok at 8192 MB/m);
+  assert.match(out, /pve25: the largest that fits is one nimbus, at 31744 MB \(vmMemoryMb\)/);
+  assert.doesNotMatch(out, /zram|KSM/);
+});
+
+test("--room: a tight host fits only at the squeezed size, and says to run the steps", () => {
+  const out = run(
+    { ...pve65, slots: [{ tier: "cumulus" }] },
+    { memMb: 15871, swaps: [], threads: 8, pool: [900, 220] },
+    { room: true }
+  );
+  assert.match(out, /^YES +cumulus: RAM tight - at 7680 MB, with the small-RAM steps/m);
+  assert.match(out, /the largest that fits is one cumulus, at 7680 MB \(vmMemoryMb\) with the small-RAM steps/);
+});
+
+test("--room: gateways and short threads can leave no room", () => {
+  const out = run(
+    { ...pve65, slots: [{ tier: "cumulus", vmName: "a" }, { tier: "cumulus", vmName: "b" }] },
+    { memMb: 15871, swaps: [], threads: 8, pool: [1400, 440], vms: [{ id: 110, conf: "name: opn\nmemory: 2048\ncores: 2\n", running: true }] },
+    { room: true }
+  );
+  assert.match(out, /^NO +cumulus: RAM short .*CPU short \(4 threads needed, -2 free\)/m);
+  assert.match(out, /pve65: no room for another node\./);
 });
 
 test("ksmtuned stopped is a TODO even with the right coefficient", () => {
@@ -201,5 +349,6 @@ test("the CLI: picks the host from the inventory, names the choices when it cann
   assert.notEqual(which.status, 0);
   assert.match(which.stdout + which.stderr, /which host\? .*pve50, pve65/);
   assert.match(cli("pve65").stdout, /^NVM=2$/m);
+  assert.match(cli("pve65", "--room").stdout, /^ROOM=1$/m);
   assert.match(cli("pve99").stdout + cli("pve99").stderr, /pve99 is not in/);
 });

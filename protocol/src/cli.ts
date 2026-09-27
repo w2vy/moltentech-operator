@@ -3288,7 +3288,7 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
     // ksmtuned, so this prints a read-only script for the host itself — straight to stdout,
     // nothing else on it, because the documented use is a pipe into `ssh root@<host> bash`.
     case "host-check": {
-      rejectUnknownFlags("host-check", args, ["--dir"]);
+      rejectUnknownFlags("host-check", args, ["--dir", "--room"]);
       const od = readOperatorDir("host-check", dirFlag(args));
       const names = od.currentHosts.map((h) => h.name);
       const positional = args.filter((a, i) => !a.startsWith("--") && args[i - 1] !== "--dir");
@@ -3297,7 +3297,7 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
       if (name === undefined) die(`which host? fh-toolkit host-check <host> — one of: ${names.join(", ")}`);
       const host = od.currentHosts.find((h) => h.name === name);
       if (!host) die(`${name} is not in ${od.inventoryLabel} — one of: ${names.join(", ")}`);
-      process.stdout.write(hostCheckScript(host, pkgVersion()));
+      process.stdout.write(hostCheckScript(host, pkgVersion(), { room: args.includes("--room") }));
       return 0;
     }
     // Which build am I? The image refreshes on a stamp file, so "the fix is merged"
@@ -3387,8 +3387,9 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
       console.log("            --set <supporter|operator> [--price <tier>=<usd>] [--stripe-key <k>] [--flux-address <t1…>]");
       console.log("            [--stripe-webhook <k>] [--dry-run] [--yes]");
       console.log("  doctor    [--dir <dir>] [--check-proxmox] [--check-stripe] [--check-hub]");
-      console.log("  host-check [<host>] [--dir <dir>]            small-RAM host (16/32 GB)? prints a read-only check");
+      console.log("  host-check [<host>] [--room] [--dir <dir>]   small-RAM host (16/32 GB)? prints a read-only check");
       console.log("            to run ON the host: fh-toolkit host-check pve1 | ssh root@pve1 bash");
+      console.log("            --room: the largest node (stratus/nimbus/cumulus) the host could add");
       console.log("  sign      [--dir <dir>] [--key <pem>] [--from-config <config.env>|--in <body.json>]");
       console.log("            [--out <manifest.json>] [--stdout]   defaults to what `init` wrote");
       console.log("  env       [--dir <dir>] [--from-config <config.env>] [--secrets <secrets.env>]");
