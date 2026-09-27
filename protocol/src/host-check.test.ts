@@ -20,7 +20,11 @@ interface FakeHost {
   /** ZFS: a pool `rpool` on sdb3, and the ARC's max/min. */
   zfs?: { arcMaxMb: number; arcMinMb: number };
   /** /etc/pve/qemu-server/<id>.conf bodies; `running` writes the pid file. */
-  vms?: { id: number; conf: string; running?: boolean }[];
+  vms?: { id: number; conf: string; running?: boolean; busiest?: number }[];
+  /** Physical cores behind the threads (default: one per thread). */
+  physCores?: number;
+  /** KSM pages_sharing, in MB (default 1024). */
+  ksmMb?: number;
   /** CPU threads in /proc/cpuinfo (default 16), and the thin pool's size / volumes in GB. */
   threads?: number;
   pool?: [number, number];
@@ -68,8 +72,13 @@ function run(host: HostCheckInput, fake: FakeHost, opts: HostCheckOptions = {}):
   );
   put("etc/pve/storage.cfg", STORAGE_CFG);
   put("etc/ksmtuned.conf", fake.ksmCoef === undefined ? "# KSM_THRES_COEF=20\n" : `KSM_THRES_COEF=${fake.ksmCoef}\n`);
-  put("sys/kernel/mm/ksm/pages_sharing", "262144\n");
-  put("proc/cpuinfo", Array.from({ length: fake.threads ?? 16 }, (_, i) => `processor\t: ${i}\n`).join(""));
+  put("sys/kernel/mm/ksm/pages_sharing", `${(fake.ksmMb ?? 1024) * 256}\n`);
+  const threads = fake.threads ?? 16;
+  const phys = fake.physCores ?? threads;
+  put(
+    "proc/cpuinfo",
+    Array.from({ length: threads }, (_, i) => `processor\t: ${i}\nphysical id\t: 0\ncore id\t\t: ${i % phys}\n\n`).join("")
+  );
   put("sys/block/sda/queue/rotational", "1\n");
   put("sys/block/sdb/queue/rotational", "0\n");
   if (fake.raid) put("sys/block/sda/device/model", "PERC H710       \n");
@@ -79,6 +88,9 @@ function run(host: HostCheckInput, fake: FakeHost, opts: HostCheckOptions = {}):
   for (const vm of fake.vms ?? []) {
     put(`etc/pve/qemu-server/${vm.id}.conf`, vm.conf);
     if (vm.running) put(`var/run/qemu-server/${vm.id}.pid`, "1\n");
+    // Proxmox's history: one quiet 30-min point and the busiest, as a share of 2 vCPUs.
+    if (vm.busiest !== undefined)
+      put(`rrd/${vm.id}.json`, JSON.stringify([{ cpu: 0.1, maxcpu: 2 }, { cpu: vm.busiest / 2, maxcpu: 2 }, { time: 1 }]));
   }
   const bin = join(root, "bin");
   const stub = (name: string, body: string) => {
@@ -102,8 +114,13 @@ esac`
   stub("vgs", `case "$*" in *ss1*) echo "  13.70" ;; *ss2*) echo "  893.00" ;; esac`);
   const [poolGb, usedGb] = fake.pool ?? [445.13, 440];
   stub("lvs", `case "$*" in *-S*) printf '  ${usedGb}\\n' ;; *) printf '  ${poolGb}\\n' ;; esac`);
-  stub("systemctl", `exit ${fake.ksmtunedActive === false ? 3 : 0}`);
+  stub(
+    "systemctl",
+    `case "$*" in *ActiveEnterTimestamp*) echo "Sat 2026-09-26 10:00:00 EDT" ;; *) exit ${fake.ksmtunedActive === false ? 3 : 0} ;; esac`
+  );
+  put("sys/kernel/mm/ksm/full_scans", "412\n");
   stub("findmnt", "exit 1");
+  stub("pvesh", `id=$(echo "$2" | cut -d/ -f5); cat "$HC_ROOT/rrd/$id.json" 2>/dev/null || exit 1`);
   stub(
     "zpool",
     fake.zfs
@@ -134,7 +151,7 @@ test("planned sizes: vmMemoryMb wins, the tier default otherwise, unknown tiers 
 test("a host with room: nothing to do, no steps listed", () => {
   const out = run({ ...pve65, name: "big" }, { memMb: 64221, swaps: [] });
   assert.match(out, /^OK +RAM fits/m);
-  assert.doesNotMatch(out, /zram|KSM/);
+  assert.doesNotMatch(out, /zram:|KSM:/);
 });
 
 test("pve65 as tuned (zram 2 GB prio 100, KSM coef 50, HDD swap): every step OK", () => {
@@ -150,6 +167,7 @@ test("pve65 as tuned (zram 2 GB prio 100, KSM coef 50, HDD swap): every step OK"
   assert.match(out, /^OK +2\. KSM: .*sharing 1024 MB/m);
   assert.match(out, /^OK +3\. Disk swap: 8192 MB on sda \(HDD\), off the VM disk \(sdb\)/m);
   assert.match(out, /^OK +4\. VM sizes/m);
+  assert.match(out, /KSM is saving 1024 MB on top \(412 full scans, ksmtuned up [^,]+, its config changed \d+m ago\)\./);
   assert.match(out, /pve65: nothing left to do/);
 });
 
@@ -258,7 +276,7 @@ test("swap on a ZFS volume: TODO, never OK", () => {
 test("too many VMs for the RAM, even at the smallest sizes: step 4 says so", () => {
   const three = { ...pve65, slots: [{ tier: "cumulus" }, { tier: "cumulus" }, { tier: "cumulus" }] };
   const out = run(three, { memMb: 15871, swaps: [["/dev/zram0", "partition", 2047, 100]], ksmCoef: 50 });
-  assert.match(out, /^TODO +4\. VM sizes: even at the smallest sizes \(23040 MB\) the host keeps -7169 MB/m);
+  assert.match(out, /^TODO +4\. VM sizes: even at the smallest sizes \(23040 MB\) the host keeps -5369 MB \(counting ~1800 MB KSM saves\)/m);
   assert.match(out, /take a slot off pve65/);
 });
 
@@ -279,7 +297,7 @@ test("VMs on the host against the inventory: size drift, a pending size, and run
   assert.match(out, /qm set 101 --memory 7680/);
   assert.match(out, /^WARN +VM fh-mt-65-2 \(102\): 7680 MB is pending/m);
   assert.match(out, /^NOTE +Running VMs not in the inventory, counted: opnsense \(110\) 2048 MB\.$/m);
-  assert.match(out, /= 15360 MB, other running VMs 2048 MB; leaving -1537 MB for Proxmox\.\n/);
+  assert.match(out, /= 15360 MB, other running VMs 2048 MB; leaving -1537 MB for Proxmox\. KSM is saving 1024 MB on top \(412 full scans, ksmtuned up [^)]*\)\.\n/);
   assert.doesNotMatch(out, /old-test/);
 });
 
@@ -303,10 +321,10 @@ test("--room: RAM, disk and threads for each tier; the largest that fits is name
   // n3 is not built yet: its 440 GB and 8 threads are taken off first → 480 GB, 16 threads free.
   assert.match(out, /^NO +stratus: RAM short .*; disk short \(880 GB needed, 480 free\); CPU ok \(16 of 16 threads free\)\./m);
   // 128 GB less 3 × 32768 leaves 30.5 GB: a 4th nimbus fits only squeezed; a cumulus fits clean.
-  assert.match(out, /^YES +nimbus: RAM tight - at 31744 MB, with the small-RAM steps; disk ok \(440 of 480 GB free\); CPU ok \(8 of 16 threads free\)\./m);
+  assert.match(out, /^YES +nimbus: RAM tight - at 31744 MB, with the small-RAM steps and ~1800 MB KSM saves the others; disk ok \(440 of 480 GB free\); CPU ok \(8 of 16 threads free\)\./m);
   assert.match(out, /^YES +cumulus: RAM ok at 8192 MB/m);
   assert.match(out, /pve25: the largest that fits is one nimbus, at 31744 MB \(vmMemoryMb\)/);
-  assert.doesNotMatch(out, /zram|KSM/);
+  assert.doesNotMatch(out, /zram:|KSM:/);
 });
 
 test("--room: a tight host fits only at the squeezed size, and says to run the steps", () => {
@@ -325,7 +343,7 @@ test("--room: gateways and short threads can leave no room", () => {
     { memMb: 15871, swaps: [], threads: 8, pool: [1400, 440], vms: [{ id: 110, conf: "name: opn\nmemory: 2048\ncores: 2\n", running: true }] },
     { room: true }
   );
-  assert.match(out, /^NO +cumulus: RAM short .*CPU short \(4 threads needed, -2 free\)/m);
+  assert.match(out, /^NO +cumulus: RAM short .*CPU short \(4 threads needed, 0 not taken by nodes\)/m);
   assert.match(out, /pve65: no room for another node\./);
 });
 
@@ -353,6 +371,61 @@ test("slots on their own storage (pve40: ss1, ss2): their disks are the VM disks
   const room = run(host, { memMb: 64000, swaps: [], threads: 32, vms: [] }, { room: true });
   // a and b are not built: 220 GB each off ss1 (13 → -207) and ss2 (893 → 673); ss2 has the most.
   assert.match(room, /^YES +nimbus: .*disk ok \(440 of 673 GB free on ss2\)/m);
+});
+
+const gw = (busiest: number) => ({ id: 120, conf: "name: OPNsense-186\nmemory: 2048\ncores: 2\n", running: true, busiest });
+
+test("CPU: other VMs count at their busiest 30 min; over the threads is a WARN that says by how much", () => {
+  const two = { ...pve65, slots: [{ tier: "cumulus", vmName: "a" }, { tier: "cumulus", vmName: "b" }] };
+  const out = run(two, { memMb: 64000, swaps: [], threads: 8, vms: [gw(0.85)] });
+  assert.match(
+    out,
+    /^WARN +CPU: 8\.9 of 8 threads \(0\.9 over, 11\.2%\) - nodes 8 \+ other VMs at their busiest 30 min 0\.9 \(OPNsense-186 0\.9\)\./m
+  );
+  assert.doesNotMatch(run(two, { memMb: 64000, swaps: [], threads: 12, vms: [gw(0.85)] }), /CPU:/);
+});
+
+test("--room: a stratus needs 16 physical cores, not just 16 free threads", () => {
+  const out = run({ ...pve65, slots: [] }, { memMb: 257000, swaps: [], threads: 32, physCores: 8, pool: [2000, 0] }, { room: true });
+  assert.match(out, /^NO +stratus: RAM ok .*CPU short \(stratus wants 16 physical cores, the host has 8\)\./m);
+  assert.match(out, /the largest that fits is one nimbus\./);
+});
+
+test("--room: pve20 — a 4th nimbus fits with KSM's credit when the gateway is 2 GB, not at 4 GB", () => {
+  const pve20 = (gwMb: number): HostCheckInput => ({
+    name: "pve20",
+    storageImages: "ssd",
+    vmMemoryMb: { nimbus: 31744 },
+    slots: [
+      { tier: "nimbus", vmName: "mt-186-n9" },
+      { tier: "nimbus", vmName: "n10" },
+      { tier: "nimbus", vmName: "n11" },
+    ],
+  });
+  const fake = (gwMb: number): FakeHost => ({
+    memMb: 128837,
+    swaps: [],
+    threads: 40,
+    pool: [2000, 0],
+    ksmMb: 0,
+    vms: [{ id: 120, conf: `name: OPNsense-186\nmemory: ${gwMb}\ncores: 2\n`, running: true, busiest: 0.77 }],
+  });
+  const at2 = run(pve20(2048), fake(2048), { room: true });
+  // 128837 − 3 × 31744 − 2048 − 31744 = −187, + 2 × 900 KSM = 1613.
+  assert.match(at2, /^YES +nimbus: RAM tight - at 31744 MB, with the small-RAM steps and ~1800 MB KSM saves the others;/m);
+  assert.match(at2, /Build it alone, after the other VMs have settled/);
+  // 40 threads − 24 for nodes = 16 free for nodes; the gateway's 0.8 does not block.
+  assert.match(at2, /^YES +nimbus: .*CPU ok \(8 of 15\.2 threads free\)\./m);
+  assert.match(run(pve20(4096), fake(4096), { room: true }), /^NO +nimbus: RAM short by 635 MB even at 31744 MB/m);
+});
+
+test("--room: KSM configured minutes ago and saving little yet - says to run it again in 5 minutes", () => {
+  const vm = (n: number) => ({ id: 200 + n, conf: `name: c${n}\nmemory: 7680\ncores: 4\n`, running: true });
+  const host = { ...pve65, slots: [1, 2, 3].map((n) => ({ tier: "cumulus", vmName: `c${n}` })) };
+  const young = run(host, { memMb: 64000, swaps: [], ksmMb: 100, vms: [vm(1), vm(2), vm(3)] }, { room: true });
+  // ksmtuned.conf was just written by the fake, so its config changed "0m ago".
+  assert.match(young, /KSM started 0m ago and is still merging \(saving 100 MB so far\) - run this again in 5 minutes\./);
+  assert.doesNotMatch(run(host, { memMb: 64000, swaps: [], ksmMb: 4000, vms: [vm(1), vm(2), vm(3)] }, { room: true }), /run this again/);
 });
 
 test("ksmtuned stopped is a TODO even with the right coefficient", () => {
