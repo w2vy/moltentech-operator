@@ -950,30 +950,36 @@ and counted in the RAM arithmetic. A host whose VMs leave Proxmox 2 GB or more g
 changes nothing; re-run it after each step.
 
 **Room for one more node** — `--room` asks whether the host could take another slot, and how
-big:
+big; `--room <tier>` plans one of that tier:
 
 ```sh
 fh-toolkit host-check pve1 --room | ssh root@pve1 bash
+fh-toolkit host-check pve1 --room nimbus | ssh root@pve1 bash
 ```
+
+`--room nimbus` gives RAM, disk and CPU for that one node; for whatever is short it lists the
+fix with its size — a non-node VM (a gateway) above 2 GB shrunk to 2 GB, a larger SSD — and
+says whether that closes the gap. Then it prints the steps for the host with the node added.
 
 It tries stratus, nimbus and cumulus, largest first, against three things: spare RAM (`ok` at
 the full size, `tight` at the smallest size with the steps above, or `short`), free space in
 the VM storage (slots in the inventory with no VM yet are taken off first; each storage the
-slots use is tried), and CPU threads not taken by nodes (plus 16 physical cores for a
-stratus). Each tier gets a `YES` or `NO` line with the reasons, then the largest that fits.
+slots use is tried), and CPU threads. Each tier gets a `YES` or `NO` line with the reasons, then the largest that fits.
 
 `tight` counts what KSM saves the node VMs already there — what it saves now, or about 900 MB
 per VM after the first, whichever is more — but not the new VM's own share, because its first
 boot comes before KSM merges it; so a tight answer also says to build it alone. When KSM was
 set up under an hour ago and is still saving less than that, it says to run `--room` again in
 5 minutes. The summary line shows how settled KSM is: its full scans, how long ksmtuned has
-run, and when its config last changed.
+run, and when its config last changed (on its own line under the summary).
 
 **CPU.** Both modes count node VMs at their full vCPUs (a tier's core count is a hard
 requirement) and other VMs — a gateway, say — at their busiest 30 minutes of the last month,
 from Proxmox's own history. Over the host's threads is a `WARN` that says by how much, e.g.
-`CPU: 65.7 of 64 threads (1.7 over, 2.6%)`: node cores are all busy at once only during
-benchmarks. EPS itself is not checked — FluxOS benchmarks that.
+`CPU: 65.7 of 64 threads (1.7 over, 2.6%)`. In `--room` it is the same warning on the row, never
+a `NO` — except one VM wanting more threads than the host has, which Proxmox refuses. Threads
+are threads, hyperthreads or not; EPS is not checked — FluxOS benchmarks that, and adding VMs
+one at a time shows where a host really stops.
 
 ## `sign`
 

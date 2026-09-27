@@ -297,7 +297,7 @@ test("VMs on the host against the inventory: size drift, a pending size, and run
   assert.match(out, /qm set 101 --memory 7680/);
   assert.match(out, /^WARN +VM fh-mt-65-2 \(102\): 7680 MB is pending/m);
   assert.match(out, /^NOTE +Running VMs not in the inventory, counted: opnsense \(110\) 2048 MB\.$/m);
-  assert.match(out, /= 15360 MB, other running VMs 2048 MB; leaving -1537 MB for Proxmox\. KSM is saving 1024 MB on top \(412 full scans, ksmtuned up [^)]*\)\.\n/);
+  assert.match(out, /= 15360 MB, other running VMs 2048 MB; leaving -1537 MB for Proxmox\.\nKSM is saving 1024 MB on top \(412 full scans, ksmtuned up [^)]*\)\.\n/);
   assert.doesNotMatch(out, /old-test/);
 });
 
@@ -343,7 +343,8 @@ test("--room: gateways and short threads can leave no room", () => {
     { memMb: 15871, swaps: [], threads: 8, pool: [1400, 440], vms: [{ id: 110, conf: "name: opn\nmemory: 2048\ncores: 2\n", running: true }] },
     { room: true }
   );
-  assert.match(out, /^NO +cumulus: RAM short .*CPU short \(4 threads needed, 0 not taken by nodes\)/m);
+  // CPU over is a warning with its size, never the reason for a NO; RAM is.
+  assert.match(out, /^NO +cumulus: RAM short .*CPU ok, but 14 of 8 threads \(6 over, 75%\)\./m);
   assert.match(out, /pve65: no room for another node\./);
 });
 
@@ -385,10 +386,12 @@ test("CPU: other VMs count at their busiest 30 min; over the threads is a WARN t
   assert.doesNotMatch(run(two, { memMb: 64000, swaps: [], threads: 12, vms: [gw(0.85)] }), /CPU:/);
 });
 
-test("--room: a stratus needs 16 physical cores, not just 16 free threads", () => {
-  const out = run({ ...pve65, slots: [] }, { memMb: 257000, swaps: [], threads: 32, physCores: 8, pool: [2000, 0] }, { room: true });
-  assert.match(out, /^NO +stratus: RAM ok .*CPU short \(stratus wants 16 physical cores, the host has 8\)\./m);
-  assert.match(out, /the largest that fits is one nimbus\./);
+test("--room: threads are counted, hyperthreads or not; only one VM wider than the host is a no", () => {
+  const big = run({ ...pve65, slots: [] }, { memMb: 257000, swaps: [], threads: 32, physCores: 8, pool: [2000, 0] }, { room: true });
+  assert.match(big, /^YES +stratus: RAM ok .*CPU ok \(16 of 32 threads free\)\./m);
+  const small = run({ ...pve65, slots: [] }, { memMb: 257000, swaps: [], threads: 8, pool: [2000, 0] }, { room: true });
+  assert.match(small, /^NO +stratus: .*CPU short \(16 threads for one VM, the host has 8\)\./m);
+  assert.match(small, /^YES +nimbus: .*CPU ok \(8 of 8 threads free\)\./m);
 });
 
 test("--room: pve20 — a 4th nimbus fits with KSM's credit when the gateway is 2 GB, not at 4 GB", () => {
@@ -428,6 +431,47 @@ test("--room: KSM configured minutes ago and saving little yet - says to run it 
   assert.doesNotMatch(run(host, { memMb: 64000, swaps: [], ksmMb: 4000, vms: [vm(1), vm(2), vm(3)] }, { room: true }), /run this again/);
 });
 
+test("--room nimbus on pve20: RAM short, the gateway named as the fix with its size, then the steps with 4 nimbus", () => {
+  const host: HostCheckInput = {
+    name: "pve20",
+    storageImages: "ssd",
+    vmMemoryMb: { nimbus: 32000 },
+    slots: [
+      { tier: "nimbus", vmName: "mt-186-n9" },
+      { tier: "nimbus", vmName: "n10" },
+      { tier: "nimbus", vmName: "n11" },
+    ],
+  };
+  const out = run(
+    host,
+    {
+      memMb: 128837,
+      swaps: [["/dev/dm-9", "partition", 8192, -2]],
+      threads: 32,
+      pool: [2400, 440],
+      ksmMb: 0,
+      ksmtunedActive: false,
+      vms: [
+        { id: 109, conf: "name: mt-186-n9\nmemory: 32000\ncores: 8\n", running: true },
+        { id: 120, conf: "name: OPNsense-186\nmemory: 4096\ncores: 2\n", running: true, busiest: 0.77 },
+      ],
+    },
+    { room: true, roomTier: "nimbus" }
+  );
+  assert.match(out, /^One more nimbus, at 32000 MB:$/m);
+  assert.match(out, /^NO +RAM: short by 635 MB, even at the smallest sizes, counting ~1800 MB KSM saves the others\. What would close it:/m);
+  assert.match(out, /OPNsense-186 \(120\) from 4096 to 2048 MB frees 2048 MB: +qm set 120 --memory 2048/);
+  assert.match(out, /- that is enough \(2048 MB of 635\)\./);
+  assert.match(out, /^OK +Disk: 440 of 1080 GB free\./m);
+  assert.match(out, /^WARN +CPU ok, but 32\.8 of 32 threads \(0\.8 over, 2\.5%\)\./m);
+  assert.match(out, /pve20: one more nimbus does not fit as it stands - the fixes are above\./);
+  // Then the steps for pve20 with 4 nimbus: KSM (off here) and smaller VMs.
+  assert.match(out, /With it, pve20's VMs = 128000 MB, leaving -3259 MB for Proxmox\./);
+  assert.match(out, /^TODO +2\. KSM: 4 VMs share identical pages/m);
+  assert.match(out, /^TODO +4\. VM sizes: .*Host keeps -2235 MB, plus ~2700 MB KSM saves:\n.*vmMemoryMb \{"nimbus":31744\} on pve20/m);
+  assert.doesNotMatch(out, /Room for one more node/);
+});
+
 test("ksmtuned stopped is a TODO even with the right coefficient", () => {
   const out = run(pve65, { memMb: 15871, swaps: [["/dev/zram0", "partition", 2047, 100]], ksmCoef: 50, ksmtunedActive: false });
   assert.match(out, /^TODO +2\. KSM/m);
@@ -463,5 +507,8 @@ test("the CLI: picks the host from the inventory, names the choices when it cann
   assert.match(which.stdout + which.stderr, /which host\? .*pve50, pve65/);
   assert.match(cli("pve65").stdout, /^NVM=2$/m);
   assert.match(cli("pve65", "--room").stdout, /^ROOM=1$/m);
+  const tier = cli("pve65", "--room", "nimbus").stdout;
+  assert.match(tier, /^PLAN_TIER='nimbus'$/m);
+  assert.match(tier, /^# fh-toolkit host-check for pve65/m);
   assert.match(cli("pve99").stdout + cli("pve99").stderr, /pve99 is not in/);
 });
