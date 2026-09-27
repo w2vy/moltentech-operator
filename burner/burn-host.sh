@@ -5,8 +5,9 @@
 #                [--pool <storage>] [--fill max|<pct>] [--keep]
 #
 # Burn-in for an EMPTY host, before it carries nodes: clone N burn VMs sized like the
-# slots, and at each step k = 1..N have all k VMs fill their memory, then run a CPU and
-# a disk test at the same moment, while the host is sampled. The verdict is about the
+# slots. At each step k = 1..N the new VM fills its memory while all k VMs write to
+# disk (swap I/O and node writes collide on a real host), then all k run a CPU test and
+# a disk test at the same moment. The host is sampled throughout. The verdict is about the
 # HOST surviving — free memory, swap, memory pressure, OOM kills — not about the
 # scores, which are reported only as a drop from the 1-VM step.
 #
@@ -63,7 +64,13 @@ fi
 psi() { awk -v k="$2" '$1==k{split($2,a,"="); print a[2]}' "/proc/pressure/$1"; }
 sample() {
   echo "t,step,phase,mem_avail_mb,psi_mem_full10,psi_io_full10,psi_cpu_some10,ksm_sharing_mb,swap_used_mb,pswpin,pswpout,load1,zram_mb" > "$R/host.csv"
+  local last=0 nap=5 now
   while :; do
+    now=$(date +%s)
+    # A 1-s sample that arrives >5 s late means the HOST froze (seen on pve25: 9–12 s
+    # with a nimbus at full fill while its disk was busy) — nodes would stall with it.
+    [ "$nap" = 1 ] && [ "$last" -gt 0 ] && [ $((now - last)) -gt 6 ] && fail "host stalled $((now - last)) s"
+    last=$now
     ma=$(awk '/MemAvailable/{print int($2/1024)}' /proc/meminfo)
     pm=$(psi memory full); pi=$(psi io full); pc=$(psi cpu some)
     ks=$(( $(cat /sys/kernel/mm/ksm/pages_sharing) * 4 / 1024 ))
@@ -72,9 +79,10 @@ sample() {
     zr=$(awk '{printf "%d", $1/1048576}' /sys/block/zram0/mm_stat 2>/dev/null || echo 0)
     ph=$(cat "$R/.phase" 2>/dev/null)
     echo "$(date +%s),$(cat "$R/.step" 2>/dev/null),$ph,$ma,$pm,$pi,$pc,$ks,$su,$si,$so,$(cut -d' ' -f1 /proc/loadavg),$zr" >> "$R/host.csv"
-    { [ "$ma" -lt 200 ] && [ "$sf" -lt 512 ]; } && echo "MemAvailable $ma MB with $sf MB swap free" > "$R/.abort"
-    awk -v p="$pm" 'BEGIN{exit !(p>40)}' && echo "memory pressure full $pm% (thrashing)" > "$R/.abort"
-    [ "$ph" = mem ] && sleep 1 || sleep 5
+    { [ "$ma" -lt 200 ] && [ "$sf" -lt 512 ]; } && fail "MemAvailable $ma MB with $sf MB swap free"
+    awk -v p="$pm" 'BEGIN{exit !(p>40)}' && fail "memory pressure full $pm% (thrashing)"
+    case $ph in mem|ddfill) nap=1 ;; *) nap=5 ;; esac
+    sleep $nap
   done
 }
 
@@ -91,7 +99,9 @@ trap cleanup EXIT
 trap 'exit 1' INT TERM
 
 phase() { echo "$1" > "$R/.phase"; }
-aborted() { [ -f "$R/.abort" ] && { log "ABORT: $(cat "$R/.abort")"; return 0; }; return 1; }
+# Every FAIL reason, the first of each kind (the sampler would repeat them every second).
+fail() { local kind=${1%% [0-9]*}; grep -qF "$kind" "$R/.abort" 2>/dev/null || echo "$1" >> "$R/.abort"; }
+aborted() { [ -f "$R/.abort" ] && { log "ABORT: $(paste -sd';' "$R/.abort" | sed 's/;/; /g')"; return 0; }; return 1; }
 KSINCE=$(date "+%Y-%m-%d %H:%M:%S")
 # Fatal: kernel OOM / hung task / I/O errors since the start; a burn VM not running,
 # or its guest agent silent.
@@ -104,7 +114,7 @@ fatal() {
     [ "$st" != running ] && { log "FATAL: VM $id is $st"; bad=1; continue; }
     timeout 15 qm guest cmd "$id" ping >/dev/null 2>&1 || { log "FATAL: VM $id guest agent silent 15 s"; bad=1; }
   done
-  [ $bad = 1 ] && { echo fatal > "$R/.abort"; log "ABORT: fatal"; }
+  [ $bad = 1 ] && fail "fatal (see FATAL lines)"
   return $bad
 }
 # `qm guest exec` answers with JSON, or with plain text such as "timeout reached,
@@ -134,15 +144,24 @@ sleep 15   # idle baseline
 for k in $(seq 1 "$N"); do
   id=$((BASE+k)); echo "$k" > "$R/.step"; phase boot
   qm clone $TMPL "$id" --name "fh-burn-$k" >/dev/null && qm set "$id" --memory "$MEM" --cores "$CORES" --tags fh-burn >/dev/null && qm start "$id" \
-    || { echo "could not start VM $id" > "$R/.abort"; aborted; break; }
+    || { fail "could not start VM $id"; aborted; break; }
   up=0; for i in $(seq 90); do qm guest cmd "$id" ping >/dev/null 2>&1 && { up=1; break; }; sleep 2; done
-  [ $up = 1 ] || { echo "VM $id guest agent never answered" > "$R/.abort"; aborted; break; }
+  [ $up = 1 ] || { fail "VM $id guest agent never answered"; aborted; break; }
   log "step $k: VM $id up after $((i*2)) s"
-  # The new VM fills its memory; the older ones still hold theirs.
+  # The new VM fills its memory (the older ones still hold theirs) while EVERY VM writes
+  # to disk: on a real host, swap I/O and the nodes' own writes collide, and that is
+  # where ddwrite dips come from. 8 GB so the writes outlast the fill and meet the swap.
   phase mem
-  qm guest exec "$id" --timeout 900 -- burn-run mem 0 "$FILL" 2>&1 | json > "$R/$k-mem-$id.json"
+  T=$(( $(date +%s) + 2 )); pids=""
+  for id2 in $(ids "$k"); do
+    ( qm guest exec "$id2" --timeout 900 -- burn-run dd "$T" 8192 2>&1 | json > "$R/$k-ddfill-$id2.json" ) &
+    pids="$pids $!"
+  done
+  qm guest exec "$id" --timeout 900 -- burn-run mem "$T" "$FILL" 2>&1 | json > "$R/$k-mem-$id.json"
   log "step $k: memory held in $(field "$R/$k-mem-$id.json" secs) s"
-  aborted && break; fatal "$k" || break
+  phase ddfill; wait $pids
+  for id2 in $(ids "$k"); do log "step $k: VM $id2 dd during fill=$(field "$R/$k-ddfill-$id2.json" rate)"; done
+  fatal "$k"; aborted && break
   sleep 10; phase settle; sleep 20
   fatal "$k" || break
   run_all "$k" eps 30 180; aborted && break
@@ -158,7 +177,7 @@ phase done; sleep 10
 awk -F, 'NR>1 && $2!="" {s=$2; if(!(s in mn)||$4<mn[s])mn[s]=$4; if($5>pm[s])pm[s]=$5; if($6>pi[s])pi[s]=$6; if($9>sw[s])sw[s]=$9; if($13>zr[s])zr[s]=$13; if(!(s in so0))so0[s]=$11; so1[s]=$11; if($8>ks[s])ks[s]=$8}
   END{for(s in mn) printf "step %s: min MemAvailable %d MB | swap peak %d MB, swapped out %d MB | zram %d MB | KSM %d MB | peak mem-full %.2f%%, io-full %.2f%%\n", s, mn[s], sw[s], (so1[s]-so0[s])*4/1024, zr[s], ks[s], pm[s], pi[s]}' "$R/host.csv" | sort | tee -a "$R/log"
 read -r lo pk out < <(awk -F, 'NR>1 && $2!="" && $2!="0" {if(!m||$4<m)m=$4; if($5>p)p=$5; if(!s0)s0=$11; s1=$11} END{printf "%d %.2f %d\n", m, p, (s1-s0)*4/1024}' "$R/host.csv")
-if [ -f "$R/.abort" ]; then v="FAIL — $(cat "$R/.abort")"
+if [ -f "$R/.abort" ]; then v="FAIL — $(paste -sd';' "$R/.abort" | sed 's/;/; /g')"
 elif [ "$lo" -lt 1024 ] || [ "$out" -gt 0 ] || awk -v p="$pk" 'BEGIN{exit !(p>5)}'; then
   v="WARN — lowest MemAvailable $lo MB, swapped out $out MB, memory pressure full $pk%"
 else v="OK — lowest MemAvailable $lo MB, no swapping"; fi
