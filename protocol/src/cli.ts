@@ -103,6 +103,7 @@ import {
   tokenSetupCommands,
 } from "./proxmox-token";
 import { planVmMemory, vmMemoryAdvice } from "./vm-memory";
+import { hostCheckScript } from "./host-check";
 import { describeVm, nodeOf, parseKeepList, retireAdoptedMarks } from "./existing-nodes";
 import { fetchFluxNodeStatus, type FluxNodeStatus } from "./flux-node-status";
 import { ExistingVm, VmMemoryMb } from "./messages";
@@ -3283,6 +3284,22 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
       console.log(`OK — manifest + owner signature valid (owner ${parsed.data.ownerAddress})`);
       return 0;
     }
+    // The small-RAM recipe, checked on one host. The API cannot see zram, swap placement or
+    // ksmtuned, so this prints a read-only script for the host itself — straight to stdout,
+    // nothing else on it, because the documented use is a pipe into `ssh root@<host> bash`.
+    case "host-check": {
+      rejectUnknownFlags("host-check", args, ["--dir"]);
+      const od = readOperatorDir("host-check", dirFlag(args));
+      const names = od.currentHosts.map((h) => h.name);
+      const positional = args.filter((a, i) => !a.startsWith("--") && args[i - 1] !== "--dir");
+      if (names.length === 0) die(`no hosts in ${od.inventoryLabel} — run \`fh-toolkit inventory\` first.`);
+      const name = positional[0] ?? (names.length === 1 ? names[0] : undefined);
+      if (name === undefined) die(`which host? fh-toolkit host-check <host> — one of: ${names.join(", ")}`);
+      const host = od.currentHosts.find((h) => h.name === name);
+      if (!host) die(`${name} is not in ${od.inventoryLabel} — one of: ${names.join(", ")}`);
+      process.stdout.write(hostCheckScript(host, pkgVersion()));
+      return 0;
+    }
     // Which build am I? The image refreshes on a stamp file, so "the fix is merged"
     // and "the fix is what just ran" are different claims. This is how to tell them apart
     // without diffing help text against the repo.
@@ -3351,7 +3368,7 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
     case "-h":
     default:
       console.log(
-        "usage: fh-toolkit <keygen|coalition-keygen|init|slug|proxmox|stripe|inventory|level|doctor|sign|env|verify|wrapper|version> [options]\n"
+        "usage: fh-toolkit <keygen|coalition-keygen|init|slug|proxmox|stripe|inventory|level|doctor|host-check|sign|env|verify|wrapper|version> [options]\n"
       );
       console.log("  keygen           [--out <dir>]");
       console.log("  coalition-keygen [--out <dir>]   Phase D signing key (operator-held custody)");
@@ -3370,6 +3387,8 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
       console.log("            --set <supporter|operator> [--price <tier>=<usd>] [--stripe-key <k>] [--flux-address <t1…>]");
       console.log("            [--stripe-webhook <k>] [--dry-run] [--yes]");
       console.log("  doctor    [--dir <dir>] [--check-proxmox] [--check-stripe] [--check-hub]");
+      console.log("  host-check [<host>] [--dir <dir>]            small-RAM host (16/32 GB)? prints a read-only check");
+      console.log("            to run ON the host: fh-toolkit host-check pve1 | ssh root@pve1 bash");
       console.log("  sign      [--dir <dir>] [--key <pem>] [--from-config <config.env>|--in <body.json>]");
       console.log("            [--out <manifest.json>] [--stdout]   defaults to what `init` wrote");
       console.log("  env       [--dir <dir>] [--from-config <config.env>] [--secrets <secrets.env>]");

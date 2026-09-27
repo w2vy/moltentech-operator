@@ -318,6 +318,13 @@ Skip this if the host has RAM to spare. It is for a host whose RAM is about what
 need — two Cumulus on 16 GB, or one Nimbus on 32 GB. Proxmox itself uses about 1.5 GB, and a
 host that swaps fails the FluxOS disk-write benchmark (`ddwrite` under the floor).
 
+**Check a host first** — once `data/inventory.json` names it, `fh-toolkit host-check` prints a
+read-only script that runs on the host and lists only the steps below that it is missing, with
+their commands:
+```sh
+fh-toolkit host-check pve1 | ssh root@pve1 bash
+```
+
 1. **Smaller VMs** — `vmMemoryMb` on the inventory host (Step 5); `fh-toolkit init` offers it.
 2. **KSM, more eager** (two or more VMs). Flux VMs share many identical pages; KSM merged
    1–3 GB on a 16 GB host with two Cumulus. It does nothing for a host with ONE VM.
@@ -330,10 +337,26 @@ host that swaps fails the FluxOS disk-write benchmark (`ddwrite` under the floor
    ```bash
    apt install zram-tools
    printf 'ALGO=zstd\nSIZE=2048\nPRIORITY=100\n' > /etc/default/zramswap
-   systemctl restart zramswap
+   systemctl stop zramswap; echo 1 > /sys/block/zram0/reset; systemctl start zramswap
+   swapon --show
    ```
-4. **Swap on the SSD — required for ONE VM on a host its size** (e.g. one Nimbus on 32 GB).
-   The first boot downloads the chain and briefly uses nearly all of the VM's RAM; on a
+   `apt` starts zram at its defaults before the file is written, and a plain `restart` cannot
+   resize a device in use — hence the reset.
+4. **At least 4 GB of disk swap, off the VM disk — required for ONE VM on a host its size**
+   (e.g. one Nimbus on 32 GB); recommended with two or more. Best is a disk of its own — a
+   spare SSD, or an NVMe drive on a PCIe M.2 card (it need not boot) — so host swapping never
+   competes with a benchmark. Check the device name first: `mkswap` erases it.
+   ```bash
+   lsblk -d -o NAME,TRAN,SIZE,MODEL
+   mkswap -L fhswap /dev/<disk>
+   echo 'LABEL=fhswap none swap sw,pri=10 0 0' >> /etc/fstab
+   swapon -a && swapon --show
+   ```
+   A separate boot disk with the installer's swap on it also counts. The Proxmox installer puts
+   swap on the boot disk — on a one-disk box, that is the VM disk.
+
+   **Fallback: a thin volume in the VM pool.**
+   It works, but swapping at a boot peak drags `ddwrite`. The first boot downloads the chain and briefly uses nearly all of the VM's RAM; on a
    32 GB host with only zram the host killed the VM 6 minutes in. With 4 GB of SSD swap it
    came through (low point 58 MB free, then the guest gave back ~20 GB). A thin volume in
    the VM pool works — keep the pool's volumes within its size (a 440 GB node disk + 4 GB

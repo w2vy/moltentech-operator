@@ -920,6 +920,30 @@ until a customer's checkout fails.
 
 ---
 
+## `host-check`
+
+For a host whose RAM is about what its nodes need (two Cumulus on 16 GB, one Nimbus on
+32 GB). The Proxmox API cannot show zram, which disk swap is on, or ksmtuned's setting, so
+`host-check` prints a **read-only** bash script, filled in with that host's planned VMs
+from the inventory, to run on the host itself:
+
+```sh
+fh-toolkit host-check pve1 | ssh root@pve1 bash
+```
+
+With one host in the inventory the name can be left off. The script prints one line per
+step — `OK`, `TODO` (with the commands), `WARN` or `SKIP` — in the order of
+[operator-onboarding.md Step 0.6](operator-onboarding.md#06-small-ram-hosts-16-gb--32-gb-desktops):
+
+1. zram, 2 GB, priority above any disk swap
+2. KSM held on (`KSM_THRES_COEF=50`) — two or more VMs only
+3. at least 4 GB of swap on a disk the VMs do not use (`WARN` when it is on the VM disk;
+   required for one VM)
+4. smaller VMs (`vmMemoryMb`) — last, because it spends the RAM check's margin
+
+A host whose VMs leave Proxmox 2 GB or more gets `OK RAM fits` and nothing else. It changes
+nothing; re-run it after each step.
+
 ## `sign`
 
 ```
