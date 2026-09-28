@@ -384,6 +384,44 @@ its own.
    because it spends the RAM check's margin. If even the smallest sizes leave the host under
    ~200 MB, it has too many VMs for its RAM: take a slot off it, or add RAM.
 
+### 0.7 Burn in a new host before it carries nodes
+
+`host-check` does the arithmetic. `fh-toolkit burn` puts the load on: it runs throwaway VMs
+the size of the host's planned nodes, fills their memory and writes to disk, and watches
+the host. Use it on a **new or empty** host after 0.6, before its nodes are built — it
+refuses a host where any of its node VMs already exists. Like `host-check` it needs the host
+in `data/inventory.json` (Step 5), so it fits between Step 5 and Step 6:
+```sh
+fh-toolkit burn pve1 | ssh root@pve1 bash       # one burn VM per planned node
+fh-toolkit burn pve1 --plan nimbus:1 | ssh root@pve1 bash   # or say what to burn
+```
+It takes about 3 minutes per VM, never asks anything, and removes its VMs at the end
+(also on Ctrl-C or a dropped ssh session). The last lines are the verdict:
+```
+════ fh-burner verdict for pve1 ════
+  all of each VM's memory: FAIL — fatal (see FATAL lines)
+  90% of each VM's memory: WARN — lowest MemAvailable 673 MB, swapped out 0 MB, memory pressure full 0.90%
+```
+
+| Verdict at *all of each VM's memory* | What to do |
+|---|---|
+| `OK` | Build the nodes. |
+| `WARN` | The host holds, at its edge: it swapped, or ran under 1 GB free. Build the nodes, and do any of 0.6 still missing — `host-check` lists them. Expect the odd `ddwrite` dip at a node's first boot. |
+| `FAIL` | Do not build yet. The host ran out of memory, stalled or thrashed (the `FATAL` lines above the verdict say which). Do the 0.6 steps it is missing — for ONE VM on a host its size, the disk swap (step 3) is what turns an OOM kill into a WARN — and burn again. |
+
+When the full fill FAILs, a second line shows the same ramp at 90% of each VM's memory:
+how far past the edge the host is. A FAIL at 90% too, with 0.6 done, means the host has
+too many VMs for its RAM: take a slot off it, or add RAM. Shrinking the VMs is no way out
+at the edge: 31744 MB (Nimbus) and 7424 MB (Cumulus) are the smallest sizes measured to pass
+FluxOS's RAM check (see `vmMemoryMb` in Step 5).
+
+Measured on a 32 GB desktop with one Nimbus at 31744 MB: without zram, KSM or swap, the
+full fill was OOM-killed (FAIL); with all three, WARN (75 MB free, 3 GB swapped). Burn VMs
+fill memory with random data, so KSM merges nothing: real nodes give a little back, and a
+host sits slightly further from the edge than burn shows. The EPS and MB/s it prints are
+for comparing its steps, not Flux's benchmark numbers. All the options are in
+[`fh-toolkit.md`](fh-toolkit.md#burn).
+
 ## Step 1 — Generate your signing key + config
 
 
@@ -950,6 +988,8 @@ readable inside the agent container.
   VM keeps its size until it is rebuilt. `fh-toolkit init` offers it when it can read the
   host's RAM (0.6.3+), and says when the host also needs KSM, zram or swap — see
   [Step 0.6](#06-small-ram-hosts-16-gb--32-gb-desktops). A re-run keeps it. Agent **0.11.31** or newer.
+  A new host: burn it in before Step 6 builds its nodes —
+  [Step 0.7](#07-burn-in-a-new-host-before-it-carries-nodes).
 - ⚠️ **Repeat `network` and `storagePool` on every SLOT.** FH builds your `Slot` rows from
   the per-slot fields only, so a host-level-only value leaves every Slot row with an empty
   `storagePool`/`network` — silently, and `doctor` still passes because it checks the
