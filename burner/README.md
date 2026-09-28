@@ -50,7 +50,7 @@ tag is never replaced — and point `BURNER_VERSION` in `protocol/src/burn.ts` a
 downloaded next to each other:
 
 ```bash
-bash fh-burner-0.2.0-host.sh --image /var/lib/vz/fh-burn/fh-burner-0.2.0.qcow2 \
+bash fh-burner-0.2.1-host.sh --image /var/lib/vz/fh-burn/fh-burner-0.2.1.qcow2 \
   --plan "nimbus:31744:8:local-lvm cumulus:7424:4:ss1" [--fill max|<pct>] [--no-retry] [--keep]
 ```
 
