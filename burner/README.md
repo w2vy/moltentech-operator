@@ -12,6 +12,7 @@ The verdict is about the **host** surviving, not the scores:
 | **FAIL** | kernel OOM, hung task or I/O error; a burn VM stops or its guest agent goes silent; the host stalls (a 1-s sample > 6 s late); MemAvailable < 200 MB with < 512 MB swap free; memory pressure (full) > 40% |
 | **WARN** | MemAvailable < 1 GB, any swap-out, or memory pressure (full) > 5% |
 | **OK** | none of the above |
+| **ERROR** | a burn VM could not be created or started (storage, a leftover VM). Says nothing about the host; no 90% re-run; exit 3 |
 
 EPS and MB/s are reported as a drop from the 1-VM step. They are not Flux benchmark
 numbers: sysbench here runs at Flux's settings (`--cpu-max-prime=60000`), but on pve25
@@ -30,7 +31,7 @@ HDD swap (stalled 8–9 s, guest agent lost), and with no swap (OOM kill); 90% i
 | `build-image.sh` | CI | Debian 13 genericcloud + sysbench + qemu-guest-agent + `burn-run` → `fh-burner-<ver>.qcow2`, plus `burn-host.sh` as `fh-burner-<ver>-host.sh` |
 | `burn-run` | in each burn VM | one phase (`mem`, `eps`, `dd`, `memfree`, `version`), started at a shared time |
 | `fh-burner-grow` (+ `.service`) | in each burn VM, first boot | grows `/` to the disk (cloud-init is disabled) |
-| `burn-host.sh` | on the host, as root | builds template 9900 from the image, clones 9901+ (a full clone onto another storage), ramps, samples, verdict |
+| `burn-host.sh` | on the host, as root | builds template 9900 from the image, full-clones 9901+ onto each entry's storage, ramps, samples, verdict |
 | `VERSION` | — | release tag `fh-burner-v<VERSION>` |
 
 Burn VMs have **no network**: the host drives them through the qemu-guest-agent socket.
@@ -50,7 +51,7 @@ tag is never replaced — and point `BURNER_VERSION` in `protocol/src/burn.ts` a
 downloaded next to each other:
 
 ```bash
-bash fh-burner-0.2.1-host.sh --image /var/lib/vz/fh-burn/fh-burner-0.2.1.qcow2 \
+bash fh-burner-0.2.2-host.sh --image /var/lib/vz/fh-burn/fh-burner-0.2.2.qcow2 \
   --plan "nimbus:31744:8:local-lvm cumulus:7424:4:ss1" [--fill max|<pct>] [--no-retry] [--keep]
 ```
 
