@@ -172,10 +172,10 @@ ramp() {
   for k in $(seq 1 "$N"); do
     id=$((BASE+k)); echo "$k" > "$R/.step"; phase boot
     local pool; pool=$(spec "$k" 3)
-    local clone=(qm clone $TMPL "$id" --name "fh-burn-$k")
-    [ "$pool" != "$TPOOL" ] && clone+=(--full 1 --storage "$pool")
-    "${clone[@]}" >/dev/null && qm set "$id" --memory "$(spec "$k" 1)" --cores "$(spec "$k" 2)" --tags fh-burn >/dev/null && qm start "$id" >/dev/null \
-      || { fail "could not start VM $id ($(spec "$k" 0) on $pool)"; aborted; break; }
+    # A full clone: plain LVM cannot make linked ones, and a real node has its own disk.
+    qm clone $TMPL "$id" --name "fh-burn-$k" --full 1 --storage "$pool" >/dev/null \
+      && qm set "$id" --memory "$(spec "$k" 1)" --cores "$(spec "$k" 2)" --tags fh-burn >/dev/null && qm start "$id" >/dev/null \
+      || { fail "could not start VM $id ($(spec "$k" 0) on $pool)"; touch "$R/.setup"; aborted; break; }
     up=0; for i in $(seq 90); do qm guest cmd "$id" ping >/dev/null 2>&1 && { up=1; break; }; sleep 2; done
     [ $up = 1 ] || { fail "VM $id guest agent never answered"; aborted; break; }
     log "step $k: VM $id ($(spec "$k" 0), $(spec "$k" 1) MB, $(spec "$k" 2) cores, $pool) up after $((i*2)) s"
@@ -207,7 +207,8 @@ ramp() {
   awk -F, 'NR>1 && $2!="" {s=$2; if(!(s in mn)||$4<mn[s])mn[s]=$4; if($5>pm[s])pm[s]=$5; if($6>pi[s])pi[s]=$6; if($9>sw[s])sw[s]=$9; if($13>zr[s])zr[s]=$13; if(!(s in so0))so0[s]=$11; so1[s]=$11; if($8>ks[s])ks[s]=$8}
     END{for(s in mn) printf "step %s: min MemAvailable %d MB | swap peak %d MB, swapped out %d MB | zram %d MB | KSM %d MB | peak mem-full %.2f%%, io-full %.2f%%\n", s, mn[s], sw[s], (so1[s]-so0[s])*4/1024, zr[s], ks[s], pm[s], pi[s]}' "$R/host.csv" | sort | tee -a "$R/log"
   read -r lo pk out < <(awk -F, 'NR>1 && $2!="" && $2!="0" {if(!m||$4<m)m=$4; if($5>p)p=$5; if(!s0)s0=$11; s1=$11} END{printf "%d %.2f %d\n", m, p, (s1-s0)*4/1024}' "$R/host.csv")
-  if [ -f "$R/.abort" ]; then v="FAIL|$(reasons)"
+  if [ -f "$R/.setup" ]; then v="ERROR|$(reasons) — the burn could not run; this says nothing about the host"
+  elif [ -f "$R/.abort" ]; then v="FAIL|$(reasons)"
   elif [ "$lo" -lt 1024 ] || [ "$out" -gt 0 ] || awk -v p="$pk" 'BEGIN{exit !(p>5)}'; then
     v="WARN|lowest MemAvailable $lo MB, swapped out $out MB, memory pressure full $pk%"
   else v="OK|lowest MemAvailable $lo MB, no swapping"; fi
@@ -232,3 +233,4 @@ for v in "${VERDICTS[@]}"; do
   log "  $f: ${rest%%|*} — ${rest#*|}"
 done
 log "  results: $RUN"
+if [[ ${VERDICTS[0]} == *\|ERROR\|* ]]; then exit 3; fi

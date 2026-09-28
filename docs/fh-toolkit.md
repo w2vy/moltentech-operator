@@ -1009,6 +1009,7 @@ The verdict is about the **host**, not benchmark scores:
 | `FAIL` | out of memory (kernel OOM kill), hung task or I/O error; a burn VM stops or its guest agent goes silent; the host stalls (a 1-second sample more than 6 s late); under 200 MB free with under 512 MB of swap free; memory pressure over 40% (thrashing) |
 | `WARN` | under 1 GB free, any swap-out, or memory pressure over 5% |
 | `OK` | none of those |
+| `ERROR` | a burn VM could not be created or started. Nothing is known about the host; there is no 90% re-run, and it exits 3 |
 
 By default each burn VM uses **all** its memory, which is where a node's page cache ends
 up. When that FAILs, the same ramp runs again at 90%, so the report says how far past the
