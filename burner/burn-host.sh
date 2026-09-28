@@ -189,9 +189,9 @@ ramp() {
       pids="$pids $!"
     done
     qm guest exec "$id" --timeout 900 -- burn-run mem "$T" "$fill" 2>&1 | json > "$R/$k-mem-$id.json"
-    log "step $k: memory held in $(field "$R/$k-mem-$id.json" secs) s"
+    v=$(field "$R/$k-mem-$id.json" secs); log "step $k: memory held in ${v:+$v s}${v:-— no answer (VM gone?)}"
     phase ddfill; wait $pids
-    for id2 in $(ids "$k"); do log "step $k: VM $id2 dd during fill=$(field "$R/$k-ddfill-$id2.json" rate)"; done
+    for id2 in $(ids "$k"); do v=$(field "$R/$k-ddfill-$id2.json" rate); log "step $k: VM $id2 dd during fill=${v:-— no answer (VM gone?)}"; done
     fatal "$k"; aborted && break
     sleep 10; phase settle; sleep 20
     fatal "$k"; aborted && break
