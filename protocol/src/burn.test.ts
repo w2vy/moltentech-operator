@@ -27,6 +27,8 @@ interface Fake {
   /** Files already downloaded into the burn dir. */
   cached?: boolean;
   hostname?: string;
+  /** Template 9900 exists with this tags line (burn's own is `fh-burn`). */
+  template?: string;
 }
 
 function run(host: HostCheckInput, fake: Fake = {}, opts: BurnOptions = {}) {
@@ -39,7 +41,7 @@ function run(host: HostCheckInput, fake: Fake = {}, opts: BurnOptions = {}) {
   const sha = (text: string) => createHash("sha256").update(text).digest("hex");
   const release = {
     [IMG]: "qcow2 bytes\n",
-    [CTL]: `#!/bin/bash\necho "CONTROLLER $*" > "$FH_BURN_DIR/controller-args"\necho controller ran\n`,
+    [CTL]: `#!/bin/bash\necho "CONTROLLER $*" > "$FH_BURN_DIR/../controller-args"\necho controller ran\n`,
   };
   for (const [name, body] of Object.entries(release)) {
     put(`release/${name}`, fake.badChecksum && name === IMG ? "tampered\n" : body);
@@ -50,7 +52,13 @@ function run(host: HostCheckInput, fake: Fake = {}, opts: BurnOptions = {}) {
     }
   }
   const rows = (fake.vms ?? []).map(([id, name, st]) => `${String(id).padStart(10)} ${name.padEnd(20)} ${st.padEnd(10)} 2048  32.00 0`);
-  put("bin/qm", `#!/bin/bash\n[ "$1" = list ] && printf '%s\\n' "      VMID NAME                 STATUS     MEM(MB)    BOOTDISK(GB) PID" ${rows.map((r) => `'${r}'`).join(" ")}\n`, 0o755);
+  put(
+    "bin/qm",
+    `#!/bin/bash\n[ "$1" = list ] && printf '%s\\n' "      VMID NAME                 STATUS     MEM(MB)    BOOTDISK(GB) PID" ${rows.map((r) => `'${r}'`).join(" ")}\n` +
+      (fake.template !== undefined ? `[ "$1 $2" = "config 9900" ] && echo 'tags: ${fake.template}'\n` : "") +
+      `[ "$1" = destroy ] && echo "$*" >> "$FH_BURN_DIR/../qm.log"\nexit 0\n`,
+    0o755
+  );
   put(
     "bin/wget",
     `#!/bin/bash\necho "$*" >> "$FH_BURN_DIR/../wget.log"\n${fake.unreleased ? "exit 8" : 'out=$3; cp "$FAKE_RELEASE/$(basename "$4")" "$out"'}\n`,
@@ -63,12 +71,15 @@ function run(host: HostCheckInput, fake: Fake = {}, opts: BurnOptions = {}) {
     env: { ...process.env, PATH: `${join(root, "bin")}:${process.env.PATH}`, FH_BURN_DIR: join(root, "burn"), FAKE_RELEASE: join(root, "release") },
     encoding: "utf8",
   });
-  const args = join(root, "burn", "controller-args");
+  const args = join(root, "controller-args");
+  const qmLog = join(root, "qm.log");
   return {
     out: r.stdout + r.stderr,
     status: r.status,
     controller: existsSync(args) ? readFileSync(args, "utf8").trim() : undefined,
     wget: existsSync(join(root, "wget.log")) ? readFileSync(join(root, "wget.log"), "utf8") : "",
+    destroyed: existsSync(qmLog) ? readFileSync(qmLog, "utf8").trim() : "",
+    burnDirLeft: existsSync(join(root, "burn")),
   };
 }
 
@@ -161,6 +172,23 @@ test("options reach the controller; no slots and no --plan says what to do; anot
 
   const other = run(pve25, { hostname: "pve26" });
   assert.match(other.out, /this plan is for pve25, and this host calls itself pve26/);
+});
+
+test("at the end the template and the download go too; --keep leaves them; a foreign 9900 is never touched", () => {
+  const r = run(pve25, { template: "fh-burn" });
+  assert.equal(r.status, 0, r.out);
+  assert.equal(r.destroyed, "destroy 9900 --purge 1");
+  assert.equal(r.burnDirLeft, false);
+  assert.match(r.out, /burn: removed template 9900 and the fh-burner download$/m);
+
+  const kept = run(pve25, { template: "fh-burn" }, { keep: true });
+  assert.equal(kept.destroyed, "");
+  assert.equal(kept.burnDirLeft, true);
+  assert.match(kept.out, /--keep: template 9900 and .* left in place/);
+
+  const foreign = run(pve25, { template: "customer" });
+  assert.equal(foreign.status, 0, foreign.out);
+  assert.equal(foreign.destroyed, "");
 });
 
 test("burn-host.sh (the released controller) rejects a malformed plan before touching the host", () => {
