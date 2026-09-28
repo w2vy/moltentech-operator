@@ -398,16 +398,20 @@ fh-toolkit burn pve1 --plan nimbus:1 | ssh root@pve1 bash   # or say what to bur
 It takes about 3 minutes per VM, never asks anything, and removes its VMs at the end
 (also on Ctrl-C or a dropped ssh session). The last lines are the verdict:
 ```
-════ fh-burner verdict for pve1 ════
-  all of each VM's memory: FAIL — fatal (see FATAL lines)
-  90% of each VM's memory: WARN — lowest MemAvailable 673 MB, swapped out 0 MB, memory pressure full 0.90%
+════ fh-burner verdict for pve1: FAIL ════
+  memory, all of each VM's: FAIL — fatal (see FATAL lines)
+  memory, 90% of each VM's: tight — lowest free 673 MB, under 1 GB
+  cpu: lowest 690 EPS per VM with 1 running (floor 640) — OK
+  disk: lowest 300 MB/s per VM with 1 running (floor 180) — OK
+  do: do not build yet. Do the Step 0.6 memory fixes still missing (host-check lists them) and burn again
 ```
 
-| Verdict at *all of each VM's memory* | What to do |
+| Verdict | What to do |
 |---|---|
-| `OK` | Build the nodes. |
-| `WARN` | The host holds, at its edge: it swapped, or ran under 1 GB free. Build the nodes, and do any of 0.6 still missing — `host-check` lists them. Expect the odd `ddwrite` dip at a node's first boot. |
-| `FAIL` | Do not build yet. The host ran out of memory, stalled or thrashed (the `FATAL` lines above the verdict say which). Do the 0.6 steps it is missing — for ONE VM on a host its size, the disk swap (step 3) is what turns an OOM kill into a WARN — and burn again. |
+| `PASS` | Build the nodes. |
+| `PASS WITH CONDITIONS` | The host holds, at its edge: it swapped, ran under 1 GB free, or a score fell under its floor with every VM at once. Build the nodes and keep to the `condition:` lines; do any of 0.6 still missing — `host-check` lists them. Expect the odd `ddwrite` dip at a node's first boot. |
+| `FAIL` | Do not build yet. The host ran out of memory, stalled or thrashed (the `FATAL` lines above the verdict say which). Do the 0.6 steps it is missing — for ONE VM on a host its size, the disk swap (step 3) is what turns an OOM kill into a pass — and burn again. |
+| `NO VERDICT` | The burn could not run (a VM could not be created or started); the `why:` line says what. Fix it and burn again. |
 
 When the full fill FAILs, a second line shows the same ramp at 90% of each VM's memory:
 how far past the edge the host is. A FAIL at 90% too, with 0.6 done, means the host has

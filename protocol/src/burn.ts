@@ -26,7 +26,7 @@ import { TIER_VM_SIZES } from "./proxmox-probe";
 import { TIER_DEFAULT_MB } from "./vm-memory";
 
 /** The fh-burner release this toolkit runs (burner/VERSION when it was cut). */
-export const BURNER_VERSION = "0.2.2";
+export const BURNER_VERSION = "0.2.3";
 export const BURNER_RELEASES = "https://github.com/w2vy/moltentech-operator/releases/download";
 
 export interface BurnVm {
