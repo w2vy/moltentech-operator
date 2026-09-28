@@ -14,6 +14,11 @@ The verdict is about the **host** surviving, not the scores:
 | **OK** | none of the above |
 | **ERROR** | a burn VM could not be created or started (storage, a leftover VM). Says nothing about the host; no 90% re-run; exit 3 |
 
+The last block of the output is the bottom line, **PASS** / **PASS WITH CONDITIONS** / **FAIL** /
+**NO VERDICT**, with one plain line per finding and each condition spelled out
+([docs](../docs/fh-toolkit.md#burn)). `burn-host.sh --summarize <run dir>` reprints it from a
+run's saved files (`verdicts`, `n`, `fill-*/stats`, `fill-*/perf`).
+
 EPS and MB/s are reported as a drop from the 1-VM step. They are not Flux benchmark
 numbers: sysbench here runs at Flux's settings (`--cpu-max-prime=60000`), but on pve25
 it read ~15% under what the Flux benchmark reported for a real nimbus on that same
@@ -52,7 +57,7 @@ tag is never replaced — and point `BURNER_VERSION` in `protocol/src/burn.ts` a
 downloaded next to each other:
 
 ```bash
-bash fh-burner-0.2.2-host.sh --image /var/lib/vz/fh-burn/fh-burner-0.2.2.qcow2 \
+bash fh-burner-0.2.3-host.sh --image /var/lib/vz/fh-burn/fh-burner-0.2.3.qcow2 \
   --plan "nimbus:31744:8:local-lvm cumulus:7424:4:ss1" [--fill max|<pct>] [--no-retry] [--keep]
 ```
 

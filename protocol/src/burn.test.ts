@@ -202,3 +202,68 @@ test("burn-host.sh (the released controller) rejects a malformed plan before tou
   assert.equal(noPlan.status, 2);
   assert.match(noPlan.stderr, /usage: burn-host\.sh/);
 });
+
+/** A finished run's saved files, as burn-host.sh writes them, for `--summarize`. */
+function savedRun(ramps: { fill: string; status: string; stats?: string; perf?: string; abort?: string }[], n = 2) {
+  const run = tmpDir("fh-burn-run-");
+  writeFileSync(join(run, "n"), `${n}\n`);
+  writeFileSync(join(run, "verdicts"), ramps.map((r) => `${r.fill}|${r.status}|detail`).join("\n") + "\n");
+  for (const r of ramps) {
+    const d = join(run, `fill-${r.fill}`);
+    mkdirSync(d, { recursive: true });
+    if (r.stats) writeFileSync(join(d, "stats"), `${r.stats}\n`);
+    if (r.perf) writeFileSync(join(d, "perf"), r.perf);
+    if (r.abort) writeFileSync(join(d, ".abort"), `${r.abort}\n`);
+  }
+  const ctl = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "burner", "burn-host.sh");
+  const r = spawnSync("bash", [ctl, "--summarize", run], { encoding: "utf8" });
+  return { out: r.stdout + r.stderr, status: r.status };
+}
+
+test("bottom line: PASS when every rule is OK and every score clears its floor", () => {
+  const r = savedRun([{ fill: "max", status: "OK", stats: "9000 0.00 0", perf: "1 cumulus 350 400 380\n" }], 1);
+  assert.equal(r.status, 0, r.out);
+  assert.match(r.out, /verdict for .*: PASS ════/);
+  assert.match(r.out, /cpu: lowest 350 EPS per VM with 1 running \(floor 240\) — OK/);
+  assert.doesNotMatch(r.out, /condition:|do:/);
+});
+
+test("bottom line: a WARN is PASS WITH CONDITIONS, each finding in words (pve65, 09-28)", () => {
+  const r = savedRun([
+    { fill: "max", status: "WARN", stats: "176 5.61 1332", perf: "1 cumulus 331.11 374 258\n2 cumulus 272.75 178 38\n2 cumulus 272.01 297 35\n" },
+  ]);
+  assert.match(r.out, /verdict for .*: PASS WITH CONDITIONS ════/);
+  assert.match(r.out, /tight — lowest free 176 MB, under the 200 MB line \(free swap kept it from failing\); 1332 MB swapped out; memory pressure 5\.61%/);
+  assert.match(r.out, /disk: lowest 178 MB\/s per VM with 2 running \(floor 180\) — under the floor; writes fell to 35 MB\/s while memory filled/);
+  assert.match(r.out, /condition: keep zram \+ KSM on; 2 VM\(s\) is this host's limit — do not add another/);
+  assert.match(r.out, /condition: .*Flux benchmarks one node at a time/);
+});
+
+test("bottom line: an all-memory FAIL is FAIL even when 90% passes; FAIL at 90% too says take a slot off", () => {
+  const edge = savedRun([
+    { fill: "max", status: "FAIL", abort: "memory pressure full 40.2% (thrashing)" },
+    { fill: "90", status: "WARN", stats: "5957 3.10 120", perf: "4 nimbus 650 200 190\n" },
+  ]);
+  assert.match(edge.out, /verdict for .*: FAIL ════/);
+  assert.match(edge.out, /memory, all of each VM's: FAIL — memory pressure full 40\.2% \(thrashing\)/);
+  assert.match(edge.out, /memory, 90% of each VM's: OK — lowest free 5957 MB; 120 MB swapped out/);
+  assert.match(edge.out, /do: do not build yet/);
+  assert.doesNotMatch(edge.out, /take a slot off/);
+
+  const both = savedRun([
+    { fill: "max", status: "FAIL", abort: "host stalled 12 s" },
+    { fill: "90", status: "FAIL", abort: "MemAvailable 150 MB with 200 MB swap free" },
+  ]);
+  assert.match(both.out, /FAILs at 90% too — .*take a slot off, or add RAM/);
+});
+
+test("bottom line: a burn that could not run is NO VERDICT; a run without saved verdicts is refused", () => {
+  const r = savedRun([{ fill: "max", status: "ERROR", abort: "could not start VM 9901 (cumulus on ss8)" }]);
+  assert.match(r.out, /verdict for .*: NO VERDICT ════/);
+  assert.match(r.out, /why: could not start VM 9901 \(cumulus on ss8\) — the burn could not run/);
+
+  const ctl = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "burner", "burn-host.sh");
+  const none = spawnSync("bash", [ctl, "--summarize", tmpDir("fh-burn-old-")], { encoding: "utf8" });
+  assert.equal(none.status, 2);
+  assert.match(none.stderr, /no verdicts file/);
+});

@@ -1011,6 +1011,29 @@ The verdict is about the **host**, not benchmark scores:
 | `OK` | none of those |
 | `ERROR` | a burn VM could not be created or started. Nothing is known about the host; there is no 90% re-run, and it exits 3 |
 
+The last block turns that into one word you can act on, then one plain line per finding:
+
+| Bottom line | When |
+|---|---|
+| `PASS` | every rule `OK`, and every VM at or above its tier's EPS and write floors |
+| `PASS WITH CONDITIONS` | a `WARN`, or EPS / write under the floor with every VM at once. Each condition is printed (e.g. "N VM(s) is this host's limit — do not add another") |
+| `FAIL` | all of each VM's memory `FAIL`ed, with each reason and what to do; the 90% line says how far past the edge |
+| `NO VERDICT` | `ERROR`: the burn could not run |
+
+```
+════ fh-burner verdict for pve65: PASS WITH CONDITIONS ════
+  memory, all of each VM's: tight — lowest free 176 MB, under the 200 MB line (free swap kept it from failing); 1332 MB swapped out; memory pressure 5.61%
+  cpu: lowest 272 EPS per VM with 2 running (floor 240) — OK
+  disk: lowest 178 MB/s per VM with 2 running (floor 180) — under the floor; writes fell to 35 MB/s while memory filled
+  condition: keep zram + KSM on; 2 VM(s) is this host's limit — do not add another
+  ...
+```
+
+Floors: EPS cumulus 240 / nimbus 640 / stratus 1520; write 180 / 180 / 440 MB/s. A score
+under its floor with every VM at once is a condition, never a FAIL: Flux benchmarks one
+node at a time. `burn-host.sh --summarize /var/tmp/fh-burn/<run>` reprints a run's
+bottom line.
+
 By default each burn VM uses **all** its memory, which is where a node's page cache ends
 up. When that FAILs, the same ramp runs again at 90%, so the report says how far past the
 edge the host is: e.g. on a 32 GB desktop with one Nimbus at 31744 MB, `all of each VM's

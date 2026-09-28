@@ -30,17 +30,107 @@
 # so the host is driven no further than it takes to prove one.
 set -uo pipefail
 
-TMPL=9900; BASE=9900; FILL=max; KEEP=0; RETRY=1; IMAGE=""; PLAN=""
+TMPL=9900; BASE=9900; FILL=max; KEEP=0; RETRY=1; IMAGE=""; PLAN=""; SUMMARIZE=""
 while [ $# -gt 0 ]; do
   case $1 in
     --image) IMAGE=$2; shift ;;  --plan) PLAN=$2; shift ;;  --fill) FILL=$2; shift ;;
     --keep) KEEP=1 ;;            --no-retry) RETRY=0 ;;
+    --summarize) SUMMARIZE=$2; shift ;;
     *) echo "burn-host: unknown argument $1" >&2; exit 2 ;;
   esac; shift
 done
+# ── the bottom line ────────────────────────────────────────────────────────────────
+# One word an operator can act on — PASS, PASS WITH CONDITIONS, FAIL, NO VERDICT — then one
+# plain line per finding. Built only from what a run saved in its directory, so
+# `--summarize <run dir>` reprints any past run's verdict (and the tests drive it that way).
+#   PASS                  every ramp rule OK and every VM at or above its tier's floors
+#   PASS WITH CONDITIONS  a WARN; or EPS / disk write under the floor with every VM at once
+#                         (Flux benchmarks one node at a time)
+#   FAIL                  all of each VM's memory FAILed — onboarding Step 0.7: do not build yet.
+#                         The 90% re-run only says how far past the edge the host is.
+#   NO VERDICT            the burn could not run (a VM could not be created or started)
+# Floors: EPS from Flux (tom 09-27), write MB/s from the hub's tiers.ts.
+bottom_line() {  # bottom_line <run dir>
+  local run=$1 n st1 stL f first last pick overall lo pk out w line
+  local -a vs=() conds=() lines=()
+  mapfile -t vs < "$run/verdicts"
+  n=$(cat "$run/n" 2>/dev/null || echo "?")
+  why() { paste -sd';' "$1/.abort" 2>/dev/null | sed 's/;/; /g'; }
+  st() { local r=${1#*|}; echo "${r%%|*}"; }
+  words() { [ "$1" = max ] && echo "all of each VM's" || echo "$1% of each VM's"; }
+  first=${vs[0]}; last=${vs[${#vs[@]}-1]}; st1=$(st "$first"); stL=$(st "$last")
+  if [ "$st1" = ERROR ]; then
+    echo "════ fh-burner verdict for $(hostname): NO VERDICT ════"
+    echo "  why: $(why "$run/fill-${first%%|*}") — the burn could not run; this says nothing about the host"
+    echo "  do: fix that and burn again"
+    echo "  results: $run"
+    return
+  fi
+  if [ "$st1" = OK ]; then overall=PASS
+  elif [ "$st1" = WARN ]; then overall="PASS WITH CONDITIONS"
+    conds+=("keep zram + KSM on; $n VM(s) is this host's limit — do not add another")
+  else overall=FAIL; fi
+
+  for w in "${vs[@]}"; do
+    f=${w%%|*}; case $(st "$w") in
+      FAIL)  line="FAIL — $(why "$run/fill-$f")" ;;
+      ERROR) line="could not run — $(why "$run/fill-$f")" ;;
+      *) read -r lo pk out < "$run/fill-$f/stats"
+         if [ "$lo" -lt 200 ]; then line="tight — lowest free $lo MB, under the 200 MB line (free swap kept it from failing)"
+         elif [ "$lo" -lt 1024 ]; then line="tight — lowest free $lo MB, under 1 GB"
+         else line="OK — lowest free $lo MB"; fi
+         [ "$out" -gt 0 ] && line="$line; $out MB swapped out"
+         awk -v p="$pk" 'BEGIN{exit !(p>5)}' && line="$line; memory pressure $pk%" ;;
+    esac
+    lines+=("memory, $(words "$f"): $line")
+  done
+
+  # Scores from the first ramp; after its FAIL, from the 90% re-run when that got further.
+  pick=$first; [ "$st1" = FAIL ] && [ ${#vs[@]} -gt 1 ] && pick=$last
+  if [ -s "$run/fill-${pick%%|*}/perf" ]; then
+    while IFS='|' read -r kind text; do
+      [ "$kind" = L ] && lines+=("$text") || conds+=("$text")
+    done < <(awk '
+      BEGIN { split("cumulus 240 180 nimbus 640 180 stratus 1520 440", a, " ")
+              for (i = 1; i <= 9; i += 3) { fe[a[i]] = a[i+1]; fd[a[i]] = a[i+2] } }
+      { r[NR] = $0; if ($1 > K) K = $1 }
+      END {
+        for (i = 1; i <= NR; i++) { split(r[i], f, " "); if (f[1] != K) continue
+          if (f[3] != "-" && (me == "" || f[3]+0 < me+0)) { me = f[3]; mef = fe[f[2]] }
+          if (f[4] != "-" && (md == "" || f[4]+0 < md+0)) { md = f[4]; mdf = fd[f[2]] }
+          if (f[5] != "-" && (mf == "" || f[5]+0 < mf+0)) { mf = f[5]; mff = fd[f[2]] } }
+        if (me != "") printf "L|cpu: lowest %.0f EPS per VM with %d running (floor %d) — %s\n", me, K, mef, (me+0 >= mef ? "OK" : "under the floor")
+        if (md != "") { printf "L|disk: lowest %d MB/s per VM with %d running (floor %d) — %s", md, K, mdf, (md+0 >= mdf ? "OK" : "under the floor")
+          if (mf != "" && mf+0 < mff) printf "; writes fell to %d MB/s while memory filled", mf
+          printf "\n" }
+        if ((me != "" && me+0 < mef) || (md != "" && md+0 < mdf))
+          print "C|EPS / disk write is under the floor only with every VM benchmarking at once; Flux benchmarks one node at a time — watch these nodes'"'"' first benchmarks"
+        if (mf != "" && mf+0 < mff)
+          print "C|disk writes collapse while memory fills — expect ddwrite dips whenever this host is short of memory"
+      }' "$run/fill-${pick%%|*}/perf")
+  fi
+  [ "$overall" = PASS ] && [ ${#conds[@]} -gt 0 ] && overall="PASS WITH CONDITIONS"
+
+  echo "════ fh-burner verdict for $(hostname): $overall ════"
+  for line in "${lines[@]}"; do echo "  $line"; done
+  for line in "${conds[@]}"; do echo "  condition: $line"; done
+  if [ "$overall" = FAIL ]; then
+    echo "  do: do not build yet. Do the Step 0.6 memory fixes still missing (host-check lists them) and burn again"
+    if [ ${#vs[@]} -gt 1 ] && [ "$stL" = FAIL ]; then
+      echo "      it FAILs at 90% too — with 0.6 done, this host has too many VMs for its RAM: take a slot off, or add RAM"
+    fi
+  fi
+  echo "  results: $run"
+}
+if [ -n "$SUMMARIZE" ]; then
+  [ -f "$SUMMARIZE/verdicts" ] || { echo "burn-host: $SUMMARIZE has no verdicts file (a run from fh-burner 0.2.3 or later?)" >&2; exit 2; }
+  bottom_line "$SUMMARIZE"; exit 0
+fi
+
 read -r -a SPEC <<< "$PLAN"
 N=${#SPEC[@]}
-usage="usage: burn-host.sh --image F --plan \"tier:MB:cores:pool ...\" [--fill max|pct] [--no-retry] [--keep]"
+usage="usage: burn-host.sh --image F --plan \"tier:MB:cores:pool ...\" [--fill max|pct] [--no-retry] [--keep]
+       burn-host.sh --summarize <run dir>"
 [ -f "$IMAGE" ] && [ "$N" -gt 0 ] || { echo "$usage" >&2; exit 2; }
 for s in "${SPEC[@]}"; do
   [[ $s =~ ^[a-z]+:[0-9]+:[0-9]+:[A-Za-z0-9_.-]+$ ]] || { echo "burn-host: bad plan entry '$s'" >&2; echo "$usage" >&2; exit 2; }
@@ -48,7 +138,7 @@ done
 spec() { local IFS=:; read -r -a f <<< "${SPEC[$(($1-1))]}"; echo "${f[$2]}"; }  # spec <k> <0 tier|1 MB|2 cores|3 pool>
 TPOOL=$(spec 1 3)
 
-RUN=/var/tmp/fh-burn/$(date +%Y%m%d-%H%M%S); mkdir -p "$RUN"
+RUN=/var/tmp/fh-burn/$(date +%Y%m%d-%H%M%S); mkdir -p "$RUN"; echo "$N" > "$RUN/n"
 R=$RUN   # the current ramp's directory
 ids() { seq $((BASE+1)) $((BASE+$1)); }
 log() { echo "$(date +%H:%M:%S) $*" | tee -a "$R/log"; }
@@ -150,6 +240,9 @@ try:
 except ValueError:
     print(json.dumps({"err": raw.strip()}))'; }
 field() { grep -o "\"$2\":\"\\?[^,\"}]*" "$1" | head -1 | sed 's/.*:"\?//'; }
+num() { [[ $1 =~ ^[0-9.]+$ ]] && echo "$1" || echo -; }
+# dd reports "354 MB/s", "1.2 GB/s" or "950 kB/s" (SI) — whole MB/s, or "-" when missing.
+mbps() { echo "$1" | awk '$1 ~ /^[0-9.]+$/ { v = $1; if ($2 ~ /^GB/) v *= 1000; else if ($2 ~ /^kB/) v /= 1000; printf "%d\n", v; ok = 1 } END { if (!ok) print "-" }'; }
 # Run one phase on VMs 1..k at the same moment.
 run_all() {  # run_all <k> <phase> <arg> <timeout>
   local k=$1 p=$2 a=$3 to=$4 T pids="" id
@@ -200,6 +293,8 @@ ramp() {
     fatal "$k"; aborted && break
     for id2 in $(ids "$k"); do
       log "step $k: VM $id2 eps=$(field "$R/$k-eps-$id2.json" eps) dd=$(field "$R/$k-dd-$id2.json" rate)"
+      # <step> <tier> <eps> <dd MB/s> <dd MB/s during the fill> — for the bottom line
+      echo "$k $(spec $((id2-BASE)) 0) $(num "$(field "$R/$k-eps-$id2.json" eps)") $(mbps "$(field "$R/$k-dd-$id2.json" rate)") $(mbps "$(field "$R/$k-ddfill-$id2.json" rate)")" >> "$R/perf"
     done
   done
   phase done; sleep 10; stop_sampler
@@ -212,7 +307,8 @@ ramp() {
   elif [ "$lo" -lt 1024 ] || [ "$out" -gt 0 ] || awk -v p="$pk" 'BEGIN{exit !(p>5)}'; then
     v="WARN|lowest MemAvailable $lo MB, swapped out $out MB, memory pressure full $pk%"
   else v="OK|lowest MemAvailable $lo MB, no swapping"; fi
-  VERDICTS+=("$fill|$v")
+  echo "$lo $pk $out" > "$R/stats"
+  VERDICTS+=("$fill|$v"); echo "$fill|$v" >> "$RUN/verdicts"
   log "VERDICT (fill $fill): ${v%%|*} — ${v#*|}"
 }
 
@@ -226,11 +322,5 @@ fi
 
 R=$RUN
 echo
-log "════ fh-burner verdict for $(hostname) ════"
-for v in "${VERDICTS[@]}"; do
-  f=${v%%|*}; rest=${v#*|}
-  [ "$f" = max ] && f="all of each VM's memory" || f="$f% of each VM's memory"
-  log "  $f: ${rest%%|*} — ${rest#*|}"
-done
-log "  results: $RUN"
+bottom_line "$RUN" | while IFS= read -r line; do log "$line"; done
 if [[ ${VERDICTS[0]} == *\|ERROR\|* ]]; then exit 3; fi
