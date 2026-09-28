@@ -983,6 +983,55 @@ a `NO` — except one VM wanting more threads than the host has, which Proxmox r
 are threads, hyperthreads or not; EPS is not checked — FluxOS benchmarks that, and adding VMs
 one at a time shows where a host really stops.
 
+## `burn`
+
+Burn-in for an **empty** host, before its nodes are built: does the host actually hold up
+with its planned nodes running flat out? `host-check` does the arithmetic; `burn` loads the
+host. It prints a bash script, filled in with the host's planned node VMs from the
+inventory, to run on the host itself:
+
+```sh
+fh-toolkit burn pve1 | ssh root@pve1 bash
+```
+
+The script fetches the fh-burner release this toolkit pins, a small Debian VM image plus
+the host controller (`burner/` in this repo), from GitHub and checks both against their
+`.sha256`. It then clones one burn VM per planned node, the same memory, cores and
+storage, and ramps them one at a time. At each step the new VM fills its memory while
+every VM writes 8 GB to disk: on a real host, swap I/O and the nodes' own writes collide,
+and that is where `ddwrite` dips come from. Then all of them run a CPU test and a disk
+write at the same moment. The host is sampled every second while memory fills.
+
+The verdict is about the **host**, not benchmark scores:
+
+| | When |
+|---|---|
+| `FAIL` | out of memory (kernel OOM kill), hung task or I/O error; a burn VM stops or its guest agent goes silent; the host stalls (a 1-second sample more than 6 s late); under 200 MB free with under 512 MB of swap free; memory pressure over 40% (thrashing) |
+| `WARN` | under 1 GB free, any swap-out, or memory pressure over 5% |
+| `OK` | none of those |
+
+By default each burn VM uses **all** its memory, which is where a node's page cache ends
+up. When that FAILs, the same ramp runs again at 90%, so the report says how far past the
+edge the host is: e.g. on a 32 GB desktop with one Nimbus at 31744 MB, `all of each VM's
+memory: FAIL — memory pressure full 48% (thrashing); host stalled 12 s`, then `90%: WARN`.
+Burn VMs write random data, so KSM merges nothing; real nodes get some memory back from
+KSM, so a host sits a little further from the edge than burn shows. CPU and disk figures
+(EPS, MB/s) are for comparing steps, not Flux's benchmark numbers.
+
+It refuses a host where any of its node VMs already exists: burn VMs next to live nodes
+would fail their benchmarks. Other running VMs, a gateway say, stay on and are listed.
+Burn VMs have no network; they are template 9900 and VMs 9901 and up, tagged `fh-burn`,
+and are destroyed at the end, on Ctrl-C, or if the ssh session drops. Results stay on the
+host in `/var/tmp/fh-burn/`. It takes about 3 minutes per VM, double that if it re-runs at
+90%; for a long one, run it inside `tmux` on the host.
+
+```sh
+fh-toolkit burn pve1 --plan nimbus:1            # what to burn, instead of the inventory's slots
+fh-toolkit burn pve1 --plan cumulus:3 --fill 90 # 90% of memory; no re-run
+fh-toolkit burn pve1 --keep                     # leave the burn VMs running to look at
+fh-toolkit burn pve1 --no-retry                 # stop at the first verdict
+```
+
 ## `sign`
 
 ```

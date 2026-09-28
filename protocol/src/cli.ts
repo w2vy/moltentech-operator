@@ -104,6 +104,7 @@ import {
 } from "./proxmox-token";
 import { planVmMemory, TIER_DEFAULT_MB, vmMemoryAdvice } from "./vm-memory";
 import { hostCheckScript } from "./host-check";
+import { burnScript, parseBurnPlan } from "./burn";
 import { describeVm, nodeOf, parseKeepList, retireAdoptedMarks } from "./existing-nodes";
 import { fetchFluxNodeStatus, type FluxNodeStatus } from "./flux-node-status";
 import { ExistingVm, VmMemoryMb } from "./messages";
@@ -3305,6 +3306,31 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
       process.stdout.write(hostCheckScript(host, pkgVersion(), { room: roomAt >= 0, roomTier }));
       return 0;
     }
+    // Burn-in for an empty host: a script for the host itself, like host-check, that boots
+    // burn VMs sized like the host's planned nodes and reports whether the HOST holds up.
+    case "burn": {
+      rejectUnknownFlags("burn", args, ["--dir", "--plan", "--fill"], ["--keep", "--no-retry"]);
+      const od = readOperatorDir("burn", dirFlag(args));
+      const names = od.currentHosts.map((h) => h.name);
+      const valueOf = (flag: string) => (args.indexOf(flag) >= 0 ? args[args.indexOf(flag) + 1] : undefined);
+      const planText = valueOf("--plan");
+      const fill = valueOf("--fill");
+      const positional = args.filter((a, i) => !a.startsWith("--") && !["--dir", "--plan", "--fill"].includes(args[i - 1] ?? ""));
+      if (names.length === 0) die(`no hosts in ${od.inventoryLabel} — run \`fh-toolkit inventory\` first.`);
+      const name = positional[0] ?? (names.length === 1 ? names[0] : undefined);
+      if (name === undefined) die(`which host? fh-toolkit burn <host> — one of: ${names.join(", ")}`);
+      const host = od.currentHosts.find((h) => h.name === name);
+      if (!host) die(`${name} is not in ${od.inventoryLabel} — one of: ${names.join(", ")}`);
+      let plan;
+      if (planText !== undefined) {
+        const parsed = parseBurnPlan(planText);
+        if (parsed.error) die(`--plan ${parsed.error}`);
+        plan = parsed.plan;
+      }
+      if (fill !== undefined && !/^(max|[1-9][0-9]?)$/.test(fill)) die("--fill is max or a percent, 1..99");
+      process.stdout.write(burnScript(host, pkgVersion(), { plan, fill, keep: args.includes("--keep"), noRetry: args.includes("--no-retry") }));
+      return 0;
+    }
     // Which build am I? The image refreshes on a stamp file, so "the fix is merged"
     // and "the fix is what just ran" are different claims. This is how to tell them apart
     // without diffing help text against the repo.
@@ -3373,7 +3399,7 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
     case "-h":
     default:
       console.log(
-        "usage: fh-toolkit <keygen|coalition-keygen|init|slug|proxmox|stripe|inventory|level|doctor|host-check|sign|env|verify|wrapper|version> [options]\n"
+        "usage: fh-toolkit <keygen|coalition-keygen|init|slug|proxmox|stripe|inventory|level|doctor|host-check|burn|sign|env|verify|wrapper|version> [options]\n"
       );
       console.log("  keygen           [--out <dir>]");
       console.log("  coalition-keygen [--out <dir>]   Phase D signing key (operator-held custody)");
@@ -3394,6 +3420,8 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
       console.log("  doctor    [--dir <dir>] [--check-proxmox] [--check-stripe] [--check-hub]");
       console.log("  host-check [<host>] [--room [<tier>]] [--dir <dir>]  small-RAM host? prints a read-only check");
       console.log("            to run ON the host: fh-toolkit host-check pve1 | ssh root@pve1 bash");
+      console.log("  burn [<host>] [--plan nimbus:1,...] [--fill max|<pct>] [--keep] [--no-retry] [--dir <dir>]");
+      console.log("            burn-in an EMPTY host: fh-toolkit burn pve1 | ssh root@pve1 bash");
       console.log("            --room: the largest node (stratus/nimbus/cumulus) the host could add;");
       console.log("            --room nimbus: what one more nimbus is short of, the fixes, then the steps");
       console.log("  sign      [--dir <dir>] [--key <pem>] [--from-config <config.env>|--in <body.json>]");
