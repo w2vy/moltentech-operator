@@ -35,7 +35,8 @@ HDD swap (stalled 8–9 s, guest agent lost), and with no swap (OOM kill); 90% i
 | `VERSION` | — | release tag `fh-burner-v<VERSION>` |
 
 Burn VMs have **no network**: the host drives them through the qemu-guest-agent socket.
-They are tagged `fh-burn` and destroyed on exit (also on Ctrl-C) unless `--keep`.
+They are tagged `fh-burn` and destroyed on exit (also on Ctrl-C) unless `--keep`. The controller
+keeps template 9900 for a re-run; `fh-toolkit burn` removes it and the download afterwards.
 Results stay on the host in `/var/tmp/fh-burn/<run>/` (`log`, `host.csv`, per-VM JSON).
 
 ## Release
