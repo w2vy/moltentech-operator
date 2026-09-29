@@ -1,8 +1,8 @@
 # fh-burner
 
 Burn-in for an **empty** Proxmox host before it carries nodes. `fh-toolkit burn <host>`
-([docs](../docs/fh-toolkit.md#burn)) boots N burn VMs sized like the host's slots and ramps them 1..N. At each step
-the new VM fills its memory while every VM writes to disk, then all of them run a CPU test
+([docs](../docs/fh-toolkit.md#burn)) boots N burn VMs sized like the host's slots and ramps them 1 by 1 up to 8 (above 8: up to 4
+per step until the last 4). At each step the new VMs fill their memory while every VM writes to disk, then all of them run a CPU test
 and a disk write at the same moment, while the host is sampled.
 
 The verdict is about the **host** surviving, not the scores:
@@ -15,11 +15,11 @@ The verdict is about the **host** surviving, not the scores:
 | **ERROR** | a burn VM could not be created or started (storage, a leftover VM). Says nothing about the host; no 90% re-run; exit 3 |
 
 The last block of the output is the bottom line, **PASS** / **PASS WITH CONDITIONS** / **FAIL** /
-**NO VERDICT**, with one plain line per finding and each condition spelled out
+**NO VERDICT**, with one line per measured finding; only memory decides the word
 ([docs](../docs/fh-toolkit.md#burn)). `burn-host.sh --summarize <run dir>` reprints it from a
 run's saved files (`verdicts`, `n`, `fill-*/stats`, `fill-*/perf`).
 
-EPS and MB/s are reported as a drop from the 1-VM step. They are not Flux benchmark
+EPS and MB/s are reported as the drop from the first step, never against Flux's floors. They are not Flux benchmark
 numbers: sysbench here runs at Flux's settings (`--cpu-max-prime=60000`), but on pve25
 it read ~15% under what the Flux benchmark reported for a real nimbus on that same
 host, and no `dd` flag set matches Flux's `ddwrite`.
@@ -57,7 +57,7 @@ tag is never replaced — and point `BURNER_VERSION` in `protocol/src/burn.ts` a
 downloaded next to each other:
 
 ```bash
-bash fh-burner-0.2.3-host.sh --image /var/lib/vz/fh-burn/fh-burner-0.2.3.qcow2 \
+bash fh-burner-0.2.4-host.sh --image /var/lib/vz/fh-burn/fh-burner-0.2.4.qcow2 \
   --plan "nimbus:31744:8:local-lvm cumulus:7424:4:ss1" [--fill max|<pct>] [--no-retry] [--keep]
 ```
 

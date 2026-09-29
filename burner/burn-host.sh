@@ -7,9 +7,10 @@
 #                [--fill max|<pct>] [--no-retry] [--keep]
 #
 # Burn-in for an EMPTY host, before it carries nodes: one burn VM per planned node, sized
-# like it. At step k = 1..N the k-th VM fills its memory while all k VMs write to disk
-# (swap I/O and node writes collide on a real host), then all k run a CPU test and a disk
-# test at the same moment. The host is sampled throughout.
+# like it. The ramp adds VMs 1 by 1 up to 8 (above 8: up to 4 per step until the last 4). At each
+# step the new VMs fill their memory while every VM writes to disk (swap I/O and node
+# writes collide on a real host), then all run a CPU test and a disk test at the same
+# moment. The host is sampled throughout.
 #
 # The verdict is about the HOST surviving, not the scores (reported only as a drop from
 # the 1-VM step):
@@ -30,98 +31,100 @@
 # so the host is driven no further than it takes to prove one.
 set -uo pipefail
 
-TMPL=9900; BASE=9900; FILL=max; KEEP=0; RETRY=1; IMAGE=""; PLAN=""; SUMMARIZE=""
+TMPL=9900; BASE=9900; FILL=max; KEEP=0; RETRY=1; IMAGE=""; PLAN=""; SUMMARIZE=""; STEPS=""
 while [ $# -gt 0 ]; do
   case $1 in
     --image) IMAGE=$2; shift ;;  --plan) PLAN=$2; shift ;;  --fill) FILL=$2; shift ;;
     --keep) KEEP=1 ;;            --no-retry) RETRY=0 ;;
-    --summarize) SUMMARIZE=$2; shift ;;
+    --summarize) SUMMARIZE=$2; shift ;;  --steps) STEPS=$2; shift ;;   # print the ramp for N VMs
     *) echo "burn-host: unknown argument $1" >&2; exit 2 ;;
   esac; shift
 done
 # ── the bottom line ────────────────────────────────────────────────────────────────
-# One word an operator can act on — PASS, PASS WITH CONDITIONS, FAIL, NO VERDICT — then one
-# plain line per finding. Built only from what a run saved in its directory, so
+# One word, then one line per thing burn MEASURED. Only memory decides the word: burn's
+# EPS and MB/s are not Flux's benchmark numbers (sysbench read ~15% low on pve25; no dd
+# flags match ddwrite), so they are shown as the drop from the first step, never against
+# Flux's floors. Built only from what a run saved in its directory, so
 # `--summarize <run dir>` reprints any past run's verdict (and the tests drive it that way).
-#   PASS                  every ramp rule OK and every VM at or above its tier's floors
-#   PASS WITH CONDITIONS  a WARN; or EPS / disk write under the floor with every VM at once
-#                         (Flux benchmarks one node at a time)
-#   FAIL                  all of each VM's memory FAILed — onboarding Step 0.7: do not build yet.
-#                         The 90% re-run only says how far past the edge the host is.
+#   PASS                  memory OK
+#   PASS WITH CONDITIONS  memory WARN — each marginal reading is named; watch the nodes'
+#                         Flux benchmarks closely
+#   FAIL                  the full fill FAILed — onboarding Step 0.7: do not build yet
 #   NO VERDICT            the burn could not run (a VM could not be created or started)
-# Floors: EPS from Flux (tom 09-27), write MB/s from the hub's tiers.ts.
 bottom_line() {  # bottom_line <run dir>
-  local run=$1 n st1 stL f first last pick overall lo pk out w line
-  local -a vs=() conds=() lines=()
+  local run=$1 n st1 stL f first last pick overall lo pk out w line at pre=""
+  local -a vs=() lines=()
   mapfile -t vs < "$run/verdicts"
   n=$(cat "$run/n" 2>/dev/null || echo "?")
   why() { paste -sd';' "$1/.abort" 2>/dev/null | sed 's/;/; /g'; }
   st() { local r=${1#*|}; echo "${r%%|*}"; }
-  words() { [ "$1" = max ] && echo "all of each VM's" || echo "$1% of each VM's"; }
+  fillw() { [ "$1" = max ] && echo "full fill" || echo "$1% fill"; }
   first=${vs[0]}; last=${vs[${#vs[@]}-1]}; st1=$(st "$first"); stL=$(st "$last")
   if [ "$st1" = ERROR ]; then
     echo "════ fh-burner verdict for $(hostname): NO VERDICT ════"
-    echo "  why: $(why "$run/fill-${first%%|*}") — the burn could not run; this says nothing about the host"
-    echo "  do: fix that and burn again"
+    echo "  why: $(why "$run/fill-${first%%|*}") — the burn could not run"
     echo "  results: $run"
     return
   fi
-  if [ "$st1" = OK ]; then overall=PASS
-  elif [ "$st1" = WARN ]; then overall="PASS WITH CONDITIONS"
-    conds+=("keep zram + KSM on; $n VM(s) is this host's limit — do not add another")
-  else overall=FAIL; fi
 
   for w in "${vs[@]}"; do
-    f=${w%%|*}; case $(st "$w") in
-      FAIL)  line="FAIL — $(why "$run/fill-$f")" ;;
-      ERROR) line="could not run — $(why "$run/fill-$f")" ;;
+    f=${w%%|*}
+    case $(st "$w") in
+      FAIL)  at=$(cat "$run/fill-$f/.step" 2>/dev/null); [ -n "$at" ] && [ "$at" != 0 ] && at=" at $at of $n VMs" || at=""
+             line="$(fillw "$f"): FAIL$at — $(why "$run/fill-$f")" ;;
+      ERROR) line="$(fillw "$f"): could not run — $(why "$run/fill-$f")" ;;
       *) read -r lo pk out < "$run/fill-$f/stats"
-         if [ "$lo" -lt 200 ]; then line="tight — lowest free $lo MB, under the 200 MB line (free swap kept it from failing)"
-         elif [ "$lo" -lt 1024 ]; then line="tight — lowest free $lo MB, under 1 GB"
-         else line="OK — lowest free $lo MB"; fi
-         [ "$out" -gt 0 ] && line="$line; $out MB swapped out"
-         awk -v p="$pk" 'BEGIN{exit !(p>5)}' && line="$line; memory pressure $pk%" ;;
+         line="$(fillw "$f"), $n VMs: $(st "$w") — lowest free $lo MB"
+         [ "$lo" -lt 1024 ] && line="$line (under 1 GB)"
+         [ "$out" -gt 0 ] && line="$line, $out MB swapped out"
+         awk -v p="$pk" 'BEGIN{exit !(p>5)}' && line="$line, memory pressure $pk% (over 5%)" ;;
     esac
-    lines+=("memory, $(words "$f"): $line")
+    lines+=("memory, $line")
   done
 
-  # Scores from the first ramp; after its FAIL, from the 90% re-run when that got further.
-  pick=$first; [ "$st1" = FAIL ] && [ ${#vs[@]} -gt 1 ] && pick=$last
+  # Scores from the first ramp; after its FAIL, from the 90% re-run.
+  pick=$first; [ "$st1" = FAIL ] && [ ${#vs[@]} -gt 1 ] && { pick=$last; pre=" ($(fillw "${pick%%|*}"))"; }
   if [ -s "$run/fill-${pick%%|*}/perf" ]; then
-    while IFS='|' read -r kind text; do
-      [ "$kind" = L ] && lines+=("$text") || conds+=("$text")
-    done < <(awk '
-      BEGIN { split("cumulus 240 180 nimbus 640 180 stratus 1520 440", a, " ")
-              for (i = 1; i <= 9; i += 3) { fe[a[i]] = a[i+1]; fd[a[i]] = a[i+2] } }
-      { r[NR] = $0; if ($1 > K) K = $1 }
-      END {
-        for (i = 1; i <= NR; i++) { split(r[i], f, " "); if (f[1] != K) continue
-          if (f[3] != "-" && (me == "" || f[3]+0 < me+0)) { me = f[3]; mef = fe[f[2]] }
-          if (f[4] != "-" && (md == "" || f[4]+0 < md+0)) { md = f[4]; mdf = fd[f[2]] }
-          if (f[5] != "-" && (mf == "" || f[5]+0 < mf+0)) { mf = f[5]; mff = fd[f[2]] } }
-        if (me != "") printf "L|cpu: lowest %.0f EPS per VM with %d running (floor %d) — %s\n", me, K, mef, (me+0 >= mef ? "OK" : "under the floor")
-        if (md != "") { printf "L|disk: lowest %d MB/s per VM with %d running (floor %d) — %s", md, K, mdf, (md+0 >= mdf ? "OK" : "under the floor")
-          if (mf != "" && mf+0 < mff) printf "; writes fell to %d MB/s while memory filled", mf
-          printf "\n" }
-        if ((me != "" && me+0 < mef) || (md != "" && md+0 < mdf))
-          print "C|EPS / disk write is under the floor only with every VM benchmarking at once; Flux benchmarks one node at a time — watch these nodes'"'"' first benchmarks"
-        if (mf != "" && mf+0 < mff)
-          print "C|disk writes collapse while memory fills — expect ddwrite dips whenever this host is short of memory"
-      }' "$run/fill-${pick%%|*}/perf")
+    while IFS= read -r line; do lines+=("$line"); done < <(awk -v pre="$pre" '
+      # per metric and tier: the lowest VM at each step
+      { k = $1 + 0; if (!(k in seen)) { seen[k] = 1; ks[++nk] = k }
+        if (!($2 in tseen)) { tseen[$2] = 1; ts[++nt] = $2 }
+        for (m = 3; m <= 5; m++) { if ($m == "-") continue; key = m SUBSEP $2 SUBSEP k
+          if (!(key in lo) || $m + 0 < lo[key]) lo[key] = $m + 0 } }
+      function score(m, name, unit,   j, i, k, c, s, a, b, t) {
+        for (j = 1; j <= nt; j++) { c = 0
+          for (i = 1; i <= nk; i++) { k = ks[i]; if ((m SUBSEP ts[j] SUBSEP k) in lo) s[++c] = k }
+          if (c == 0) continue
+          a = lo[m SUBSEP ts[j] SUBSEP s[1]]; t = sprintf("%.0f %s per VM with %d running", a, unit, s[1])
+          if (c > 1) { b = lo[m SUBSEP ts[j] SUBSEP s[c]]
+            t = t sprintf(", %.0f with %d", b, s[c]); if (a > 0) t = t sprintf(" (%+.0f%%)", (b - a) * 100 / a) }
+          print name (nt > 1 ? " " ts[j] : "") pre ": " t }
+      }
+      END { for (i = 2; i <= nk; i++) { x = ks[i]; j = i - 1; while (j > 0 && ks[j] > x) { ks[j+1] = ks[j]; j-- } ks[j+1] = x }
+            score(3, "cpu", "EPS"); score(4, "disk", "MB/s"); score(5, "disk while memory filled", "MB/s") }' \
+      "$run/fill-${pick%%|*}/perf")
   fi
-  [ "$overall" = PASS ] && [ ${#conds[@]} -gt 0 ] && overall="PASS WITH CONDITIONS"
 
+  case $st1 in FAIL) overall=FAIL ;; WARN) overall="PASS WITH CONDITIONS" ;; *) overall=PASS ;; esac
   echo "════ fh-burner verdict for $(hostname): $overall ════"
   for line in "${lines[@]}"; do echo "  $line"; done
-  for line in "${conds[@]}"; do echo "  condition: $line"; done
+  [ "$overall" = "PASS WITH CONDITIONS" ] && echo "  do: build, and watch each node's first Flux benchmarks closely"
   if [ "$overall" = FAIL ]; then
-    echo "  do: do not build yet. Do the Step 0.6 memory fixes still missing (host-check lists them) and burn again"
-    if [ ${#vs[@]} -gt 1 ] && [ "$stL" = FAIL ]; then
-      echo "      it FAILs at 90% too — with 0.6 done, this host has too many VMs for its RAM: take a slot off, or add RAM"
-    fi
+    echo "  do: do not build yet — add the Step 0.6 fixes host-check lists, then burn again"
+    [ ${#vs[@]} -gt 1 ] && [ "$stL" = FAIL ] && echo "      90% fill FAILs too: take a slot off, or add RAM"
   fi
   echo "  results: $run"
 }
+# The VM counts the ramp stops at: 1 by 1 up to 8 VMs. Above 8, up to 4 VMs are added per
+# step until the last 4, which go 1 by 1 — 16 VMs: 4 8 12 13 14 15 16 (7 steps, not 16).
+# The VMs a step adds fill their memory together, as idle-fill or a host reboot starts them.
+steps() {
+  local n=$1 k=0
+  if [ "$n" -le 8 ]; then seq 1 "$n"; return; fi
+  while [ $((n - k)) -gt 4 ]; do k=$(( k + 4 < n - 4 ? k + 4 : n - 4 )); echo "$k"; done
+  seq $((k + 1)) "$n"
+}
+if [ -n "$STEPS" ]; then steps "$STEPS"; exit 0; fi
 if [ -n "$SUMMARIZE" ]; then
   [ -f "$SUMMARIZE/verdicts" ] || { echo "burn-host: $SUMMARIZE has no verdicts file (a run from fh-burner 0.2.3 or later?)" >&2; exit 2; }
   bottom_line "$SUMMARIZE"; exit 0
@@ -257,32 +260,45 @@ run_all() {  # run_all <k> <phase> <arg> <timeout>
 VERDICTS=()
 # One ramp at one fill level; appends "<fill>|<FAIL|WARN|OK>|<detail>" to VERDICTS.
 ramp() {
-  local fill=$1 k id id2 up i T pids lo pk out v
+  local fill=$1 k prev=0 id id2 up i w T pids mpids lo pk out v ok pool
   R=$RUN/fill-$fill; mkdir -p "$R"; KSINCE=$(date "+%Y-%m-%d %H:%M:%S")
   echo 0 > "$R/.step"; sample & SAMPLER=$!
-  log "ramp: $N VM(s), fill=$fill — ${SPEC[*]}"
+  log "ramp: $N VM(s) in steps of $(steps "$N" | paste -sd' '), fill=$fill — ${SPEC[*]}"
   sleep 15   # idle baseline
-  for k in $(seq 1 "$N"); do
-    id=$((BASE+k)); echo "$k" > "$R/.step"; phase boot
-    local pool; pool=$(spec "$k" 3)
-    # A full clone: plain LVM cannot make linked ones, and a real node has its own disk.
-    qm clone $TMPL "$id" --name "fh-burn-$k" --full 1 --storage "$pool" >/dev/null \
-      && qm set "$id" --memory "$(spec "$k" 1)" --cores "$(spec "$k" 2)" --tags fh-burn >/dev/null && qm start "$id" >/dev/null \
-      || { fail "could not start VM $id ($(spec "$k" 0) on $pool)"; touch "$R/.setup"; aborted; break; }
-    up=0; for i in $(seq 90); do qm guest cmd "$id" ping >/dev/null 2>&1 && { up=1; break; }; sleep 2; done
-    [ $up = 1 ] || { fail "VM $id guest agent never answered"; aborted; break; }
-    log "step $k: VM $id ($(spec "$k" 0), $(spec "$k" 1) MB, $(spec "$k" 2) cores, $pool) up after $((i*2)) s"
-    # The new VM fills its memory (the older ones still hold theirs) while EVERY VM
+  for k in $(steps "$N"); do
+    echo "$k" > "$R/.step"; phase boot; ok=1
+    for id in $(seq $((BASE+prev+1)) $((BASE+k))); do
+      i=$((id-BASE)); pool=$(spec "$i" 3)
+      # A full clone: plain LVM cannot make linked ones, and a real node has its own disk.
+      qm clone $TMPL "$id" --name "fh-burn-$i" --full 1 --storage "$pool" >/dev/null \
+        && qm set "$id" --memory "$(spec "$i" 1)" --cores "$(spec "$i" 2)" --tags fh-burn >/dev/null && qm start "$id" >/dev/null \
+        || { fail "could not start VM $id ($(spec "$i" 0) on $pool)"; touch "$R/.setup"; ok=0; break; }
+    done
+    [ $ok = 1 ] || { aborted; break; }
+    for id in $(seq $((BASE+prev+1)) $((BASE+k))); do
+      i=$((id-BASE)); up=0
+      for w in $(seq 90); do qm guest cmd "$id" ping >/dev/null 2>&1 && { up=1; break; }; sleep 2; done
+      [ $up = 1 ] || { fail "VM $id guest agent never answered"; ok=0; break; }
+      log "step $k: VM $id ($(spec "$i" 0), $(spec "$i" 1) MB, $(spec "$i" 2) cores, $(spec "$i" 3)) up"
+    done
+    [ $ok = 1 ] || { aborted; break; }
+    # The new VMs fill their memory (the older ones still hold theirs) while EVERY VM
     # writes to disk: on a real host, swap I/O and the nodes' own writes collide, and
     # that is where ddwrite dips come from. 8 GB so the writes outlast the fill.
     phase mem
-    T=$(( $(date +%s) + 2 )); pids=""
+    T=$(( $(date +%s) + 2 )); pids=""; mpids=""
     for id2 in $(ids "$k"); do
       ( qm guest exec "$id2" --timeout 900 -- burn-run dd "$T" 8192 2>&1 | json > "$R/$k-ddfill-$id2.json" ) &
       pids="$pids $!"
     done
-    qm guest exec "$id" --timeout 900 -- burn-run mem "$T" "$fill" 2>&1 | json > "$R/$k-mem-$id.json"
-    v=$(field "$R/$k-mem-$id.json" secs); [ -n "$v" ] && v="$v s" || v="— no answer (VM gone?)"; log "step $k: memory held in $v"
+    for id in $(seq $((BASE+prev+1)) $((BASE+k))); do
+      ( qm guest exec "$id" --timeout 900 -- burn-run mem "$T" "$fill" 2>&1 | json > "$R/$k-mem-$id.json" ) &
+      mpids="$mpids $!"
+    done
+    wait $mpids
+    for id in $(seq $((BASE+prev+1)) $((BASE+k))); do
+      v=$(field "$R/$k-mem-$id.json" secs); [ -n "$v" ] && v="$v s" || v="— no answer (VM gone?)"; log "step $k: VM $id memory held in $v"
+    done
     phase ddfill; wait $pids
     for id2 in $(ids "$k"); do v=$(field "$R/$k-ddfill-$id2.json" rate); log "step $k: VM $id2 dd during fill=${v:-— no answer (VM gone?)}"; done
     fatal "$k"; aborted && break
@@ -293,9 +309,10 @@ ramp() {
     fatal "$k"; aborted && break
     for id2 in $(ids "$k"); do
       log "step $k: VM $id2 eps=$(field "$R/$k-eps-$id2.json" eps) dd=$(field "$R/$k-dd-$id2.json" rate)"
-      # <step> <tier> <eps> <dd MB/s> <dd MB/s during the fill> — for the bottom line
+      # <VMs running> <tier> <eps> <dd MB/s> <dd MB/s during the fill> — for the bottom line
       echo "$k $(spec $((id2-BASE)) 0) $(num "$(field "$R/$k-eps-$id2.json" eps)") $(mbps "$(field "$R/$k-dd-$id2.json" rate)") $(mbps "$(field "$R/$k-ddfill-$id2.json" rate)")" >> "$R/perf"
     done
+    prev=$k
   done
   phase done; sleep 10; stop_sampler
 

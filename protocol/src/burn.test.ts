@@ -220,41 +220,61 @@ function savedRun(ramps: { fill: string; status: string; stats?: string; perf?: 
   return { out: r.stdout + r.stderr, status: r.status };
 }
 
-test("bottom line: PASS when every rule is OK and every score clears its floor", () => {
-  const r = savedRun([{ fill: "max", status: "OK", stats: "9000 0.00 0", perf: "1 cumulus 350 400 380\n" }], 1);
+test("bottom line: PASS on memory alone; scores are the drop from the first step, never a floor", () => {
+  const r = savedRun([{ fill: "max", status: "OK", stats: "9000 0.00 0", perf: "1 cumulus 350 400 380\n2 cumulus 20 30 25\n2 cumulus 300 35 30\n" }]);
   assert.equal(r.status, 0, r.out);
   assert.match(r.out, /verdict for .*: PASS ════/);
-  assert.match(r.out, /cpu: lowest 350 EPS per VM with 1 running \(floor 240\) — OK/);
-  assert.doesNotMatch(r.out, /condition:|do:/);
+  assert.match(r.out, /memory, full fill, 2 VMs: OK — lowest free 9000 MB\n/);
+  assert.match(r.out, /cpu: 350 EPS per VM with 1 running, 20 with 2 \(-94%\)/);
+  assert.match(r.out, /disk: 400 MB\/s per VM with 1 running, 30 with 2 \(-92%\)/);
+  assert.doesNotMatch(r.out, /floor|do:/);
 });
 
-test("bottom line: a WARN is PASS WITH CONDITIONS, each finding in words (pve65, 09-28)", () => {
+test("bottom line: a WARN is PASS WITH CONDITIONS naming each marginal reading, and says watch the benchmarks (pve30, 09-28)", () => {
   const r = savedRun([
-    { fill: "max", status: "WARN", stats: "176 5.61 1332", perf: "1 cumulus 331.11 374 258\n2 cumulus 272.75 178 38\n2 cumulus 272.01 297 35\n" },
+    { fill: "max", status: "WARN", stats: "185 5.61 1897", perf: "1 cumulus 351.35 231 218\n2 cumulus 292.21 21 127\n2 cumulus 292.78 25 125\n" },
   ]);
   assert.match(r.out, /verdict for .*: PASS WITH CONDITIONS ════/);
-  assert.match(r.out, /tight — lowest free 176 MB, under the 200 MB line \(free swap kept it from failing\); 1332 MB swapped out; memory pressure 5\.61%/);
-  assert.match(r.out, /disk: lowest 178 MB\/s per VM with 2 running \(floor 180\) — under the floor; writes fell to 35 MB\/s while memory filled/);
-  assert.match(r.out, /condition: keep zram \+ KSM on; 2 VM\(s\) is this host's limit — do not add another/);
-  assert.match(r.out, /condition: .*Flux benchmarks one node at a time/);
+  assert.match(r.out, /memory, full fill, 2 VMs: WARN — lowest free 185 MB \(under 1 GB\), 1897 MB swapped out, memory pressure 5\.61% \(over 5%\)/);
+  assert.match(r.out, /disk while memory filled: 218 MB\/s per VM with 1 running, 125 with 2 \(-43%\)/);
+  assert.match(r.out, /do: build, and watch each node's first Flux benchmarks closely/);
+  assert.doesNotMatch(r.out, /condition:|zram|limit|one node at a time|floor/);
+});
+
+test("bottom line: mixed tiers get a line each, first vs last step (a 4-at-a-time ramp starts at 4)", () => {
+  const r = savedRun([{ fill: "max", status: "OK", stats: "3000 1.00 0",
+    perf: "4 cumulus 350 300 200\n4 nimbus 700 300 200\n16 cumulus 250 170 90\n16 nimbus 630 200 80\n" }], 16);
+  assert.match(r.out, /cpu cumulus: 350 EPS per VM with 4 running, 250 with 16 \(-29%\)/);
+  assert.match(r.out, /cpu nimbus: 700 EPS per VM with 4 running, 630 with 16 \(-10%\)/);
 });
 
 test("bottom line: an all-memory FAIL is FAIL even when 90% passes; FAIL at 90% too says take a slot off", () => {
   const edge = savedRun([
     { fill: "max", status: "FAIL", abort: "memory pressure full 40.2% (thrashing)" },
     { fill: "90", status: "WARN", stats: "5957 3.10 120", perf: "4 nimbus 650 200 190\n" },
-  ]);
+  ], 4);
   assert.match(edge.out, /verdict for .*: FAIL ════/);
-  assert.match(edge.out, /memory, all of each VM's: FAIL — memory pressure full 40\.2% \(thrashing\)/);
-  assert.match(edge.out, /memory, 90% of each VM's: OK — lowest free 5957 MB; 120 MB swapped out/);
+  assert.match(edge.out, /memory, full fill: FAIL — memory pressure full 40\.2% \(thrashing\)/);
+  assert.match(edge.out, /memory, 90% fill, 4 VMs: WARN — lowest free 5957 MB, 120 MB swapped out\n/);
+  assert.match(edge.out, /cpu \(90% fill\): 650 EPS per VM with 4 running\n/);
   assert.match(edge.out, /do: do not build yet/);
-  assert.doesNotMatch(edge.out, /take a slot off/);
+  assert.doesNotMatch(edge.out, /take a slot off|watch each node/);
 
   const both = savedRun([
     { fill: "max", status: "FAIL", abort: "host stalled 12 s" },
     { fill: "90", status: "FAIL", abort: "MemAvailable 150 MB with 200 MB swap free" },
   ]);
-  assert.match(both.out, /FAILs at 90% too — .*take a slot off, or add RAM/);
+  assert.match(both.out, /90% fill FAILs too: take a slot off, or add RAM/);
+});
+
+test("ramp steps: 1 by 1 up to 8 VMs; above 8, up to 4 per step until the last 4", () => {
+  const ctl = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "burner", "burn-host.sh");
+  const steps = (n: number) => spawnSync("bash", [ctl, "--steps", String(n)], { encoding: "utf8" }).stdout.trim().split("\n").join(" ");
+  assert.equal(steps(1), "1");
+  assert.equal(steps(8), "1 2 3 4 5 6 7 8");
+  assert.equal(steps(9), "4 5 6 7 8 9");
+  assert.equal(steps(10), "4 6 7 8 9 10");
+  assert.equal(steps(16), "4 8 12 13 14 15 16");
 });
 
 test("bottom line: a burn that could not run is NO VERDICT; a run without saved verdicts is refused", () => {
