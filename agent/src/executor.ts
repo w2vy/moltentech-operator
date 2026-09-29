@@ -333,6 +333,14 @@ const TRANSIENT = [
    */
   /Unable to upload Config image to hypervisor/i,
   /Unable to upload EFI image to hypervisor/i,
+  /**
+   * A create whose import file was missing. Proxmox's create task fails before it
+   * allocates anything it keeps (qemu-server removes the half-made VM), arcane-mage
+   * then deletes the install images, and a plain Retry worked on staging 08-26. Only
+   * visible since arcane-mage appends the task error to the step; a bare "Unable to
+   * create VM on hypervisor" is still `unknown`.
+   */
+  /Unable to create VM on hypervisor: .*cannot import from '[^']*:import\//i,
 ];
 
 /** Failures where a retry provably cannot help. */
