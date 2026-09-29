@@ -294,6 +294,21 @@ test("classify: an upload into local:import is transient — it runs before crea
   assert.equal(classifyAmFailure(amRun(["Unable to upload EFI image to hypervisor"])), "transient");
 });
 
+test("classify: a create whose import file was missing is transient; other creates stay unknown", () => {
+  const efi =
+    "Unable to create VM on hypervisor: unable to create VM 219 - cannot import from 'local:import/arcane_efi.raw' - " +
+    "Could not open '/var/lib/vz/import/arcane_efi.raw': No such file or directory";
+  assert.equal(classifyAmFailure(amRun([efi])), "transient");
+  assert.equal(
+    classifyAmFailure(amRun(["Unable to create VM on hypervisor: HTTP 500: storage 'local-lvm' is full"])),
+    "unknown"
+  );
+  assert.equal(
+    classifyAmFailure(amRun(["Unable to create VM on hypervisor: task still running after 600s"])),
+    "unknown"
+  );
+});
+
 test("classify: a name collision is permanent", () => {
   assert.equal(
     classifyAmFailure(amRun(["VM name 'mt-186-n4' already exists on node 'pve25'"])),
