@@ -997,8 +997,10 @@ fh-toolkit burn pve1 | ssh root@pve1 bash
 The script fetches the fh-burner release this toolkit pins, a small Debian VM image plus
 the host controller (`burner/` in this repo), from GitHub and checks both against their
 `.sha256`. It then clones one burn VM per planned node, the same memory, cores and
-storage, and ramps them one at a time. At each step the new VM fills its memory while
-every VM writes 8 GB to disk: on a real host, swap I/O and the nodes' own writes collide,
+storage, and ramps them: one at a time up to 8 VMs; above 8, up to 4 per step until the
+last 4, which go one at a time (16 VMs: 4, 8, 12, 13, 14, 15, 16). At each step the new VMs
+fill their memory together, as idle-fill or a host reboot starts them, while every VM
+writes 8 GB to disk: on a real host, swap I/O and the nodes' own writes collide,
 and that is where `ddwrite` dips come from. Then all of them run a CPU test and a disk
 write at the same moment. The host is sampled every second while memory fills.
 
@@ -1011,33 +1013,37 @@ The verdict is about the **host**, not benchmark scores:
 | `OK` | none of those |
 | `ERROR` | a burn VM could not be created or started. Nothing is known about the host; there is no 90% re-run, and it exits 3 |
 
-The last block turns that into one word you can act on, then one plain line per finding:
+The last block turns that into one word, then one line per thing burn measured. Only
+memory decides the word:
 
 | Bottom line | When |
 |---|---|
-| `PASS` | every rule `OK`, and every VM at or above its tier's EPS and write floors |
-| `PASS WITH CONDITIONS` | a `WARN`, or EPS / write under the floor with every VM at once. Each condition is printed (e.g. "N VM(s) is this host's limit — do not add another") |
-| `FAIL` | all of each VM's memory `FAIL`ed, with each reason and what to do; the 90% line says how far past the edge |
+| `PASS` | memory `OK` |
+| `PASS WITH CONDITIONS` | memory `WARN`; each marginal reading is named (under 1 GB free, swapped out, pressure over 5%). Build, and watch each node's first Flux benchmarks closely |
+| `FAIL` | the full fill `FAIL`ed, with each reason; the 90% line says how far past the edge |
 | `NO VERDICT` | `ERROR`: the burn could not run |
 
 ```
-════ fh-burner verdict for pve65: PASS WITH CONDITIONS ════
-  memory, all of each VM's: tight — lowest free 176 MB, under the 200 MB line (free swap kept it from failing); 1332 MB swapped out; memory pressure 5.61%
-  cpu: lowest 272 EPS per VM with 2 running (floor 240) — OK
-  disk: lowest 178 MB/s per VM with 2 running (floor 180) — under the floor; writes fell to 35 MB/s while memory filled
-  condition: keep zram + KSM on; 2 VM(s) is this host's limit — do not add another
-  ...
+════ fh-burner verdict for pve30: PASS WITH CONDITIONS ════
+  memory, full fill, 2 VMs: WARN — lowest free 185 MB (under 1 GB), 1897 MB swapped out
+  cpu: 351 EPS per VM with 1 running, 292 with 2 (-17%)
+  disk: 231 MB/s per VM with 1 running, 21 with 2 (-91%)
+  disk while memory filled: 218 MB/s per VM with 1 running, 125 with 2 (-43%)
+  do: build, and watch each node's first Flux benchmarks closely
 ```
 
-Floors: EPS cumulus 240 / nimbus 640 / stratus 1520; write 180 / 180 / 440 MB/s. A score
-under its floor with every VM at once is a condition, never a FAIL: Flux benchmarks one
-node at a time. `burn-host.sh --summarize /var/tmp/fh-burn/<run>` reprints a run's
-bottom line.
+EPS and MB/s are each step's lowest VM (per tier), shown for the first and the last step
+with the drop between them. They are **not** compared with Flux's floors: sysbench read
+~15% under Flux's own EPS on the same host, and no `dd` setting matches `ddwrite` (pve30
+above: burn's 21 MB/s with both VMs writing at once, Flux's real `ddwrite` median 241).
+Burn cannot say which benchmark will pass; Flux can benchmark every node behind a WAN at
+the same moment, so a big drop is worth watching. `burn-host.sh --summarize
+/var/tmp/fh-burn/<run>` reprints a run's bottom line.
 
 By default each burn VM uses **all** its memory, which is where a node's page cache ends
 up. When that FAILs, the same ramp runs again at 90%, so the report says how far past the
-edge the host is: e.g. on a 32 GB desktop with one Nimbus at 31744 MB, `all of each VM's
-memory: FAIL — memory pressure full 48% (thrashing); host stalled 12 s`, then `90%: WARN`.
+edge the host is: e.g. on a 32 GB desktop with one Nimbus at 31744 MB, `full fill:
+FAIL — memory pressure full 48% (thrashing); host stalled 12 s`, then `90%: WARN`.
 Burn VMs write random data, so KSM merges nothing; real nodes get some memory back from
 KSM, so a host sits a little further from the edge than burn shows. CPU and disk figures
 (EPS, MB/s) are for comparing steps, not Flux's benchmark numbers.

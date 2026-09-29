@@ -399,17 +399,17 @@ It takes about 3 minutes per VM, never asks anything, and removes its VMs at the
 (also on Ctrl-C or a dropped ssh session). The last lines are the verdict:
 ```
 ════ fh-burner verdict for pve1: FAIL ════
-  memory, all of each VM's: FAIL — fatal (see FATAL lines)
-  memory, 90% of each VM's: tight — lowest free 673 MB, under 1 GB
-  cpu: lowest 690 EPS per VM with 1 running (floor 640) — OK
-  disk: lowest 300 MB/s per VM with 1 running (floor 180) — OK
-  do: do not build yet. Do the Step 0.6 memory fixes still missing (host-check lists them) and burn again
+  memory, full fill: FAIL at 1 of 1 VMs — fatal (see FATAL lines)
+  memory, 90% fill, 1 VMs: WARN — lowest free 673 MB (under 1 GB)
+  cpu (90% fill): 690 EPS per VM with 1 running
+  disk (90% fill): 300 MB/s per VM with 1 running
+  do: do not build yet — add the Step 0.6 fixes host-check lists, then burn again
 ```
 
 | Verdict | What to do |
 |---|---|
 | `PASS` | Build the nodes. |
-| `PASS WITH CONDITIONS` | The host holds, at its edge: it swapped, ran under 1 GB free, or a score fell under its floor with every VM at once. Build the nodes and keep to the `condition:` lines; do any of 0.6 still missing — `host-check` lists them. Expect the odd `ddwrite` dip at a node's first boot. |
+| `PASS WITH CONDITIONS` | The host holds, at its edge: the memory line names what was marginal (under 1 GB free, swapped out, pressure over 5%). Build the nodes, do any of 0.6 still missing — `host-check` lists them — and watch each node's first Flux benchmarks closely. |
 | `FAIL` | Do not build yet. The host ran out of memory, stalled or thrashed (the `FATAL` lines above the verdict say which). Do the 0.6 steps it is missing — for ONE VM on a host its size, the disk swap (step 3) is what turns an OOM kill into a pass — and burn again. |
 | `NO VERDICT` | The burn could not run (a VM could not be created or started); the `why:` line says what. Fix it and burn again. |
 
@@ -423,7 +423,8 @@ Measured on a 32 GB desktop with one Nimbus at 31744 MB: without zram, KSM or sw
 full fill was OOM-killed (FAIL); with all three, WARN (75 MB free, 3 GB swapped). Burn VMs
 fill memory with random data, so KSM merges nothing: real nodes give a little back, and a
 host sits slightly further from the edge than burn shows. The EPS and MB/s it prints are
-for comparing its steps, not Flux's benchmark numbers. All the options are in
+the drop from its first step, not Flux's benchmark numbers: burn cannot say which Flux
+benchmark will pass. All the options are in
 [`fh-toolkit.md`](fh-toolkit.md#burn).
 
 ## Step 1 — Generate your signing key + config
