@@ -324,6 +324,15 @@ const TRANSIENT = [
    * rather than a failed step, which the haystack already covers.
    */
   /Unable to discover hypervisor nodes/i,
+  /**
+   * The two uploads into `local:import` run AFTER the pre-flight checks but BEFORE
+   * `create_vm`, so a failure leaves no VM — at most a stray `<vmid>_arcane_config.raw`
+   * or EFI image, and Proxmox's upload handler overwrites an existing file, so the
+   * retry is not blocked by it. Prod 09-28 (`fh-mt-187-c4`, pve35) was the config
+   * case: the file landed but the task wait failed; a manual Retry worked (hub #482).
+   */
+  /Unable to upload Config image to hypervisor/i,
+  /Unable to upload EFI image to hypervisor/i,
 ];
 
 /** Failures where a retry provably cannot help. */
