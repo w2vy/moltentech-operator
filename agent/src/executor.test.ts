@@ -289,6 +289,11 @@ test("classify: unreachable Proxmox API is transient", () => {
   assert.equal(classifyAmFailure(amRun(["Unable to list VMs on pve25"])), "transient");
 });
 
+test("classify: an upload into local:import is transient — it runs before create_vm", () => {
+  assert.equal(classifyAmFailure(amRun(["Unable to upload Config image to hypervisor"])), "transient");
+  assert.equal(classifyAmFailure(amRun(["Unable to upload EFI image to hypervisor"])), "transient");
+});
+
 test("classify: a name collision is permanent", () => {
   assert.equal(
     classifyAmFailure(amRun(["VM name 'mt-186-n4' already exists on node 'pve25'"])),
@@ -314,7 +319,6 @@ test("classify: mutating steps stay unknown — the real cause never reaches us"
   for (const m of [
     "Unable to create VM on hypervisor",
     "Unable to start VM on hypervisor",
-    "Unable to upload Config image to hypervisor",
     "Unable to clean up disk images on hypervisor",
   ]) {
     assert.equal(classifyAmFailure(amRun([m])), "unknown", m);
