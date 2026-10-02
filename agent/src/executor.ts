@@ -11,6 +11,7 @@ import { checkOwnerAuth } from "./owner-auth";
 import { allocateVmId, VMID_MIN, VMID_MAX } from "./vmid";
 import { getClusterVmIds, getQemuList, setVmName } from "./health";
 import { existingVmFence, existingVmFor, planRename, toListing } from "./existing-vm";
+import { ensureDatedIso } from "./iso-name";
 import type { VmListing } from "./existing-vm";
 
 export type ExecResult = { ok: boolean; message?: string; vmId?: number; failureClass?: FailureClass };
@@ -383,6 +384,24 @@ export function classifyAmFailure(r: AmResult): FailureClass {
  * therefore last, so a verbose warning stream can no longer push the real signal
  * past the 4000-char cap.
  */
+/** The most of an arcane-mage message the hub is sent. */
+export const AM_MESSAGE_MAX = 4000;
+
+/**
+ * Fit `text` into `max` chars keeping its HEAD and its TAIL. A Python traceback (rich-
+ * rendered frames, several KB) carries the one line that matters — the exception — at the
+ * very END; a head-only cut kept frames and dropped it (MT-0091 2026-10-02: the stored
+ * output stopped mid-traceback, and the real error, a rejected `iso_name`, took a container
+ * repro to find). Step lines and the first error stay in the head.
+ */
+export function clipMessage(text: string, max = AM_MESSAGE_MAX): string {
+  if (text.length <= max) return text;
+  const marker = "\n…[cut]…\n";
+  const head = Math.floor((max - marker.length) / 3);
+  const tail = max - marker.length - head;
+  return text.slice(0, head) + marker + text.slice(text.length - tail);
+}
+
 export function amFailure(r: AmResult): string {
   const parts: string[] = [];
   const steps = failedSteps(r);
@@ -391,7 +410,7 @@ export function amFailure(r: AmResult): string {
     const t = s?.trim();
     if (t && !parts.includes(t)) parts.push(t);
   }
-  return (parts.join("\n\n") || r.stdout.trim() || "arcane-mage failed with no output").slice(0, 4000);
+  return clipMessage(parts.join("\n\n") || r.stdout.trim() || "arcane-mage failed with no output");
 }
 
 /**
@@ -418,7 +437,7 @@ export async function deprovisionVm(
   const ok = r.json?.ok === true || !!r.json?.error?.includes("not found");
   return {
     ok,
-    message: ok ? (r.stdout + "\n" + r.stderr).trim().slice(0, 4000) : amFailure(r),
+    message: ok ? clipMessage((r.stdout + "\n" + r.stderr).trim()) : amFailure(r),
     failureClass: ok ? undefined : classifyAmFailure(r),
   };
 }
@@ -476,6 +495,10 @@ async function provision(job: Job, cfg: AgentConfig): Promise<ExecResult> {
   const rotated = await pickRotatedVmId(job, cfg);
   if (rotated != null) console.log(`[vmid] ${job.slot.vmName}: allocated ${rotated}`);
   const invHost = inventoryHostFor(reloadInventory(cfg), job.slot.nodeName);
+  // A bare `FluxLive.iso` (env value after a restart, refresh not yet succeeded) fails
+  // arcane-mage's config validation; the node being provisioned is online, so read the real
+  // name off its ISO storage first (MT-0091, 2026-10-02).
+  await ensureDatedIso(cfg, job.slot.nodeName, effectiveHost(cfg, invHost).storageIso);
   writeFileSync(yamlPath, buildProvisionYaml(job, cfg, rotated, invHost), { mode: 0o600 });
   try {
     const r = await runArcaneMage(["provision", "--json", "-c", yamlPath], cfg, TIMEOUT.provision);

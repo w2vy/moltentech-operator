@@ -89,6 +89,31 @@ function getJson<T>(cfg: AgentConfig, path: string): Promise<T> {
   });
 }
 
+/**
+ * Each cluster node's status (`online` / `offline` / `unknown`) from `GET /nodes`, which any
+ * member answers. Used to skip the ISO refresh on a powered-off host: arcane-mage reads the
+ * ISO storage THROUGH the node, so an offline node reads as "ISO missing" and it downloads
+ * and uploads 3 GB that can never land (2026-10-01/02: pve30 off, 16 × 3.3 GB left in
+ * pve55's /var/tmp until its root disk was full).
+ */
+export async function getNodeStatuses(cfg: AgentConfig): Promise<Map<string, string>> {
+  const raw = await getJson<{ node?: string; status?: string }[]>(cfg, "/api2/json/nodes");
+  const out = new Map<string, string>();
+  for (const n of raw) if (n.node) out.set(n.node, n.status ?? "unknown");
+  return out;
+}
+
+/** The ISO file names on `storage` as seen from `node` (`…/content?content=iso`, volid basenames). */
+export async function getStorageIsoNames(cfg: AgentConfig, node: string, storage: string): Promise<string[]> {
+  const raw = await getJson<{ volid?: string; content?: string }[]>(
+    cfg,
+    `/api2/json/nodes/${encodeURIComponent(node)}/storage/${encodeURIComponent(storage)}/content?content=iso`
+  );
+  return raw
+    .filter((v) => v.content === "iso" && typeof v.volid === "string")
+    .map((v) => v.volid!.slice(v.volid!.lastIndexOf("/") + 1));
+}
+
 /** GET the VM list for one Proxmox node via the local API token. */
 export function getQemuList(cfg: AgentConfig, nodeName: string): Promise<Vm[]> {
   return getJson<Vm[]>(cfg, `/api2/json/nodes/${encodeURIComponent(nodeName)}/qemu`);
