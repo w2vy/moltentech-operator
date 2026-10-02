@@ -102,3 +102,59 @@ test("a thrown error from the refresh call does not crash the loop", async () =>
   );
   assert.equal(cfg.host.arcaneIso, "FluxLive-111.iso"); // unchanged
 });
+
+// ── offline hosts + healing the name (pve30 off 10-01 → pve55 /var/tmp full, MT-0091 10-02) ──
+
+const PROXMOX = { url: "https://pve:8006", tokenId: "t", tokenSecret: "s" };
+
+test("an OFFLINE host is skipped — no download/upload is attempted through it", async () => {
+  const cfg = cfgWith({
+    proxmox: PROXMOX,
+    inventory: [
+      { name: "h1", nodeName: "pve30", slots: [] },
+      { name: "h2", nodeName: "pve40", slots: [] },
+    ],
+  } as never);
+  const refreshed: string[] = [];
+  await refreshIsoOnce(
+    cfg,
+    async (node) => {
+      refreshed.push(node);
+      return { ok: true, changed: false, iso: "FluxLive-1775071308.iso" };
+    },
+    { nodeStatuses: async () => new Map([["pve30", "offline"], ["pve40", "online"]]) }
+  );
+  assert.deepEqual(refreshed, ["pve40"]);
+  assert.equal(cfg.host.arcaneIso, "FluxLive-1775071308.iso");
+});
+
+test("only an explicit offline skips: a node missing from the listing (token cannot see it) or no listing at all is checked", async () => {
+  const cfg = cfgWith({ inventory: [{ name: "h1", nodeName: "pve99", slots: [] }] } as never);
+  let calls = 0;
+  const refresh = async () => (calls++, { ok: true, changed: false, iso: "FluxLive-1775071308.iso" });
+  await refreshIsoOnce(cfg, refresh, { nodeStatuses: async () => new Map([["pve30", "online"]]), listIsos: async () => [] });
+  assert.equal(calls, 1);
+  await refreshIsoOnce(cfg, refresh, { nodeStatuses: async () => null, listIsos: async () => [] });
+  assert.equal(calls, 2);
+});
+
+test("every refresh failed and the name is bare → it is taken from the ISO storage of the first online host", async () => {
+  const cfg = cfgWith({
+    proxmox: PROXMOX,
+    host: { ...baseHost, arcaneIso: "FluxLive.iso" },
+    inventory: [
+      { name: "h1", nodeName: "pve30", slots: [] },
+      { name: "h2", nodeName: "pve40", storageIso: "pve55-shared", slots: [] },
+    ],
+  } as never);
+  const looked: string[] = [];
+  await refreshIsoOnce(cfg, async () => ({ ok: false, error: "Upload of FluxLive-1775071308.iso failed" }), {
+    nodeStatuses: async () => new Map([["pve30", "offline"], ["pve40", "online"]]),
+    listIsos: async (_c, node, storage) => {
+      looked.push(`${node}/${storage}`);
+      return ["FluxLive-1775071308.iso"];
+    },
+  });
+  assert.deepEqual(looked, ["pve40/pve55-shared"]);
+  assert.equal(cfg.host.arcaneIso, "FluxLive-1775071308.iso");
+});

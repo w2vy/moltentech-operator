@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { Job } from "@moltentech/protocol";
 import type { AgentConfig } from "./config";
-import { inventoryHostFor, buildProvisionYaml, classifyAmFailure, amFailure, parseAmJson, redactToken, coerceVmId } from "./executor";
+import { inventoryHostFor, buildProvisionYaml, classifyAmFailure, amFailure, parseAmJson, redactToken, coerceVmId, clipMessage, AM_MESSAGE_MAX } from "./executor";
 import type { AmResult } from "./executor";
 
 // arcane-mage parses the config disk with PyYAML `yaml.safe_load`. Parse the generated
@@ -553,4 +553,15 @@ test("the Proxmox token never goes on arcane-mage's command line (argv is world-
   const argv = arcaneMageArgv(["refresh-iso", "--json", "--node", "pve50"], "https://pve50:8006");
   assert.deepEqual(argv, ["refresh-iso", "--url", "https://pve50:8006", "--json", "--node", "pve50"]);
   assert.ok(!argv.includes("--token"));
+});
+
+test("clipMessage keeps the TAIL of a long traceback — where Python puts the exception (MT-0091 10-02)", () => {
+  const frames = Array.from({ length: 200 }, (_, i) => `│ frame ${i} /usr/local/lib/python3.13/site-packages/arcane_mage/x.py:${i} │`).join("\n");
+  const text = `Traceback (most recent call last)\n${frames}\nValidationError: 1 validation error for ArcaneOsConfig\nhypervisor.iso_name\n  String should match pattern '^FluxLive-\\d{10}\\.iso$'`;
+  const out = clipMessage(text);
+  assert.ok(out.length <= AM_MESSAGE_MAX);
+  assert.match(out, /^Traceback/);
+  assert.match(out, /iso_name\n  String should match pattern/);
+  assert.match(out, /…\[cut\]…/);
+  assert.equal(clipMessage("short"), "short");
 });
