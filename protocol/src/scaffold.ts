@@ -1089,7 +1089,12 @@ export function renderFluxAppSpec(a: Answers): string {
         tiered: false,
       },
     ],
-    instances: 3,
+    // ONE instance, never more. The Coalition's courier state (items awaiting a signature,
+    // signed authorizations awaiting the agent, the node snapshot) lives in each instance's
+    // memory, and the Flux gateway spreads requests across instances: with 3, the agent
+    // pushes to one while the console or the signature lands on another, and the signature
+    // never reaches the agent (gcnlab, 2026-10-03). A Flux-redeployed instance is the cost.
+    instances: 1,
     contacts: a.providerContact ? [a.providerContact] : [],
     geolocation: [] as string[],
     expire: 22000,

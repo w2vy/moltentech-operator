@@ -352,6 +352,13 @@ test("the generated Flux app spec deploys the Coalition image the doc names", ()
   assert.deepEqual(pins, [COALITION_IMAGE], "docs/operator-onboarding.md pins a different image");
 });
 
+test("the generated Flux app spec runs ONE Coalition instance", () => {
+  // The courier state is in-memory per instance and the Flux gateway is not sticky, so a
+  // second instance splits the signing queue (gcnlab 2026-10-03, registered with 3).
+  const spec = JSON.parse(generateAll(ANSWERS)["flux-app-spec.json"]) as { instances: number };
+  assert.equal(spec.instances, 1);
+});
+
 test("AGENT_LISTING_JSON is an ARRAY the agent can parse, not the price map", () => {
   // The defect: `init` wrote TIER_PRICES_JSON's map here verbatim, so every operator's
   // agent died at startup with `ZodError: Expected array, received object`. Parse it

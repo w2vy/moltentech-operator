@@ -297,7 +297,12 @@ re-import is a silent no-op. Verify downstream — `/health`, a real checkout, o
 **Written by** `init`. **Read by** you, when registering the app on FluxOS.
 
 Version 8 spec: one `coalition` service on `w2vy/coalition:latest`, port 33001 → container
-8088, 0.5 CPU / 1000 MB / 5 GB, 3 instances, `expire: 22000`.
+8088, 0.5 CPU / 1000 MB / 5 GB, **1 instance**, `expire: 22000`.
+
+⚠️ **Keep it at 1 instance.** The Coalition holds its signing queue in memory, per instance,
+and the Flux gateway spreads requests across instances, so with more than one, a signature can
+land on an instance the agent never polls. An app registered with 3 (the default before
+fh-toolkit 0.6.18) should be updated to 1 in FluxOS (Update specifications).
 
 ⚠️ **`owner` is deliberately absent, and that is not an omission.** A Flux app is owned by
 the **ZelID you register from** — a different identity from `OWNER_ADDRESS`, and one this
