@@ -37,6 +37,9 @@ FluxOS shows for the app and `repotag` must be `w2vy/coalition:latest`.
 
 ![Import compose / spec dialog with the spec pasted](images/flux-app/02-ImportSpec.png)
 
+Check that **Instances** reads **1** after the import. Leave it there: see
+[Instances: keep it at 1](#instances-keep-it-at-1).
+
 ## 3. Enterprise on; pick a term
 
 Scroll down to **Additional Options** and switch **Enterprise** on. This encrypts the
@@ -114,6 +117,18 @@ fh-toolkit doctor --check-hub        # reports the deployed Coalition build
 
 A `503` from the Flux edge before the app is placed is normal for the first minutes;
 only an `x-coalition-version` header proves your container answered.
+
+## Instances: keep it at 1
+
+The Coalition holds its signing queue in memory, per instance, and the Flux gateway
+spreads requests across instances. With more than one, your agent pushes an item to one
+instance while your signature lands on another, and the agent never sees it. One instance
+is the design; if its node goes away, Flux places it on another.
+
+**Registered with 3?** `init` wrote 3 before fh-toolkit 0.6.18. Fix it on the existing
+app: **My Applications → your app → Update**, set **Instances** to **1**, then **Review**
+and sign. The app name, and so your URL, stays the same. Before **Review**, check the
+component's environment is still there; if it is empty, re-import `env.json` (steps 6–9).
 
 ## Changing the environment later
 
