@@ -302,7 +302,8 @@ Version 8 spec: one `coalition` service on `w2vy/coalition:latest`, port 33001 �
 ⚠️ **Keep it at 1 instance.** The Coalition holds its signing queue in memory, per instance,
 and the Flux gateway spreads requests across instances, so with more than one, a signature can
 land on an instance the agent never polls. An app registered with 3 (the default before
-fh-toolkit 0.6.18) should be updated to 1 in FluxOS (Update specifications).
+fh-toolkit 0.6.18) should be updated to 1: see
+[Instances: keep it at 1](flux-app-registration.md#instances-keep-it-at-1).
 
 ⚠️ **`owner` is deliberately absent, and that is not an omission.** A Flux app is owned by
 the **ZelID you register from** — a different identity from `OWNER_ADDRESS`, and one this

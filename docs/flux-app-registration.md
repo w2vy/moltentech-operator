@@ -126,9 +126,16 @@ instance while your signature lands on another, and the agent never sees it. One
 is the design; if its node goes away, Flux places it on another.
 
 **Registered with 3?** `init` wrote 3 before fh-toolkit 0.6.18. Fix it on the existing
-app: **My Applications → your app → Update**, set **Instances** to **1**, then **Review**
-and sign. The app name (so your URL) and the environment are unchanged; there is nothing
-to re-import.
+app:
+
+1. **My Applications → your app.**
+2. Click **SPECIFICATION** on the left, then the blue **UPDATE** button.
+3. **Instances** is a slider: drag it to the left, to **1**.
+4. Click **COMPONENTS**. The **Update** button turns green.
+5. Click **Update** and sign.
+
+The app name (so your URL) and the environment are unchanged; there is nothing to
+re-import.
 
 ## Changing the environment later
 
