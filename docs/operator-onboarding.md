@@ -830,6 +830,13 @@ the ZelID you are logged in as (it overwrites any value an imported spec supplie
 that identity is not necessarily your `OWNER_ADDRESS`. Registering through the Flux API
 directly rather than the UI is the one case where you must supply an owner yourself.
 
+The spec runs **one instance** of the Coalition, and it must stay at one. The Coalition
+keeps its signing queue in memory, and the Flux gateway spreads requests across
+instances, so with two or more a signature you make in the console can land on an
+instance your agent never polls. Do not raise **Instances** in FluxOS. An app registered
+with 3 (the `init` default before fh-toolkit 0.6.18) should be changed to 1, see
+[flux-app-registration.md → Instances](flux-app-registration.md#instances-keep-it-at-1).
+
 **1. Assemble the secrets.** Alongside `config.env` keep a private **`secrets.env`**
 (never commit, `chmod 600`):
 
