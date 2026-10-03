@@ -127,8 +127,8 @@ is the design; if its node goes away, Flux places it on another.
 
 **Registered with 3?** `init` wrote 3 before fh-toolkit 0.6.18. Fix it on the existing
 app: **My Applications → your app → Update**, set **Instances** to **1**, then **Review**
-and sign. The app name, and so your URL, stays the same. Before **Review**, check the
-component's environment is still there; if it is empty, re-import `env.json` (steps 6–9).
+and sign. The app name (so your URL) and the environment are unchanged; there is nothing
+to re-import.
 
 ## Changing the environment later
 
