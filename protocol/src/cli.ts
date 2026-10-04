@@ -2326,13 +2326,38 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
         operatorText = upsertEnvLine(operatorText, "PROXMOX_STORAGE_ISO", first.storageIso);
         if (Object.keys(prices).length > 0) {
           // The listing's counts follow the stock-take: a tier that offered ALL its slots
-          // keeps offering all of them; a deliberate hold-back is kept, clamped to what
-          // is now declared so the listing never oversells.
+          // keeps offering all of them. A hold-back (fewer offered than declared) is ASKED
+          // about at a terminal — it is as often a forgotten update as a throttle, and
+          // keeping it silently left a slot off the marketplace (nimbus 6 of 7, 2026-10-04).
+          // Kept, it is clamped to what is now declared so the listing never oversells.
+          // The scripted path (--hosts) cannot ask and keeps it.
           const before = readListing(operatorText);
           const counts = slotCountsByTier(a);
-          const listing = mergeListing(before, prices, counts).map((e) => {
+          const merged = mergeListing(before, prices, counts);
+          const heldBack = merged.flatMap((e) => {
             const was = before.find((b) => b.tier === e.tier);
             const now = counts[e.tier] ?? 0;
+            if (!was || was.availableSlots >= (od.slotCounts[e.tier] ?? 0)) return [];
+            const kept = Math.min(was.availableSlots, now);
+            return kept < now ? [{ tier: e.tier, kept, now }] : [];
+          });
+          const keep = new Set<string>();
+          if (!hostsPath && heldBack.length > 0) {
+            await withPrompts(ctx, async (ask) => {
+              for (const h of heldBack) {
+                const answer = await ask(
+                  `\n${h.tier}: the listing offers ${h.kept} of the ${h.now} slots declared. Keep holding ${h.now - h.kept} back? [y/N]`,
+                  "N"
+                );
+                if (answer.toLowerCase().startsWith("y")) keep.add(h.tier);
+              }
+            });
+          }
+          const listing = merged.map((e) => {
+            const was = before.find((b) => b.tier === e.tier);
+            const now = counts[e.tier] ?? 0;
+            const held = heldBack.find((h) => h.tier === e.tier);
+            if (held) return { ...e, availableSlots: hostsPath || keep.has(e.tier) ? held.kept : now };
             if (!was || was.availableSlots >= (od.slotCounts[e.tier] ?? 0)) return { ...e, availableSlots: now };
             return { ...e, availableSlots: Math.min(was.availableSlots, now) };
           });
