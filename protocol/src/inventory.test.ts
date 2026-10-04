@@ -148,6 +148,26 @@ test("interactive re-run over an existing file is Enter-through and reproduces i
   assert.match(log, /Nothing to change/);
 });
 
+test("interactive re-run asks about a hold-back: Enter lists every slot, y keeps it", async () => {
+  for (const [reply, expected] of [["", 2], ["y", 1]] as const) {
+    const dir = await scaffolded();
+    const opPath = join(dir, ".env.operator");
+    // No token secret → no survey; the listing offers 1 of the 2 declared slots.
+    writeFileSync(
+      opPath,
+      readFileSync(opPath, "utf8")
+        .replace(/^PROXMOX_TOKEN_SECRET=.*$/m, "PROXMOX_TOKEN_SECRET=")
+        .replace(/^AGENT_LISTING_JSON=.*$/m, 'AGENT_LISTING_JSON=[{"tier":"cumulus","priceCents":700,"availableSlots":1}]')
+    );
+    const answers = [...Array<string>(16).fill(""), reply];
+    const { ctx, transcript } = ctxFor(dir, answers);
+    const { result, log } = await quiet(() => runCommand("inventory", ["--dir", dir], ctx));
+    assert.equal(result, 0, log);
+    assert.match(transcript(), /cumulus: the listing offers 1 of the 2 slots declared\. Keep holding 1 back\? \[y\/N\]/);
+    assert.deepEqual(readListing(readFileSync(opPath, "utf8")), [{ tier: "cumulus", priceCents: 700, availableSlots: expected }], `reply ${JSON.stringify(reply)}`);
+  }
+});
+
 test("interactive re-run: a second host typed at the first prompt, the rest defaulted", async () => {
   const dir = await scaffolded();
   rmSync(join(dir, ".env.operator"));

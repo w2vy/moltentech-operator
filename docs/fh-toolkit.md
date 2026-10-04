@@ -685,6 +685,10 @@ that is no longer in it is named on the way out, because the agent is upsert-onl
 hub keeps the record until you retire it in the console. `--hosts <file>` takes the
 `hosts` array of an `init --answers` file for scripted use.
 
+**A hold-back is asked about.** When `AGENT_LISTING_JSON` offers a tier fewer slots than
+it declares, the run asks `Keep holding N back? [y/N]`. Enter lists every declared slot;
+`y` keeps the hold-back, clamped to what is declared. `--hosts` cannot ask and keeps it.
+
 **Flux nodes you already run.** With a survey, each host first lists its VMs sized like a
 Flux node (not already a slot, not built by the hub) and asks which ones you want to keep.
 Each one you pick is placed on a slot: give it the WAN IP and API port it already answers on,

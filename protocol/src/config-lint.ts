@@ -907,7 +907,7 @@ export function lintListingCapacity(
         message:
           `${tier}: AGENT_LISTING_JSON offers ${offered} of the ${have} slots inventory.json declares. ` +
           "Fine if that is a deliberate throttle; if not, the marketplace shows fewer free slots " +
-          "than you have. `fh-toolkit inventory` sets it to the full count.",
+          "than you have. `fh-toolkit inventory` asks whether to keep it; answer N to list the full count.",
       });
     }
   }
