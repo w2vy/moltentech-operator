@@ -50,6 +50,13 @@ test("trailing slash and host case do not make my own endpoint look foreign", ()
   );
 });
 
+test("app. and app2.runonflux.io are the same Coalition — neither FOREIGN nor NOT_REGISTERED", () => {
+  // prod 2026-10-04: endpoint registered on app., COALITION_URL on app2.
+  const app2 = "https://coalition-moltentech.app2.runonflux.io/";
+  assert.deepEqual(rules(classifyEndpoints([{ url: "https://coalition-moltentech.app.runonflux.io/webhook", status: "enabled" }], app2, "live")), []);
+  assert.deepEqual(rules(classifyEndpoints([{ url: `${app2}webhook`, status: "enabled" }], MINE)), ["STRIPE_WEBHOOK_FOREIGN_COALITION", "STRIPE_WEBHOOK_NOT_REGISTERED"], "a different app name is still foreign");
+});
+
 test("a disabled rival Coalition is not flagged — Stripe delivers to enabled endpoints only", () => {
   assert.deepEqual(
     rules(

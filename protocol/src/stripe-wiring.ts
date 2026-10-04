@@ -26,11 +26,18 @@ export interface StripeEndpoint {
   status: string;
 }
 
-/** Normalize for comparison: scheme+host+path, no trailing slash, case-folded host. */
+/**
+ * Normalize for comparison: scheme+host+path, no trailing slash, case-folded host.
+ * Flux serves every app on each of its gateway domains — `<app>.app.runonflux.io` and
+ * `<app>.app2.runonflux.io` are the SAME Coalition — so the `appN` label folds to `app`.
+ * Comparing them raw reported one Coalition as both FOREIGN and NOT_REGISTERED (prod,
+ * 2026-10-04: endpoint on `app.`, COALITION_URL on `app2.`).
+ */
 function normalizeUrl(raw: string): string {
   try {
     const u = new URL(raw);
-    return `${u.protocol}//${u.host.toLowerCase()}${u.pathname.replace(/\/$/, "")}`;
+    const host = u.host.toLowerCase().replace(/^([^.]+)\.app\d*\.runonflux\.io$/, "$1.app.runonflux.io");
+    return `${u.protocol}//${host}${u.pathname.replace(/\/$/, "")}`;
   } catch {
     return raw.trim().replace(/\/$/, "");
   }
