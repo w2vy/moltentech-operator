@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { Job } from "@moltentech/protocol";
 import type { AgentConfig } from "./config";
-import { inventoryHostFor, buildProvisionYaml, classifyAmFailure, amFailure, parseAmJson, redactToken, coerceVmId, clipMessage, AM_MESSAGE_MAX } from "./executor";
+import { inventoryHostFor, buildProvisionYaml, classifyAmFailure, amFailure, provisionStorages, storageLine, parseAmJson, redactToken, coerceVmId, clipMessage, AM_MESSAGE_MAX } from "./executor";
 import type { AmResult } from "./executor";
 
 // arcane-mage parses the config disk with PyYAML `yaml.safe_load`. Parse the generated
@@ -367,6 +367,22 @@ test("failure message leads with the failed step, not the generic error", () => 
   assert.match(msg, /^\[step\] Node 'pve25' is offline in cluster/);
   // stderr is retained for debugging, but demoted below the real signal.
   assert.ok(msg.indexOf("pydantic noise") > msg.indexOf("[step]"));
+});
+
+test("⭐ a provision failure names the three storages it used, under the step (2026-10-05)", () => {
+  const st = { images: "local-lvm", iso: "local", import: "local" };
+  const msg = amFailure(amRun(["Storage type missing on hypervisor"], { stderr: "x".repeat(10_000) }), storageLine(st));
+  assert.match(msg, /^\[step\] Storage type missing on hypervisor\n\n\[storage\] images=local-lvm iso=local import=local/);
+});
+
+test("the storages reported are the ones the YAML wrote: slot storagePool wins for images", () => {
+  const h = { storageImages: "env-images", storageIso: "env-iso", storageImport: "local" } as Parameters<typeof provisionStorages>[1];
+  assert.deepEqual(provisionStorages({ slot: { storagePool: "nvme1" } } as Parameters<typeof provisionStorages>[0], h), {
+    images: "nvme1",
+    iso: "env-iso",
+    import: "local",
+  });
+  assert.equal(provisionStorages({ slot: {} } as Parameters<typeof provisionStorages>[0], h).images, "env-images");
 });
 
 test("parseAmJson survives stray stdout above the payload", () => {

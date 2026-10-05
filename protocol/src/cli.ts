@@ -2752,6 +2752,8 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
           // fails every benchmark with nothing in any log to say why.
           const images = operator.PROXMOX_STORAGE_IMAGES;
           const iso = operator.PROXMOX_STORAGE_ISO;
+          // Same default as the agent (agent/src/config.ts): unset means `local`.
+          const importStore = operator.PROXMOX_STORAGE_IMPORT || "local";
           for (const [node, options] of Object.entries(probe.survey?.storages ?? {})) {
             const chosen = options.find((o) => o.id === images);
             if (chosen?.rotational === true) {
@@ -2771,6 +2773,10 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
             for (const [name, id, need] of [
               ["PROXMOX_STORAGE_ISO", iso, "iso"],
               ["PROXMOX_STORAGE_IMAGES", images, "images"],
+              // The third storage arcane-mage validates. Unchecked until 2026-10-05, when an
+              // operator's provision failed "Storage type missing on hypervisor" with ISO and
+              // images both passing here.
+              ["PROXMOX_STORAGE_IMPORT", importStore, "import"],
             ] as const) {
               const problem = storageContentProblem(id ?? "", options, need);
               if (problem) {
