@@ -69,6 +69,24 @@ export function effectiveHost(cfg: AgentConfig, inventoryHost?: InventoryHost): 
   };
 }
 
+/**
+ * The three storages a provision names, resolved exactly as the YAML writes them. One source
+ * for both, so the failure message can never report a storage the YAML did not use.
+ */
+export function provisionStorages(job: Job, h: AgentConfig["host"]): { images: string; iso: string; import: string } {
+  return { images: job.slot.storagePool ?? h.storageImages, iso: h.storageIso, import: h.storageImport };
+}
+
+/**
+ * The failure-message line naming those storages. arcane-mage refuses a wrong one with
+ * `Storage type missing on hypervisor`, which names none, and the YAML that held them is
+ * deleted after the run — so without this line the admin log cannot say which storage it was
+ * (2026-10-05: answering that took a round trip to the operator).
+ */
+export function storageLine(st: ReturnType<typeof provisionStorages>): string {
+  return `[storage] images=${st.images} iso=${st.iso} import=${st.import}`;
+}
+
 /** The declared host row for a slot's Proxmox node, by `nodeName` then `name`. */
 export function inventoryHostFor(hosts: InventoryHost[], nodeName: string): InventoryHost | undefined {
   return hosts.find((h) => h.nodeName === nodeName) ?? hosts.find((h) => h.name === nodeName);
@@ -100,9 +118,10 @@ export function buildProvisionYaml(job: Job, cfg: AgentConfig, vmIdOverride?: nu
   L.push(`      node_tier: ${yamlStr(slot.tier)}`);
   L.push(`      network: ${yamlStr(slot.network ?? h.network)}`);
   L.push(`      iso_name: ${yamlStr(h.arcaneIso)}`);
-  L.push(`      storage_images: ${yamlStr(slot.storagePool ?? h.storageImages)}`);
-  L.push(`      storage_iso: ${yamlStr(h.storageIso)}`);
-  L.push(`      storage_import: ${yamlStr(h.storageImport)}`);
+  const st = provisionStorages(job, h);
+  L.push(`      storage_images: ${yamlStr(st.images)}`);
+  L.push(`      storage_iso: ${yamlStr(st.iso)}`);
+  L.push(`      storage_import: ${yamlStr(st.import)}`);
   L.push("      start_on_creation: true");
   if (vmId != null) L.push(`      vm_id: ${vmId}`);
   if (slot.startupConfig) L.push(`      startup_config: ${yamlStr(slot.startupConfig)}`);
@@ -402,10 +421,12 @@ export function clipMessage(text: string, max = AM_MESSAGE_MAX): string {
   return text.slice(0, head) + marker + text.slice(text.length - tail);
 }
 
-export function amFailure(r: AmResult): string {
+export function amFailure(r: AmResult, context?: string): string {
   const parts: string[] = [];
   const steps = failedSteps(r);
   if (steps.length) parts.push(steps.map((s) => `[step] ${s}`).join("\n"));
+  // Right under the steps, inside clipMessage's kept head.
+  if (context) parts.push(context);
   for (const s of [r.json?.error, r.error?.message, r.stderr]) {
     const t = s?.trim();
     if (t && !parts.includes(t)) parts.push(t);
@@ -498,14 +519,15 @@ async function provision(job: Job, cfg: AgentConfig): Promise<ExecResult> {
   // A bare `FluxLive.iso` (env value after a restart, refresh not yet succeeded) fails
   // arcane-mage's config validation; the node being provisioned is online, so read the real
   // name off its ISO storage first (MT-0091, 2026-10-02).
-  await ensureDatedIso(cfg, job.slot.nodeName, effectiveHost(cfg, invHost).storageIso);
+  const host = effectiveHost(cfg, invHost);
+  await ensureDatedIso(cfg, job.slot.nodeName, host.storageIso);
   writeFileSync(yamlPath, buildProvisionYaml(job, cfg, rotated, invHost), { mode: 0o600 });
   try {
     const r = await runArcaneMage(["provision", "--json", "-c", yamlPath], cfg, TIMEOUT.provision);
     const ok = r.json?.ok === true;
     return {
       ok,
-      message: ok ? undefined : amFailure(r),
+      message: ok ? undefined : amFailure(r, storageLine(provisionStorages(job, host))),
       vmId: coerceVmId(r.json?.vm_id),
       failureClass: ok ? undefined : classifyAmFailure(r),
     };
