@@ -1068,8 +1068,10 @@ would fail their benchmarks. Other running VMs, a gateway say, stay on and are l
 Burn VMs have no network; they are template 9900 and VMs 9901 and up, tagged `fh-burn`,
 and are destroyed at the end, on Ctrl-C, or if the ssh session drops. The template and the
 fh-burner download (`/var/lib/vz/fh-burn`) go with them, since a host that passes gets its
-nodes next; a re-run fetches ~375 MB again. Results stay on the host in `/var/tmp/fh-burn/`. It takes about 3 minutes per VM, double that if it re-runs at
-90%; for a long one, run it inside `tmux` on the host.
+nodes next; a re-run fetches ~375 MB again. Results stay on the host in `/var/tmp/fh-burn/`. It takes about 3 minutes per ramp
+step, double that if it re-runs at 90%. Up to 8 VMs the ramp adds one VM per step; above 8 it
+adds up to 4 per step until the last 4 (16 VMs: 4, 8, 12, 13, 14, 15, 16 = 7 steps). For a long
+one, run it inside `tmux` on the host.
 
 ```sh
 fh-toolkit burn pve1 --plan nimbus:1            # what to burn, instead of the inventory's slots
