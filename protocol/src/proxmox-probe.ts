@@ -657,7 +657,7 @@ export function isoStorages(options: StorageOption[]): StorageOption[] {
 export function storageContentProblem(
   id: string,
   options: StorageOption[],
-  need: "iso" | "images"
+  need: "iso" | "images" | "import"
 ): string | undefined {
   if (!id || options.length === 0) return undefined;
   const found = options.find((o) => o.id === id);
@@ -671,7 +671,11 @@ export function storageContentProblem(
       (need === "iso"
         ? `The agent would find no ArcaneOS ISO there, and the provision fails later inside ` +
           `arcane-mage on an empty iso_name rather than here.`
-        : `VM disks cannot be created on it.`)
+        : need === "import"
+          ? `arcane-mage imports the EFI and config images through it, and refuses the provision ` +
+            `with "Storage type missing on hypervisor", which names no storage. Enable "Import" ` +
+            `in Datacenter → Storage → ${id} → Content.`
+          : `VM disks cannot be created on it.`)
     );
   }
   // Ordered after the content check on purpose: a storage that is BOTH the wrong type and

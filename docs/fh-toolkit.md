@@ -888,6 +888,17 @@ DOC_DEFAULT_STORAGE_IS_HDD  PROXMOX_STORAGE_IMAGES="local-lvm" is ROTATIONAL on 
 in any log to say why**. `init` runs this at the moment the token is typed; the flag is
 for re-runs and for a directory filled in by hand.
 
+It also checks that each storage can hold what it is named for — `PROXMOX_STORAGE_ISO` →
+`iso`, `PROXMOX_STORAGE_IMAGES` → `images`, `PROXMOX_STORAGE_IMPORT` (default `local`) →
+`import`:
+
+```
+STORAGE_CANNOT_HOLD_CONTENT  PROXMOX_STORAGE_IMPORT on pve30: "local" is dir and cannot hold import content …
+```
+
+A miss on any of the three fails the provision inside arcane-mage with
+`Storage type missing on hypervisor`, which does not say which storage.
+
 ### `--check-stripe`
 
 The only check that puts a secret in memory and the only one that talks to a third party.
@@ -1302,7 +1313,7 @@ configuration. Read it before anything else:
 | `PROXMOX_NETWORK` | `vmbr0` | the default for a host whose inventory row and slot declare no `network` (agent ≥ 0.11.24; older agents used it for every host) |
 | `PROXMOX_STORAGE_IMAGES` | `local-lvm` | same rule — a default under the slot's `storagePool` and the host's `storageImages`. ⚠️ the default is frequently the spinning disk — see `--check-proxmox` |
 | `PROXMOX_STORAGE_ISO` | `local` | default under the host's `storageIso`; must be readable by every host |
-| `PROXMOX_STORAGE_IMPORT` | `local` | |
+| `PROXMOX_STORAGE_IMPORT` | `local` | must have **Import** content enabled — `doctor --check-proxmox` checks it |
 | `ARCANE_ISO` | `FluxLive.iso` | ⚠️ the default matches **no real file** — published builds are dated, e.g. `FluxLive-1775071308.iso`. Set the exact filename in `PROXMOX_STORAGE_ISO`, or declare inventory and let ISO auto-refresh fill it in. `doctor --check-proxmox` FAILs while it is wrong |
 | `OPERATOR_SSH_PUBKEY` | `""` | |
 | `CONSOLE_PASSWORD_HASH` | `!` | |

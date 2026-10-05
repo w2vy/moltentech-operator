@@ -29,6 +29,16 @@ test("⭐ a storage that cannot hold the content it is named for is caught, with
   assert.equal(storageContentProblem("local-lvm", options, "images"), undefined);
 });
 
+// ── 2026-10-05: same arcane-mage message, the import half ─────────────────────────────
+test("⭐ an import storage without import content is caught, and names the fix", () => {
+  const options = [opt({ id: "local", content: ["iso", "backup"] })];
+  const problem = storageContentProblem("local", options, "import");
+  assert.ok(problem, "local without import content fails arcane-mage's storage check");
+  assert.match(problem, /cannot hold import/);
+  assert.match(problem, /Storage type missing on hypervisor/);
+  assert.equal(storageContentProblem("local", [opt({ id: "local", content: ["iso", "import"] })], "import"), undefined);
+});
+
 test("a storage the token cannot see is named as such, and lists what it can", () => {
   const problem = storageContentProblem("pve55-shared", [opt({ id: "local", content: ["iso"] })], "iso");
   assert.match(problem!, /not a storage this token can see/);
