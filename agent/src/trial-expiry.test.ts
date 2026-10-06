@@ -7,13 +7,15 @@
  * node on schedule, silently.
  */
 
-import { test } from "node:test";
+import { test, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
   shouldSelfDestruct,
   parseUntilChip,
   MAX_OVERDUE_MS,
   FREE_CHIP,
+  parseDescriptionDeadline,
+  wantsDescriptionDeadline,
 } from "./trial-expiry";
 import { parseVmTags, ownedVmsForNode } from "./health";
 
@@ -150,4 +152,56 @@ test("a vmid Proxmox returns as a STRING is normalised to a number", () => {
     { name: "ms-186-c6", status: "running", tags: "", vmid: "101" },
   ]);
   assert.equal(owned[0]?.vmid, 101);
+});
+
+// Loans v2.1 — the minute-precise deadline from the VM's own Notes (MT-0160 ran ~12 h past term).
+describe("parseDescriptionDeadline", () => {
+  const notes = (term: string) =>
+    ["# flux-hub", "kind:     free", "rental:   MT-0160", "tier:     cumulus", "created:  2026-10-01T11:48Z", `term:     ${term}`].join("\n");
+
+  it("reads the header's `fixed — until` instant", () => {
+    assert.equal(parseDescriptionDeadline(notes("fixed — until 2026-10-02T11:48Z"))?.toISOString(), "2026-10-02T11:48:00.000Z");
+  });
+  it("is null for every other term and for junk", () => {
+    assert.equal(parseDescriptionDeadline(notes("open-ended (ended by hand)")), null);
+    assert.equal(parseDescriptionDeadline(notes("recurring (monthly)")), null);
+    assert.equal(parseDescriptionDeadline(notes("fixed — until 2026-02-31T11:48Z")), null);
+    assert.equal(parseDescriptionDeadline(notes("fixed — until 2026-10-02T25:00Z")), null);
+    assert.equal(parseDescriptionDeadline(null), null);
+    assert.equal(parseDescriptionDeadline(""), null);
+  });
+  it("never reads below the signed-record delimiter", () => {
+    const text = ["# flux-hub", "kind: free", "--- signed ---", "term: fixed — until 2026-10-02T11:48Z"].join("\n");
+    assert.equal(parseDescriptionDeadline(text), null);
+  });
+});
+
+describe("wantsDescriptionDeadline", () => {
+  const tags = ["flux-hub", "free", "cumulus", "until-2026-10-02"];
+  it("only on the chip's own UTC day, for a free VM", () => {
+    assert.equal(wantsDescriptionDeadline(tags, new Date("2026-10-01T23:59:59Z")), false, "day before");
+    assert.equal(wantsDescriptionDeadline(tags, new Date("2026-10-02T00:00:00Z")), true);
+    assert.equal(wantsDescriptionDeadline(tags, new Date("2026-10-02T23:59:59Z")), true);
+    assert.equal(wantsDescriptionDeadline(tags, new Date("2026-10-03T00:00:01Z")), false, "chip alone destroys now");
+    assert.equal(wantsDescriptionDeadline(["flux-hub", "paid", "until-2026-10-02"], new Date("2026-10-02T12:00:00Z")), false);
+  });
+});
+
+describe("shouldSelfDestruct with the Notes deadline", () => {
+  const tags = ["flux-hub", "free", "cumulus", "until-2026-10-02"];
+  const precise = new Date("2026-10-02T11:48:00Z");
+  it("destroys at the minute when both stamps name the same day", () => {
+    assert.equal(shouldSelfDestruct(tags, new Date("2026-10-02T11:47:00Z"), { descriptionDeadline: precise }).destroy, false);
+    const v = shouldSelfDestruct(tags, new Date("2026-10-02T11:49:00Z"), { descriptionDeadline: precise });
+    assert.equal(v.destroy, true);
+    assert.equal(v.destroy && v.deadline.toISOString(), precise.toISOString());
+  });
+  it("ignores a Notes deadline on another day — the chip's end of day stands", () => {
+    const other = new Date("2026-10-01T11:48:00Z");
+    assert.equal(shouldSelfDestruct(tags, new Date("2026-10-02T12:00:00Z"), { descriptionDeadline: other }).destroy, false);
+  });
+  it("still needs the `free` chip", () => {
+    const v = shouldSelfDestruct(["flux-hub", "paid", "until-2026-10-02"], new Date("2026-10-02T12:00:00Z"), { descriptionDeadline: precise });
+    assert.deepEqual(v, { destroy: false, reason: "not-free" });
+  });
 });

@@ -114,6 +114,20 @@ export async function getStorageIsoNames(cfg: AgentConfig, node: string, storage
     .map((v) => v.volid!.slice(v.volid!.lastIndexOf("/") + 1));
 }
 
+/**
+ * A VM's Notes (`GET /nodes/{node}/qemu/{vmid}/config` → `description`), or null when it has
+ * none. Read back FROM PROXMOX — the VM's own state — for the minute-precise loan deadline
+ * (trial-expiry.ts `parseDescriptionDeadline`). Needs `VM.Audit`, which the health listing
+ * already uses.
+ */
+export async function getVmDescription(cfg: AgentConfig, nodeName: string, vmid: number): Promise<string | null> {
+  const raw = await getJson<{ description?: string }>(
+    cfg,
+    `/api2/json/nodes/${encodeURIComponent(nodeName)}/qemu/${vmid}/config`
+  );
+  return typeof raw?.description === "string" ? raw.description : null;
+}
+
 /** GET the VM list for one Proxmox node via the local API token. */
 export function getQemuList(cfg: AgentConfig, nodeName: string): Promise<Vm[]> {
   return getJson<Vm[]>(cfg, `/api2/json/nodes/${encodeURIComponent(nodeName)}/qemu`);

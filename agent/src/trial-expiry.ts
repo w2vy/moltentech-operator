@@ -70,6 +70,51 @@ export function parseUntilChip(chip: string): Date | null {
   return at;
 }
 
+/**
+ * Loans v2.1 — the minute-precise deadline the hub writes into the VM's Notes beside the chip:
+ * the header line `term:  fixed — until 2026-10-02T11:48Z` (protocol `buildVmDescription`).
+ *
+ * Why: the chip is a DATE, so a loan whose term ends 07:48 ET ran until 19:59 ET (MT-0160,
+ * 2026-10-02) and the borrower's node waited that long to come home. The Notes are the VM's own
+ * Proxmox state like the tag — MT cannot rewrite them after create — so reading them back from
+ * Proxmox carries the same binding (never the job's `vmDescription`; see
+ * vm-annotation-not-a-gate.test.ts). Only the `# flux-hub` header is read: the first `term:` line
+ * ABOVE any `--- signed ---` delimiter.
+ *
+ * Returns null for anything but exactly `fixed — until YYYY-MM-DDTHH:MMZ`.
+ */
+const TERM_RE = /^term:\s+fixed — until (\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})Z\s*$/;
+
+export function parseDescriptionDeadline(description: string | null | undefined): Date | null {
+  if (!description) return null;
+  for (const raw of description.split("\n")) {
+    const line = raw.trim();
+    if (line === "--- signed ---") break;
+    const m = TERM_RE.exec(line);
+    if (!m) continue;
+    const [y, mo, d, h, mi] = [m[1], m[2], m[3], m[4], m[5]].map(Number) as [number, number, number, number, number];
+    if (mo < 1 || mo > 12 || d < 1 || d > 31 || h > 23 || mi > 59) return null;
+    const at = new Date(Date.UTC(y, mo - 1, d, h, mi, 0, 0));
+    if (at.getUTCMonth() !== mo - 1 || at.getUTCDate() !== d) return null;
+    return at;
+  }
+  return null;
+}
+
+/**
+ * Is it worth reading this VM's Notes now? Only on the chip's own UTC day, for a VM the chip
+ * fences already accept: before that day nothing can be due, after it the chip alone destroys.
+ * So the extra Proxmox call is at most one per loan/trial VM per cycle, on one day.
+ */
+export function wantsDescriptionDeadline(tags: string[], now: Date): boolean {
+  if (!tags.includes(FREE_CHIP)) return false;
+  const chip = tags.find((t) => t.startsWith("until-"));
+  const endOfDay = chip ? parseUntilChip(chip) : null;
+  if (!endOfDay) return false;
+  const startOfDay = endOfDay.getTime() - (24 * 60 * 60 * 1000 - 1);
+  return now.getTime() >= startOfDay && now.getTime() <= endOfDay.getTime();
+}
+
 export type DestructVerdict =
   | { destroy: true; deadline: Date }
   | { destroy: false; reason: "no-deadline" | "not-free" | "unparseable" | "not-yet" | "too-stale" };
@@ -97,7 +142,15 @@ export type DestructVerdict =
 export function shouldSelfDestruct(
   tags: string[],
   now: Date,
-  opts: { maxOverdueMs?: number } = {}
+  opts: {
+    maxOverdueMs?: number;
+    /**
+     * `parseDescriptionDeadline` of the VM's own Notes. Used only when it falls on the SAME UTC
+     * day as the chip — two independent stamps agreeing, like fence 2 — and then it replaces the
+     * end-of-day reading. Any disagreement keeps the chip's (later) deadline: the safe direction.
+     */
+    descriptionDeadline?: Date | null;
+  } = {}
 ): DestructVerdict {
   const maxOverdueMs = opts.maxOverdueMs ?? MAX_OVERDUE_MS;
 
@@ -108,8 +161,11 @@ export function shouldSelfDestruct(
   // the more alarming of the two reasons.
   if (!tags.includes(FREE_CHIP)) return { destroy: false, reason: "not-free" };
 
-  const deadline = parseUntilChip(untilChip);
-  if (!deadline) return { destroy: false, reason: "unparseable" };
+  const chipDeadline = parseUntilChip(untilChip);
+  if (!chipDeadline) return { destroy: false, reason: "unparseable" };
+  const precise = opts.descriptionDeadline;
+  const deadline =
+    precise && precise.toISOString().slice(0, 10) === chipDeadline.toISOString().slice(0, 10) ? precise : chipDeadline;
 
   const overdueMs = now.getTime() - deadline.getTime();
   if (overdueMs <= 0) return { destroy: false, reason: "not-yet" };

@@ -6,8 +6,8 @@ import { MtClient, type MtClientAuth } from "./client";
 import { CoalitionClient } from "./coalition-client";
 import { loadManifestKey } from "./signing";
 import { pickExecutor, deprovisionVm } from "./executor";
-import { collectOwnedVms, type OwnedVm } from "./health";
-import { shouldSelfDestruct } from "./trial-expiry";
+import { collectOwnedVms, getVmDescription, type OwnedVm } from "./health";
+import { parseDescriptionDeadline, shouldSelfDestruct, wantsDescriptionDeadline } from "./trial-expiry";
 import { refreshIsoOnce } from "./iso-refresh";
 import { runDetached } from "./background";
 import { runPreflight, formatPreflight, checkManifestKey } from "./preflight";
@@ -221,7 +221,17 @@ async function main() {
     const now = new Date();
     for (const vm of vms) {
       if (vm.status === "missing") continue; // nothing to destroy
-      const verdict = shouldSelfDestruct(vm.tags, now);
+      // Loans v2.1: on the chip's own day, the minute-precise deadline from the VM's Notes.
+      let descriptionDeadline: Date | null = null;
+      if (vm.vmid != null && wantsDescriptionDeadline(vm.tags, now)) {
+        try {
+          descriptionDeadline = parseDescriptionDeadline(await getVmDescription(cfg, vm.nodeName, vm.vmid));
+        } catch (err) {
+          // The chip's end-of-day still applies; this only ever makes a deadline EARLIER.
+          console.error(`[trial-expiry] ${vm.vmName}: could not read Notes — ${(err as Error).message}`);
+        }
+      }
+      const verdict = shouldSelfDestruct(vm.tags, now, { descriptionDeadline });
       if (!verdict.destroy) {
         // `not-free` and `too-stale` mean a VM carries a deadline the fences refused to act on —
         // a stamp-builder bug or a bad clock, either way something a human should see. The other
