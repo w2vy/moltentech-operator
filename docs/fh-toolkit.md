@@ -660,7 +660,7 @@ name). Customers then pay FLUX straight to it; the hub quotes the tier's USD pri
 watches the chain for the payment and mints the rental — Flux Hub never holds the coins and
 takes no cut. With it set, Stripe is optional (`env` writes `FLUX_PAYMENTS=true` and the
 Coalition boots without keys; card payments stay off until you add them). Unlike a price it
-IS a manifest field, so the closing steps say `fh-toolkit sign` → re-paste at `/onboard`.
+IS a manifest field, so the closing steps say `fh-toolkit sign` → `env` + re-import (or paste at `/onboard`).
 `--flux-address ""` turns it off. `doctor` errors on a login address
 (`FLUX_PAYOUT_IS_ZELID`), a bad checksum (`FLUX_PAYOUT_ADDRESS_INVALID`), and on paid tiers
 with no Stripe line and no address (`PAID_TIERS_NO_PAYMENT_RAIL`).
@@ -779,23 +779,25 @@ rather than leaving a half-applied upgrade behind.
 ### What you still have to do
 
 `PROVIDER_LEVEL` is in the signed manifest, so the change does not reach Flux Hub until
-you re-sign and re-submit. The command prints the steps; they are also here:
+you re-sign and publish the new manifest. The command prints the steps; they are also here:
 
 1. `fh-toolkit sign`
-2. paste `manifest.json` at `<MT_BASE_URL>/onboard` and sign with your owner wallet
-   — **this** is where Flux Hub re-ingests you
+2. `fh-toolkit env`, re-import `env.json` into the Flux app, redeploy — your Coalition now
+   publishes the new manifest (`MANIFEST_JSON`), and Flux Hub's manifest watch ingests it
+   within 15 minutes. *Faster:* also paste `manifest.json` at `<MT_BASE_URL>/onboard` and
+   sign with your owner wallet; that applies at once.
 3. register a Stripe webhook endpoint at `<your coalition>/webhook`, then
    `fh-toolkit doctor --check-stripe` (which catches a key from the wrong account)
-4. `fh-toolkit env`, re-import `env.json` into the Flux app, redeploy
+4. once the Stripe keys are in: `fh-toolkit env`, re-import `env.json`, redeploy again
 5. `fh-agent restart` in your operator directory, so the agent starts asserting the
    new listing
 
-The command performs no network writes and signs nothing. Only your browser can complete
-step 2, so it reports what it *wrote* — never what the hub now believes.
+The command performs no network writes and signs nothing, so it reports what it *wrote* —
+never what the hub now believes.
 
-`README.txt` still describes your old level afterwards. It is generated documentation,
-not configuration; nothing reads it, and the command says so rather than leaving you to
-wonder.
+`README.txt` moves with the level: its "You are a Flux Hub …" line and the seller-only
+price note are edited in place, and the rest of the file (including any notes you added)
+is left alone. A README the command does not recognise is left unchanged, and it says so.
 
 ### The downgrade
 
@@ -1349,7 +1351,7 @@ store. It is not a middlebox on your network and not a Proxmox certificate probl
 | I edited `config.env` | `sign`, then `env`, then re-import to Flux |
 | I changed a price | `stripe --price <tier>=<usd>` → `env` → re-import → `fh-agent restart`. **No re-sign** (prices are not in the manifest) |
 | Stripe minted my webhook secret | `stripe --stripe-webhook whsec_…` |
-| I added a Proxmox host or slot | `inventory` (Enter through the rest) → **re-paste at `/onboard`** → `env` → re-import |
+| I added a Proxmox host or slot | `inventory` (Enter through the rest) → `env` → re-import (hub reads it within 15 min; or paste at `/onboard`) |
 | I rotated the Proxmox token | `proxmox`, then `fh-agent restart` |
 | Build the directory without the wizard | `keygen` → `slug` → `proxmox` → `stripe` → `inventory` → `sign` |
 | Ready to deploy the Coalition | `env` → import `env.json` into the Flux app (**enterprise**) |
@@ -1357,6 +1359,6 @@ store. It is not a middlebox on your network and not a Proxmox certificate probl
 | Checkout is failing and nothing looks wrong | `doctor --check-hub --check-stripe` |
 | I changed `.env.operator` | `fh-agent restart` |
 | Someone handed me a manifest | `verify --in <file>` |
-| I want to start selling hardware | `level --set operator` → `sign` → re-paste at `/onboard` |
-| I want to stop selling | `level --set supporter` → `sign` → re-paste at `/onboard` |
+| I want to start selling hardware | `level --set operator` → `sign` → `env` → re-import |
+| I want to stop selling | `level --set supporter` → `sign` → `env` → re-import |
 | Several of the above, back to back | `fh-toolkit` with no arguments — one session |

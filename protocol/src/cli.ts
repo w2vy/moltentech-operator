@@ -2866,6 +2866,8 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
       // "for sale" the agent actually asserts — see planLevelChange for the 2026-09-10 miss.
       const operatorPath = join(dir, ".env.operator");
       const operatorText = existsSync(operatorPath) ? readFileSync(operatorPath, "utf8") : undefined;
+      const readmePath = join(dir, "README.txt");
+      const readmeText = existsSync(readmePath) ? readFileSync(readmePath, "utf8") : undefined;
       const invSrc = locateInventory(dir);
       const inventoryPath = join(dir, invSrc.relPath);
       const inventoryText = invSrc.inlineText ?? (existsSync(inventoryPath) ? readFileSync(inventoryPath, "utf8") : undefined);
@@ -3002,6 +3004,7 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
           webhookSecret: cliStripe.webhookSecret ?? askedStripe?.webhookSecret,
         },
         ...(hubBaseUrl ? { hubBaseUrl } : {}),
+        ...(readmeText !== undefined ? { readmeText } : {}),
       });
 
       if (plan.noop) {
@@ -3062,7 +3065,15 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
         writeFileSync(`${operatorPath}.bak`, operatorText!, { mode: 0o600 });
         writeFileSync(operatorPath, plan.operatorText!, { mode: 0o600 });
       }
-      const wrote = ["config.env", ...(wroteSecrets ? ["secrets.env"] : []), ...(wroteOperator ? [".env.operator"] : [])];
+      // README.txt carries no secrets and no settings, so no .bak: only its level lines moved.
+      const wroteReadme = plan.readmeText !== undefined && plan.readmeText !== readmeText;
+      if (wroteReadme) writeFileSync(readmePath, plan.readmeText!, { mode: 0o600 });
+      const wrote = [
+        "config.env",
+        ...(wroteSecrets ? ["secrets.env"] : []),
+        ...(wroteOperator ? [".env.operator"] : []),
+        ...(wroteReadme ? ["README.txt"] : []),
+      ];
       console.log(`\nWrote ${wrote.join(", ")} (previous versions kept as *.bak)\n`);
       for (const line of plan.nextSteps) console.log(line);
       return 0;

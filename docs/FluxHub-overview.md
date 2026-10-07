@@ -127,7 +127,8 @@ this as `CFG_INLINE_COMMENT`.
 | `TIER_PRICES_JSON` | ❌ | `{tier: cents}` — **runtime only** |
 
 **The signed column is the whole point of this table.** Change anything marked ✅ and the
-manifest is stale: re-run `sign`, then **re-paste at `/onboard`**. Change anything marked
+manifest is stale: re-run `sign`, then `env` and **re-import** (Flux Hub reads the new manifest
+from your Coalition within 15 minutes; a paste at `/onboard` applies it at once). Change anything marked
 ❌ and you only re-run `env` and re-import — no re-sign, no re-paste.
 
 ⚠️ **`HOSTS` is an attestation, not a list of names.** FH pins it at ingest and rejects
@@ -371,7 +372,7 @@ and check the owner signature too.
 |---|---|
 | a price | `env` → re-import. **No re-sign.** |
 | `MT_BASE_URL` or `MT_PUBKEY` | `env` → re-import. **No re-sign** (neither is in the manifest). |
-| `HOSTS`, `OWNER_ADDRESS`, `PROVIDER_LEVEL`, `COALITION_URL`, trial/approval | `sign` → **re-paste at `/onboard`** → `env` → re-import |
+| `HOSTS`, `OWNER_ADDRESS`, `PROVIDER_LEVEL`, `COALITION_URL`, trial/approval | `sign` → `env` → re-import (or paste at `/onboard` for at once) |
 | a slot, an IP, a storage pool | edit `data/inventory.json`; the agent picks it up |
 | anything in `.env.operator` | `fh-agent restart` |
 | a secret in `secrets.env` | `env` → re-import → verify downstream (the spec may be byte-identical) |
