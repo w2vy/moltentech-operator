@@ -9,8 +9,10 @@ import {
   addStripeBlock,
   planLevelChange,
   planSellingChange,
+  setReadmeLevel,
+  resignSteps,
 } from "./level-change";
-import { renderSecretsEnv, type Answers } from "./scaffold";
+import { renderSecretsEnv, renderReadme, type Answers } from "./scaffold";
 
 /** The only fields renderSecretsEnv reads are the Stripe pair; the rest just has to typecheck. */
 const ANSWERS: Answers = {
@@ -123,7 +125,44 @@ test("planLevelChange going up: level, prices and Stripe, and nothing else", () 
   assert.match(plan.configText, /^TIER_PRICES_JSON=\{"cumulus":2500\}$/m);
   assert.match(plan.secretsText, /^STRIPE_SECRET_KEY=rk_test_x$/m);
   assert.match(plan.nextSteps.join("\n"), /https:\/\/hub\.example\/onboard/, "the operator's own hub");
-  assert.match(plan.nextSteps.join("\n"), /README\.txt/, "says out loud what it did not regenerate");
+  assert.equal(plan.readmeText, undefined, "no README passed, none returned");
+});
+
+test("re-sign steps lead with the env re-import the manifest watch reads; /onboard is the shortcut", () => {
+  const plan = planLevelChange({
+    configText: CONFIG,
+    secretsText: renderSecretsEnv(ANSWERS, { includeStripe: false, sessionSecret: "s".repeat(64) }),
+    target: "operator",
+    prices: { cumulus: 2500 },
+    hubBaseUrl: "https://hub.example",
+  });
+  const text = plan.nextSteps.join("\n");
+  for (const line of resignSteps("https://hub.example")) assert.ok(plan.nextSteps.includes(line), line);
+  assert.ok(text.indexOf("fh-toolkit env, re-import") < text.indexOf("/onboard"), "re-import first");
+  assert.doesNotMatch(text, /nothing this command wrote reaches it until you do/, "the pre-watch claim is gone");
+});
+
+test("setReadmeLevel moves the two level lines in place and nothing else", () => {
+  const supporter = renderReadme({ ...ANSWERS, selling: false });
+  const operator = renderReadme({ ...ANSWERS, selling: true, tierPricesCents: { cumulus: 2500 } });
+  assert.match(supporter, /^You are a Flux Hub Supporter\.$/m);
+  assert.equal(setReadmeLevel(supporter, "operator"), operator, "up = what init writes for a seller");
+  assert.equal(setReadmeLevel(operator, "supporter"), supporter, "down = what init writes for a supporter");
+  assert.equal(setReadmeLevel(operator, "operator"), operator, "idempotent");
+  const noted = supporter + "\nMY NOTE: pve-01 is in the garage\n";
+  assert.match(setReadmeLevel(noted, "operator"), /MY NOTE: pve-01 is in the garage/, "hand notes survive");
+  assert.equal(setReadmeLevel("something else\n", "operator"), "something else\n", "unrecognised = unchanged");
+});
+
+test("planLevelChange carries README.txt through, and only notes it when it could not edit it", () => {
+  const secretsText = renderSecretsEnv(ANSWERS, { includeStripe: false, sessionSecret: "s".repeat(64) });
+  const readme = renderReadme({ ...ANSWERS, selling: false });
+  const up = planLevelChange({ configText: CONFIG, secretsText, target: "operator", prices: { cumulus: 2500 }, readmeText: readme });
+  assert.match(up.readmeText!, /^You are a Flux Hub Operator\.$/m);
+  assert.ok(!up.nextSteps.some((l) => l.includes("README.txt")), "edited, so nothing to apologise for");
+  const odd = planLevelChange({ configText: CONFIG, secretsText, target: "operator", prices: { cumulus: 2500 }, readmeText: "hand-written\n" });
+  assert.equal(odd.readmeText, "hand-written\n");
+  assert.ok(odd.nextSteps.some((l) => l.includes("README.txt was not recognised")));
 });
 
 test("planLevelChange going down keeps the Stripe keys and warns about what it cannot see", () => {

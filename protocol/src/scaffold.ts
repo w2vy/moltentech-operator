@@ -955,7 +955,9 @@ export function renderReadme(a: Answers): string {
   L.push("     Run: fh-toolkit doctor");
   L.push("     It changes nothing, and its last line is usually the command to run");
   L.push("     next. Run it after any edit — especially after adding a HOST, which");
-  L.push("     also needs a re-sign and a re-paste at:");
+  L.push("     also needs a re-sign: fh-toolkit sign, then fh-toolkit env and a");
+  L.push("     re-import of env.json into the Flux app (Flux Hub reads it within");
+  L.push("     15 minutes). Or paste manifest.json, which applies at once, at:");
   L.push(`       ${a.mtBaseUrl}/onboard`);
   if (selling) {
     L.push("     Changing a PRICE does not: prices are not in your signed manifest.");

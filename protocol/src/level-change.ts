@@ -39,6 +39,53 @@ export interface LevelChange {
   operatorText?: string;
   operatorEdits: string[];
   secretsText: string;
+  /** `README.txt` after the change; undefined when none was passed in. */
+  readmeText?: string;
+}
+
+/**
+ * How a SIGNED manifest change reaches Flux Hub. Shared by every command that ends in a
+ * re-sign, so they cannot drift apart again.
+ *
+ * Since the hub's manifest watch (hub 2.2.14, 2026-10-06) the hub re-reads the manifest your
+ * Coalition PUBLISHES — `MANIFEST_JSON` in env.json — every 15 minutes and ingests it when the
+ * signed `publishedAt` is newer. So the env re-import is the step that matters, and a paste at
+ * /onboard is only the shortcut. The old text called the paste the ONLY route and listed the
+ * re-import under "Stripe — OPTIONAL", so following it left the Coalition serving the old manifest.
+ */
+export function resignSteps(hub: string): string[] {
+  return [
+    "  1. fh-toolkit sign",
+    "  2. fh-toolkit env, re-import env.json into the Flux app, redeploy",
+    "     — your Coalition then publishes the new manifest; Flux Hub picks it up within 15 minutes",
+    `  (Faster: also paste manifest.json at ${hub}/onboard and sign with your owner wallet — it applies at once.)`,
+  ];
+}
+
+/** README.txt's level line, exactly as `renderReadme` writes it. */
+const README_LEVEL_RE = /^You are a Flux Hub (Supporter|Operator)\.$/m;
+/** The one other level-dependent README line: a seller is told a price change needs no re-sign. */
+const README_PRICE_LINE = "     Changing a PRICE does not: prices are not in your signed manifest.";
+
+/**
+ * README.txt after a level change: its two level-dependent lines edited IN PLACE, everything
+ * else byte-identical (an operator may have added notes). Re-rendering would need every `init`
+ * answer, which the directory no longer holds. A README this does not recognise comes back unchanged.
+ */
+export function setReadmeLevel(readmeText: string, to: Level): string {
+  if (!README_LEVEL_RE.test(readmeText)) return readmeText;
+  const lines = readmeText
+    .replace(README_LEVEL_RE, `You are a Flux Hub ${to === "operator" ? "Operator" : "Supporter"}.`)
+    .split("\n");
+  const priceAt = lines.indexOf(README_PRICE_LINE);
+  if (to === "supporter" && priceAt >= 0) {
+    lines.splice(priceAt, 1);
+  } else if (to === "operator" && priceAt < 0) {
+    // It follows the `/onboard` URL line in "4. Your files stopped agreeing".
+    const onboardAt = lines.findIndex((l) => /^\s+\S+\/onboard$/.test(l));
+    if (onboardAt >= 0) lines.splice(onboardAt + 1, 0, README_PRICE_LINE);
+  }
+  return lines.join("\n");
 }
 
 /**
@@ -359,9 +406,9 @@ function sellingNextSteps(o: { manifestField: boolean; stripe: boolean; listingC
   const steps: string[] = [];
   if (o.resign) {
     steps.push(
-      "PROVIDER_FLUX_PAYOUT_ADDRESS is in the SIGNED manifest (customers are told to pay there):",
-      "  fh-toolkit sign, then paste the manifest at the hub's /onboard — the FLUX button",
-      "  appears on your card only once the hub holds the re-signed manifest.",
+      "PROVIDER_FLUX_PAYOUT_ADDRESS is in the SIGNED manifest (customers are told to pay there);",
+      "the FLUX button appears on your card once Flux Hub holds the re-signed manifest:",
+      ...resignSteps(hub),
       ""
     );
   }
@@ -414,6 +461,8 @@ export interface LevelChangeInput {
   fluxPayoutAddress?: string;
   /** Where the operator's own hub lives, for the next-steps text. */
   hubBaseUrl?: string;
+  /** `README.txt`, so its level lines move with the level. Absent = no README here. */
+  readmeText?: string;
 }
 
 /**
@@ -491,10 +540,8 @@ export function planLevelChange(input: LevelChangeInput): LevelChange {
   if (!noop) {
     const hub = input.hubBaseUrl ?? "https://fluxhub.moltentech.us";
     nextSteps.push(
-      "PROVIDER_LEVEL is in your SIGNED manifest, so Flux Hub needs a re-ingest:",
-      "  1. fh-toolkit sign",
-      `  2. paste manifest.json at ${hub}/onboard and sign with your owner wallet`,
-      "     — the hub re-ingests there; nothing this command wrote reaches it until you do"
+      "PROVIDER_LEVEL is in your SIGNED manifest, so Flux Hub needs the re-signed one:",
+      ...resignSteps(hub)
     );
     if (to === "operator") {
       const fluxOn = !!readEnvValue(configText, "PROVIDER_FLUX_PAYOUT_ADDRESS");
@@ -505,7 +552,7 @@ export function planLevelChange(input: LevelChangeInput): LevelChange {
           : "Stripe (you are merchant of record; Flux Hub never holds these):",
         "  3. register a webhook endpoint at <your coalition>/webhook, then:",
         "     fh-toolkit doctor --check-stripe    ← catches a key from the wrong account",
-        "  4. fh-toolkit env, re-import env.json into the Flux app, redeploy"
+        "  4. once the Stripe keys are in: fh-toolkit env, re-import env.json, redeploy again"
       );
     }
     if (operatorEdits.length > 0) {
@@ -515,15 +562,19 @@ export function planLevelChange(input: LevelChangeInput): LevelChange {
         "  fh-agent restart    (= docker compose up -d --force-recreate; `docker restart` does NOT reload it)"
       );
     }
+  }
+
+  const readmeText = input.readmeText === undefined ? undefined : setReadmeLevel(input.readmeText, to);
+  if (!noop && from !== to && readmeText !== undefined && readmeText === input.readmeText) {
     nextSteps.push(
       "",
-      "Note: README.txt still describes your old level. It is generated documentation,",
-      "not configuration — nothing reads it."
+      "Note: README.txt was not recognised, so it still describes your old level. It is",
+      "generated documentation, not configuration — nothing reads it."
     );
   }
 
   return {
     from, to, noop, configEdits, secretsEdits, operatorEdits, warnings, nextSteps,
-    configText, secretsText, operatorText,
+    configText, secretsText, operatorText, readmeText,
   };
 }
