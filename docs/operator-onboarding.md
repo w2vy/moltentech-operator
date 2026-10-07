@@ -681,7 +681,7 @@ MANUAL_APPROVAL=false
 
 # Facilities — shown as chips on your marketplace card, signed in the manifest. Your
 # word under the Operator Terms (B4); Flux Hub does not verify them. Leave a value
-# empty/false to say nothing (the card omits it). Changing one is a re-sign + re-paste.
+# empty/false to say nothing (the card omits it). Changing one is a re-sign + env re-import.
 ISP_SPEED_MBPS=1000
 FIBER=true
 UPS=true
@@ -1376,11 +1376,9 @@ Proxmox credentials, and never the private half of anything you generated.
 - **Change price / slots offered**: `fh-toolkit stripe --price <tier>=<usd>` rewrites
   `TIER_PRICES_JSON` and `AGENT_LISTING_JSON` together, then `fh-agent restart` (the agent
   reads its listing only at start) → `fh-toolkit env` → re-import `env.json` (free) so the
-  Coalition's prices match. `sign` → re-paste at `/onboard`, since the prices are in the
-  manifest.
+  Coalition's prices match. No re-sign: prices are deliberately NOT in the signed manifest.
 - **Add or remove a host**: add its `ProxmoxHost.name` to `HOSTS` in `config.env`,
-  re-`sign`, re-paste at `/onboard` and sign with your pinned owner wallet, then re-run
-  `fh-toolkit env` and re-import `env.json`. Until FH re-ingests, it **rejects the
+  re-`sign`, then `fh-toolkit env` → re-import `env.json` (Flux Hub reads the new manifest from your Coalition within 15 minutes; a paste at `/onboard` applies it at once). Until FH re-ingests, it **rejects the
   whole inventory assert** with a 409 naming the unattested host — that is the point of
   the attestation, so plan a host addition around a signing session, not a config edit.
   (Removing a host from `HOSTS` narrows what the agent may declare; it does **not**
@@ -1399,8 +1397,8 @@ Proxmox credentials, and never the private half of anything you generated.
   keeps asserting the old (empty) listing and you get no card.
 
   `PROVIDER_LEVEL` is in your **signed manifest**, so this is a re-sign, not a config
-  edit: `fh-toolkit sign` → re-paste `manifest.json` at `/onboard` and sign with your
-  owner wallet. Until you do, Flux Hub still has you as a Supporter, and
+  edit: `fh-toolkit sign` → `fh-toolkit env` → re-import `env.json` (Flux Hub reads the new manifest from your Coalition within 15 minutes; a paste at `/onboard` applies it at once). `level` also updates the level lines
+  in `README.txt`. Until the hub re-ingests, it still has you as a Supporter, and
   `fh-toolkit doctor` reports `MANIFEST_STALE`. Then **go back to Step 3** and create the
   restricted Stripe key with the exact permission list there — upgrading does not create
   one for you, and `level --set operator` will ask for a key you do not have yet. Register
@@ -1414,9 +1412,11 @@ Proxmox credentials, and never the private half of anything you generated.
   cannot see your live rentals and says so — an existing customer keeps their node, you
   simply cannot sell anything new.
 - **Change identity** (name, location, contact, Coalition URL): edit `config.env`,
-  re-`sign`, re-paste at `/onboard`, re-run `fh-toolkit env`, re-import `env.json`.
-- **Rotate your manifest key**: `keygen` a new one, re-`sign`, re-paste at `/onboard`
-  and sign with the pinned owner wallet — that is the only accepted rotation path. Then
+  re-`sign`, then `fh-toolkit env` → re-import `env.json` (Flux Hub reads the new manifest from your Coalition within 15 minutes; a paste at `/onboard` applies it at once).
+- **Rotate your manifest key**: `keygen` a new one, re-`sign`, paste at `/onboard`
+  and sign with the pinned owner wallet — that is the only accepted rotation path (the
+  hub's manifest watch refuses a new key: only your owner wallet's signature, which only
+  `/onboard` collects, may change it). Then
   update `MANIFEST_KEY` on the agent and recreate the container. Your issued keys are
   unaffected and are not re-issued.
 - **Rotate the issued keys**: an FH admin re-issues all three at once (the old ones stop
@@ -1462,7 +1462,7 @@ not a no-op. FH reconciles each assert against what it already holds for you:
 4. **Reduce the count in `AGENT_LISTING_JSON`** and recreate the container. Inventory says
    what you *have*; the listing says what you *offer*, and they remain independent — FH
    keeps advertising a tier you list even after its slots are gone.
-5. Optionally narrow `HOSTS` in `config.env` (needs a re-sign and a re-paste). It only
+5. Optionally narrow `HOSTS` in `config.env` (needs a re-sign and an env re-import). It only
    restricts what the agent may declare in future; it deletes nothing.
 
 **If the asserts stop entirely** — you emptied `inventory.json`, or stopped the agent after
