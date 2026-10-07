@@ -1427,6 +1427,10 @@ export async function askHosts(
           gateway: net.gateway,
           apiPort,
           ...(storagePool && storagePool !== storageImages ? { storagePool } : {}),
+          // Not asked, but kept: a re-run that drops a per-slot bridge leaves the slot on the
+          // host's (or vmbr0), and its next provision fails "Network not present on
+          // hypervisor" (prod 2026-10-04 → MT-0158 10-07: mt-185-c* lost vmbr185).
+          ...(w?.network ? { network: w.network } : {}),
           ...(existingVm ? { existingVm } : {}),
         });
         // Advance from the port that was USED, not from a running count: an operator who
@@ -1450,7 +1454,17 @@ export async function askHosts(
       const answer = (await ask(`  ${advice.question}`, advice.defaultYes ? "Y" : "N")).toLowerCase();
       if (answer.startsWith("y")) vmMemoryMb = plan.vmMemoryMb as VmMemoryMb;
     }
-    hosts.push({ name, storageImages, storageIso, ...(vmMemoryMb ? { vmMemoryMb } : {}), slots });
+    // The host bridge and node name are likewise never asked — carry them, or Enter-through
+    // resets the bridge to vmbr0.
+    hosts.push({
+      name,
+      ...(was?.nodeName ? { nodeName: was.nodeName } : {}),
+      ...(was?.network ? { network: was.network } : {}),
+      storageImages,
+      storageIso,
+      ...(vmMemoryMb ? { vmMemoryMb } : {}),
+      slots,
+    });
   }
 
   // Printed as WAN IP → ports, because that is the shape of the port-forward the
