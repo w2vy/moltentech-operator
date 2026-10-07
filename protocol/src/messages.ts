@@ -21,6 +21,14 @@ export const CheckoutInitRequest = Envelope.extend({
   customer: z.object({
     mtCustomerId: z.string().min(1),
     email: z.string().email(),
+    /**
+     * The hub's CheckoutIntent for THIS checkout (hub 2026-10-07). The Coalition stamps it on the
+     * subscription's metadata beside mtCustomerId and echoes it back on `subscription.created`,
+     * so the hub binds the sale to the exact intent — and the collateral proven with it — rather
+     * than the newest open one. Optional both ways: an older hub sends none, an older Coalition
+     * echoes none, and the hub then falls back to its newest-intent match.
+     */
+    mtIntentId: z.string().min(1).optional(),
   }),
   /** Dedupe a double-click / retry so only one session is created. */
   idempotencyKey: z.string().min(1),
@@ -62,6 +70,8 @@ export const PaymentEvent = z.discriminatedUnion("type", [
     stripeSubscriptionId: z.string().min(1),
     stripeCustomerId: z.string().min(1),
     mtCustomerId: z.string().min(1),
+    /** Echo of `CheckoutInitRequest.customer.mtIntentId` from the subscription metadata; absent from older Coalitions. */
+    mtIntentId: z.string().min(1).optional(),
     email: z.string().email(),
     tier: TierKey,
     priceCents: PriceCents,
