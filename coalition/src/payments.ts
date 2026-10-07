@@ -23,6 +23,8 @@ export async function handleCheckout(
   const priceId = await ensurePrice(stripe, cfg.providerSlug, req.tier, priceCents);
   const metadata = {
     mtCustomerId: req.customer.mtCustomerId,
+    // The hub's checkout intent, echoed back on subscription.created (protocol 0.6.22).
+    ...(req.customer.mtIntentId ? { mtIntentId: req.customer.mtIntentId } : {}),
     providerSlug: cfg.providerSlug,
     tier: req.tier,
     email: req.customer.email,
@@ -115,6 +117,7 @@ export function normalizeEvent(event: StripeEvent, providerSlug: string): Paymen
         stripeSubscriptionId: o.id,
         stripeCustomerId: String(o.customer),
         mtCustomerId: md.mtCustomerId ?? "",
+        ...(md.mtIntentId ? { mtIntentId: md.mtIntentId } : {}),
         email: md.email ?? "",
         tier: md.tier as PaymentEvent extends { tier: infer T } ? T : never,
         priceCents: item0.price?.unit_amount ?? 0,
