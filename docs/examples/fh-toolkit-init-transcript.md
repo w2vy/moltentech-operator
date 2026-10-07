@@ -240,23 +240,21 @@ level: supporter → operator
 
 Apply these changes? [y/N]: y
 
-Wrote config.env, secrets.env, .env.operator (previous versions kept as *.bak)
+Wrote config.env, secrets.env, .env.operator, README.txt (previous versions kept as *.bak)
 
-PROVIDER_LEVEL is in your SIGNED manifest, so Flux Hub needs a re-ingest:
+PROVIDER_LEVEL is in your SIGNED manifest, so Flux Hub needs the re-signed one:
   1. fh-toolkit sign
-  2. paste manifest.json at https://staging.moltentech.us/onboard and sign with your owner wallet
-     — the hub re-ingests there; nothing this command wrote reaches it until you do
+  2. fh-toolkit env, re-import env.json into the Flux app, redeploy
+     — your Coalition then publishes the new manifest; Flux Hub picks it up within 15 minutes
+  (Faster: also paste manifest.json at https://staging.moltentech.us/onboard and sign with your owner wallet — it applies at once.)
 
 Stripe (you are merchant of record; Flux Hub never holds these):
   3. register a webhook endpoint at <your coalition>/webhook, then:
      fh-toolkit doctor --check-stripe    ← catches a key from the wrong account
-  4. fh-toolkit env, re-import env.json into the Flux app, redeploy
+  4. once the Stripe keys are in: fh-toolkit env, re-import env.json, redeploy again
 
 AGENT_LISTING_JSON changed in .env.operator, which the agent reads ONLY at start:
   fh-agent restart    (= docker compose up -d --force-recreate; `docker restart` does NOT reload it)
-
-Note: README.txt still describes your old level. It is generated documentation,
-not configuration — nothing reads it.
 user@host:~/fh-agent$
 ```
 
@@ -264,8 +262,9 @@ Three things the output is careful about. **It touched three files and named eve
 change** before asking — `manifest.json`, your issued keys, `SESSION_SECRET` and
 `data/inventory.json` are all untouched, which is the reason this command exists instead
 of `init --force`. **Nothing has reached Flux Hub yet**: `PROVIDER_LEVEL` is inside the
-signed manifest, so the hub learns about it only when you `sign` and re-paste at
-`/onboard`. Until then `fh-toolkit doctor` reports `MANIFEST_STALE` and the hub still has
+signed manifest, so the hub learns about it only when you `sign` and your Coalition
+publishes the result (`env` → re-import; the hub reads it within 15 minutes, or at once if
+you paste at `/onboard`). Until then `fh-toolkit doctor` reports `MANIFEST_STALE` and the hub still has
 you as a Supporter. And **the agent has not seen the listing yet**: `AGENT_LISTING_JSON`
 is what makes a card on `/providers`, the agent reads it only at start, and the last step
 names the one command that reloads it — `fh-agent restart`. The Stripe key it asked for is
