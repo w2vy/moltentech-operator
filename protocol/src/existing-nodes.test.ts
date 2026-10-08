@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { askHosts, hostsFromInventory, type Ask, type AskUntil } from "./cli";
 import { describeVm, parseKeepList, retireAdoptedMarks } from "./existing-nodes";
 import { parseFluxNodeStatus } from "./flux-node-status";
-import { existingNodeCandidates, qemuVms, tierForVm, REQUIRED_PRIVS, type ProxmoxSurvey } from "./proxmox-probe";
+import { existingNodeCandidates, qemuVms, slotCanTakeExistingVm, tierForVm, REQUIRED_PRIVS, type ProxmoxSurvey } from "./proxmox-probe";
 import { renderInventoryJson, type Answers, type HostAnswer } from "./scaffold";
 import { InventoryHost } from "./messages";
 
@@ -213,8 +213,14 @@ test("askHosts re-run: Enter all the way keeps an existing mark", async () => {
   assert.deepEqual(hosts[0]!.slots.map((s) => [s.vmName, s.existingVm]), [["mt-184-c9", { vmid: 104, name: "flux-node-1" }]]);
 });
 
-test("askHosts re-run: a slot the file already has is NOT asked about an existing VM", async () => {
-  const survey: ProxmoxSurvey = { nodes: ["pve40"], storages: {}, vms: { pve40: qemuVms([cumulusRow]) } };
+test("askHosts re-run: a slot the hub built a VM on is NOT asked about an existing VM", async () => {
+  // Both file slots carry a hub-built VM — the staging 2026-09-23 shape the guard exists for.
+  const built = (vmid: number, name: string) => ({ vmid, name, cpus: 4, maxmem: 8 * GiB, maxdisk: 220 * GiB, tags: "cumulus;flux-hub" });
+  const survey: ProxmoxSurvey = {
+    nodes: ["pve40"],
+    storages: {},
+    vms: { pve40: qemuVms([cumulusRow, built(301, "mt-184-c8"), built(302, "mt-184-c7")]) },
+  };
   const current: HostAnswer[] = [
     { name: "pve40", storageImages: "local-lvm", storageIso: "local", slots: [slot("mt-184-c8"), slot("mt-184-c7")] },
   ];
@@ -378,3 +384,38 @@ test("⭐ askHosts re-run: Enter all the way keeps every bridge — host and per
     ]
   );
 });
+
+test("⭐ askHosts re-run: an existing slot nothing was built on CAN take a kept VM (operator#197)", async () => {
+  // Staging 2026-10-08: shrimp-1 (VMID 104 here) already answered on mt-184-c9's ip:port, but the
+  // slot was in the file, so it could not be marked — two runs were needed (drop it, re-add it).
+  const survey: ProxmoxSurvey = { nodes: ["pve40"], storages: {}, vms: { pve40: qemuVms([cumulusRow]) } };
+  const current: HostAnswer[] = [
+    { name: "pve40", storageImages: "local-lvm", storageIso: "local", slots: [slot("mt-184-c9")] },
+  ];
+  const { ask, askUntil, asked } = scripted([
+    [/which are Flux nodes/, "104"],
+    [/existing VM on this slot/, "104"],
+  ]);
+  const hosts = await askHosts(ask, askUntil, {
+    prefix: "mt-",
+    tiers: [],
+    minimums: { cumulus: 250 },
+    survey,
+    hub,
+    current,
+    portInUse: async () => false,
+    nodeStatus: async () => null,
+  });
+  assert.equal(asked.filter((q) => /existing VM on this slot/.test(q)).length, 1);
+  assert.deepEqual(hosts[0]!.slots.map((s) => [s.vmName, s.existingVm?.vmid]), [["mt-184-c9", 104]]);
+});
+
+test("slotCanTakeExistingVm: new or marked yes; built-on or unlisted no", () => {
+  const vms = qemuVms([cumulusRow, { vmid: 301, name: "mt-184-c8", cpus: 4, maxmem: 8 * GiB, maxdisk: 220 * GiB }]);
+  assert.equal(slotCanTakeExistingVm(undefined, undefined), true, "a new slot");
+  assert.equal(slotCanTakeExistingVm({ vmName: "mt-184-c8", existingVm: { vmid: 1 } }, vms), true, "already marked");
+  assert.equal(slotCanTakeExistingVm({ vmName: "mt-184-c9" }, vms), true, "nothing built on it");
+  assert.equal(slotCanTakeExistingVm({ vmName: "MT-184-C8" }, vms), false, "the hub runs a node on it");
+  assert.equal(slotCanTakeExistingVm({ vmName: "mt-184-c9" }, undefined), false, "no listing proves nothing");
+});
+

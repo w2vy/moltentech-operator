@@ -269,6 +269,25 @@ export function existingNodeCandidates(
   return out;
 }
 
+/**
+ * May this slot be asked "existing VM on this slot?" — operator#197.
+ *
+ * A NEW slot (`slot` undefined) or one the file already marks: yes, as before. An existing,
+ * unmarked slot: only when a listing proves no VM carries its name anywhere in the cluster —
+ * nothing was ever built there, so marking it is placing a node, not adopting over one. A slot
+ * whose VM exists (the hub runs a node on it) stays refused: asking there is how the wrong slot
+ * got marked on staging 2026-09-23. No listing (`vms` undefined) cannot prove it: refused.
+ */
+export function slotCanTakeExistingVm(
+  slot: { vmName: string; existingVm?: unknown } | undefined,
+  vms: QemuVm[] | undefined
+): boolean {
+  if (!slot || slot.existingVm) return true;
+  if (!vms) return false;
+  const name = slot.vmName.toLowerCase();
+  return !vms.some((v) => v.name.toLowerCase() === name);
+}
+
 interface NodeRow {
   node?: string;
 }
