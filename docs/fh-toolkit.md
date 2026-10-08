@@ -694,7 +694,8 @@ Flux node (not already a slot, not built by the hub) and asks which ones you wan
 Each one you pick is placed on a slot: give it the WAN IP and API port it already answers on,
 and the toolkit asks the node's FluxOS on that WAN address (`/daemon/getfluxnodestatus`) to
 pre-fill the tier and collateral. The slot is written with `existingVm` in
-`data/inventory.json`. The hub never sells, grants or idle-fills that slot, and the agent
+`data/inventory.json`. A slot already in the file can take one too when no VM carries its name
+(nothing was ever built there); a slot the hub already runs a node on is never asked. The hub never sells, grants or idle-fills that slot, and the agent
 refuses to build on it while that VM exists. Click **Adopt** on `/operator/fleet` to rename
 the VM to the slot name and take it on as your own node. Nothing is torn down or
 re-provisioned. A later `inventory` run drops the mark once the VM carries the slot name

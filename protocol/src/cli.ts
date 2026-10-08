@@ -93,6 +93,7 @@ import {
   type ProbeResult,
   type QemuVm,
   existingNodeCandidates,
+  slotCanTakeExistingVm,
   tierForVm,
 } from "./proxmox-probe";
 import {
@@ -1164,6 +1165,8 @@ export async function askHosts(
     // the hub never sells it and the agent never builds over it, until the operator clicks
     // Adopt on /operator/fleet (which renames the VM to the slot name). No teardown asked.
     const nodeVms: QemuVm[] | undefined = survey?.vms?.[nodeOf(was ?? { name })];
+    // Every VM the listing saw, on any node: a slot's VM may live on another cluster member.
+    const clusterVms: QemuVm[] | undefined = survey?.vms ? Object.values(survey.vms).flat() : undefined;
     const marked = wasSlots.flatMap((w) => (w.existingVm ? [w.existingVm.vmid] : []));
     let keep: QemuVm[] = [];
     if (nodeVms) {
@@ -1331,10 +1334,10 @@ export async function askHosts(
         let existingVm: ExistingVm | undefined;
         let status: FluxNodeStatus | null = null;
         const carried = !nodeVms && w?.existingVm ? w.existingVm : undefined;
-        // Only a NEW slot, or one the file already marks, can hold an existing VM. A slot the
-        // hub already runs a node on is not being adopted, and asking there is how the wrong
-        // slot gets marked (staging, 2026-09-23).
-        if ((unplaced.size > 0 || carried) && (!w || w.existingVm)) {
+        // A NEW slot, one the file already marks, or an existing slot nothing was ever built on
+        // (operator#197) can hold an existing VM. A slot the hub already runs a node on is not
+        // being adopted, and asking there is how the wrong slot gets marked (staging, 2026-09-23).
+        if ((unplaced.size > 0 || carried) && slotCanTakeExistingVm(w, clusterVms)) {
           const choices = carried ? [String(carried.vmid)] : [...unplaced.keys()].map(String);
           const dflt =
             w?.existingVm && (carried || unplaced.has(w.existingVm.vmid))
