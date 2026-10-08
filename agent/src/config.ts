@@ -85,6 +85,16 @@ export function reloadInventory(cfg: AgentConfig): InventoryHost[] {
   }
 }
 
+/**
+ * Does this inventory declare any slot? The hub refuses an assert with none (it reads an empty
+ * assert as "the whole fleet is gone"), so a host listed with `slots: []` — a fresh onboarding
+ * before its first slot — would otherwise draw a 400 every cycle. Found on staging 2026-10-08
+ * (cute-dogs).
+ */
+export function declaresAnySlot(inventory: InventoryHost[]): boolean {
+  return inventory.some((h) => h.slots.length > 0);
+}
+
 function req(env: NodeJS.ProcessEnv, key: string): string {
   const v = env[key];
   if (!v) throw new Error(`Missing required env ${key}`);

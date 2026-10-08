@@ -1,6 +1,6 @@
 import { SCHEMA_VERSION } from "@moltentech/protocol";
 import { verifyOwnerAuth } from "@moltentech/protocol/wallet";
-import { loadConfig, reloadInventory } from "./config";
+import { loadConfig, reloadInventory, declaresAnySlot } from "./config";
 import { AGENT_VERSION } from "./version";
 import { MtClient, type MtClientAuth } from "./client";
 import { CoalitionClient } from "./coalition-client";
@@ -139,7 +139,8 @@ async function main() {
 
   async function reassertInventory() {
     const inventory = reloadInventory(cfg); // re-read the file so console edits propagate
-    if (inventory.length === 0) return;
+    // No slots anywhere (none declared, or hosts with `slots: []`): nothing to assert.
+    if (!declaresAnySlot(inventory)) return;
     try {
       await client.assertInventory(inventory);
       const slots = inventory.reduce((n, h) => n + h.slots.length, 0);
