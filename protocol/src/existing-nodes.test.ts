@@ -338,3 +338,43 @@ test("host vmMemoryMb survives render → agent schema → re-read → re-run", 
   });
   assert.deepEqual(hosts[0]!.vmMemoryMb, vmMemoryMb);
 });
+
+test("⭐ askHosts re-run: Enter all the way keeps every bridge — host and per-slot (prod 2026-10-04)", async () => {
+  // The shape that broke: pve40 on vmbr184 with its .185 slots overridden to vmbr185. A
+  // re-run to change a rental count rewrote all of it as vmbr0, and the next provision on
+  // mt-185-c7 failed "Network not present on hypervisor".
+  const text = JSON.stringify([
+    {
+      name: "pve40",
+      nodeName: "pve40",
+      network: "vmbr184",
+      storageImages: "local-lvm",
+      storageIso: "pve55-shared",
+      slots: [
+        { ...slot("mt-184-c2"), network: "vmbr184" },
+        { ...slot("mt-185-c7"), lanIp: "192.168.185.7/24", gateway: "192.168.185.1", ipAddress: "47.206.56.185", apiPort: 16127, network: "vmbr185", storagePool: "ss4" },
+      ],
+    },
+  ]);
+  const survey: ProxmoxSurvey = { nodes: ["pve40"], storages: {}, vms: { pve40: [] } };
+  const { ask, askUntil } = scripted([]);
+  const hosts = await askHosts(ask, askUntil, {
+    prefix: "mt-",
+    tiers: [],
+    minimums: { cumulus: 250 },
+    survey,
+    hub,
+    current: hostsFromInventory(text),
+    portInUse: async () => false,
+    nodeStatus: async () => null,
+  });
+  const out = InventoryHost.array().parse(JSON.parse(renderInventoryJson({ hosts } as unknown as Answers)));
+  assert.equal(out[0]!.network, "vmbr184");
+  assert.deepEqual(
+    out[0]!.slots.map((s) => [s.vmName, s.network, s.storagePool]),
+    [
+      ["mt-184-c2", "vmbr184", "local-lvm"],
+      ["mt-185-c7", "vmbr185", "ss4"],
+    ]
+  );
+});
