@@ -277,7 +277,9 @@ function runArcaneMage(args: string[], cfg: AgentConfig, timeoutMs: number): Pro
   });
 }
 
-const TIMEOUT = { provision: 300_000, delete: 120_000, reprovision: 420_000, refreshIso: 1_200_000 };
+// delete: arcane-mage gives a running VM a 120 s graceful shutdown before the hard stop, then
+// stops and deletes it — ~200 s worst case.
+const TIMEOUT = { provision: 300_000, delete: 240_000, reprovision: 420_000, refreshIso: 1_200_000 };
 
 /**
  * Recover arcane-mage's `--json` payload from stdout.
