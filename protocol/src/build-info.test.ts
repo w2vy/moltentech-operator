@@ -8,7 +8,8 @@ test("an image build names the commit it was built from", () => {
   );
   assert.match(text, /fh-toolkit 0\.1\.0/);
   assert.match(text, /0df6f00abc/);
-  assert.match(text, /2026-08-24T19:15:14Z/);
+  // The build time rides on the first line, so the session banner carries it too.
+  assert.equal(text.split("\n")[0], "fh-toolkit 0.1.0 · built 2026-08-24T19:15:14Z");
   // The refresh window is why this command exists; say so where it is read.
   assert.match(text, /--refresh/);
 });

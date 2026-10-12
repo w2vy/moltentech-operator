@@ -37,13 +37,12 @@ export function readBuildInfo(
  * ran, and it is greppable against `git log`.
  */
 export function formatBuildInfo(info: BuildInfo): string {
-  const lines = [`fh-toolkit ${info.version}`];
+  const lines = [`fh-toolkit ${info.version}${info.builtAt ? ` · built ${info.builtAt}` : ""}`];
   if (info.sha) {
     lines.push(`  build   ${info.sha}`);
   } else {
     lines.push("  build   source checkout — no image metadata (not the published CLI)");
   }
-  if (info.builtAt) lines.push(`  built   ${info.builtAt}`);
   if (info.sha) {
     lines.push("");
     lines.push("Older than you expect? The documented shell function refreshes the image");

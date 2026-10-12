@@ -1,7 +1,7 @@
 import { SCHEMA_VERSION } from "@moltentech/protocol";
 import { verifyOwnerAuth } from "@moltentech/protocol/wallet";
 import { loadConfig, reloadInventory, declaresAnySlot } from "./config";
-import { AGENT_VERSION } from "./version";
+import { agentBuildLabel } from "./version";
 import { MtClient, type MtClientAuth } from "./client";
 import { CoalitionClient } from "./coalition-client";
 import { loadManifestKey } from "./signing";
@@ -50,7 +50,7 @@ async function doctor(): Promise<never> {
 async function main() {
   if (process.argv[2] === "doctor") return doctor();
   if (process.argv[2] === "version") {
-    console.log(AGENT_VERSION);
+    console.log(agentBuildLabel());
     return;
   }
   const cfg = loadConfig();
@@ -73,6 +73,7 @@ async function main() {
       ? new CoalitionClient(cfg.coalitionUrl, manifestKey, cfg.providerSlug)
       : undefined;
 
+  console.log(`[agent] fh-agent ${agentBuildLabel()}`);
   console.log(
     `[agent] provider=${cfg.providerSlug} mt=${cfg.mtBaseUrl} auth=${auth.kind} ` +
       `ownerAuth=${cfg.ownerAddress ? "enforced" : "off"} courier=${coalition ? "on" : "off"} ` +
