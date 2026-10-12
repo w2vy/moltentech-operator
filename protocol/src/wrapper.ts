@@ -29,7 +29,7 @@ export const TOOLKIT_IMAGE = "ghcr.io/w2vy/fh-toolkit:latest";
  * from a stale one from one predating the handshake entirely (`undefined`). That is the
  * whole point of the exercise — a stale wrapper used to be undetectable from either side.
  */
-export const WRAPPER_VERSION = 9;
+export const WRAPPER_VERSION = 10;
 
 /** Where `--update-wrapper` installs, unless the operator overrides it. */
 export const WRAPPER_RC = "${FH_TOOLKIT_RC:-$HOME/.fh-toolkit.sh}";
@@ -360,6 +360,10 @@ fh-agent-cid() {
   docker ps --format '{{.ID}}' --filter "$filter" --filter label=com.docker.compose.service=agent 2>/dev/null | head -n 1
 }
 
+# The agent's version plus its build time (\`FH_BUILD_TIME\`, baked into images from 0.11.64), e.g.
+# \`0.11.64 · built 2026-10-12T14:03:22Z\`. An older image has no stamp and prints the bare version.
+FH_AGENT_VERSION_JS='require("/app/agent/package.json").version + (process.env.FH_BUILD_TIME ? " · built " + process.env.FH_BUILD_TIME : "")'
+
 # The version of the agent container compose is running for this directory, or "not running".
 fh-agent-running-version() {
   local cid
@@ -368,7 +372,7 @@ fh-agent-running-version() {
     echo "not running"
     return 0
   fi
-  docker exec "$cid" node -p 'require("/app/agent/package.json").version' 2>/dev/null || echo "unknown"
+  docker exec "$cid" node -p "$FH_AGENT_VERSION_JS" 2>/dev/null || echo "unknown"
 }
 
 # Every lifecycle verb drives compose, so every one needs the file compose reads.
@@ -396,7 +400,7 @@ fh-agent-version() {
   local img
   img="$(fh-agent-image)"
   echo "running: $(fh-agent-running-version)"
-  echo "pulled:  $(docker run --rm --entrypoint node "$img" -p 'require("/app/agent/package.json").version' 2>/dev/null || echo "not pulled")   ($img)"
+  echo "pulled:  $(docker run --rm --entrypoint node "$img" -p "$FH_AGENT_VERSION_JS" 2>/dev/null || echo "not pulled")   ($img)"
 }
 
 # Is the agent you are running the newest one? Reports; never acts. All three images track

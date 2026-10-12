@@ -49,5 +49,11 @@ COPY protocol/ ./protocol/
 COPY agent/ ./agent/
 
 WORKDIR /app/agent
+# Build identity, fed by publish-fh-agent.yml (same pair as protocol/Dockerfile). Empty on a
+# local build, which `fh-agent version` reports as a bare version, not an invented stamp.
+ARG FH_BUILD_SHA=""
+ARG FH_BUILD_TIME=""
+ENV FH_BUILD_SHA=$FH_BUILD_SHA \
+    FH_BUILD_TIME=$FH_BUILD_TIME
 # tsx runtime (npm start = tsx src/index.ts); outbound-only control loop, no ports.
 CMD ["npm", "start"]

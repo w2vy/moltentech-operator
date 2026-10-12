@@ -30,7 +30,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # The image is edited through qemu-nbd + chroot (see build-image.sh for why not
       # libguestfs), so the build needs root, qemu-nbd and the nbd module.
@@ -49,7 +49,7 @@ jobs:
 
       - name: Keep the PR build (2 days) for a test boot
         if: github.event_name == 'pull_request'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: fh-burner-${{ steps.ver.outputs.v }}-pr${{ github.event.number }}
           path: dist/

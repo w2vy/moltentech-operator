@@ -40,13 +40,13 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: recursive # arcane-mage is bundled into the image
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
 
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -63,11 +63,18 @@ jobs:
           fi
           echo "tags=$tags" >> "$GITHUB_OUTPUT"
 
-      - uses: docker/build-push-action@v6
+      # Build time as a fact about THIS build (same as publish-fh-toolkit.yml).
+      - id: stamp
+        run: echo "at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/build-push-action@v7
         with:
           context: .
           file: agent/Dockerfile
           push: true
+          build-args: |
+            FH_BUILD_SHA=${{ github.sha }}
+            FH_BUILD_TIME=${{ steps.stamp.outputs.at }}
           tags: ${{ steps.meta.outputs.tags }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
