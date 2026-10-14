@@ -9,7 +9,7 @@ import {
 } from "@moltentech/protocol";
 import type { CoalitionConfig } from "./config";
 import { mtAuthHeaders } from "./coalition-signing";
-import { diffReachability, postEvents } from "./events";
+import { trackReachability, postEvents, type ReachState } from "./events";
 
 // In-memory only — stats are regenerable, never persisted (the Coalition is stateless
 // and runs on a Syncthing-replicated data partition where mutable files conflict).
@@ -21,7 +21,7 @@ export function getStatsSnapshot(): StatsSnapshot | null {
 const NODE_TIMEOUT_MS = 10_000;
 
 // Last pass's `reachable` per vmName for the edge detector; empty after a restart on purpose.
-let prevReachable: ReadonlyMap<string, boolean> = new Map();
+let prevReach: ReadonlyMap<string, ReachState> = new Map();
 
 /** Fetch the provider's live node list from MT (authoritative). */
 async function fetchNodes(cfg: CoalitionConfig, fetchImpl: typeof fetch): Promise<AgentNode[]> {
@@ -129,9 +129,9 @@ export async function collectStats(cfg: CoalitionConfig, fetchImpl: typeof fetch
     nodes: nodeSamples,
   };
 
-  // Edge-triggered reachability hints (events.ts). Baseline on the first pass.
-  const events = diffReachability(prevReachable, nodeSamples, collectedAt);
-  prevReachable = new Map(nodeSamples.map((s) => [s.vmName, s.reachable]));
+  // Reachability hints (events.ts): baseline on the first pass, down only after repeated misses.
+  const { events, state } = trackReachability(prevReach, nodeSamples, collectedAt);
+  prevReach = state;
   await postEvents(cfg, events, fetchImpl);
 
   return latest;
