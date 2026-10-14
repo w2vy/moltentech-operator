@@ -57,20 +57,68 @@ export function diffLifecycle(
   return out;
 }
 
-/** Compare two stats passes on `reachable` alone. */
-export function diffReachability(
-  prev: ReadonlyMap<string, boolean>,
+/**
+ * How many stats passes in a row (5 min apart) a node must miss before it is reported
+ * unreachable. One miss is routine: a FluxOS release restarts every node's daemon in turn,
+ * and on 2026-10-14 four nodes each missed exactly one pass — four "unreachable" events, all
+ * back by the next pass, each one an alert. Three misses ≈ 10–15 min of silence.
+ */
+export const UNREACHABLE_AFTER_MISSES = 3;
+
+/** What the reachability diff remembers per node between passes. */
+export type ReachState = {
+  /** What the hub was last told (or the baseline): true = up. */
+  reportedUp: boolean;
+  /** Passes in a row with no answer, while still reported up. */
+  misses: number;
+  /** When the current run of misses began — the event's `observedAt`. */
+  firstMissAt: string | null;
+};
+
+/**
+ * One stats pass of reachability → events + the state to carry to the next pass. A node seen
+ * for the first time sets a baseline only. Down is reported on the UNREACHABLE_AFTER_MISSES-th
+ * miss in a row, dated at the first; a node that answers again before that says nothing. Back
+ * is reported on the first answer after a reported down.
+ */
+export function trackReachability(
+  prev: ReadonlyMap<string, ReachState>,
   cur: readonly NodeSample[],
-  observedAt: string
-): AgentEvent[] {
-  const out: AgentEvent[] = [];
+  observedAt: string,
+  missesToReport: number = UNREACHABLE_AFTER_MISSES
+): { events: AgentEvent[]; state: Map<string, ReachState> } {
+  const events: AgentEvent[] = [];
+  const state = new Map<string, ReachState>();
   for (const n of cur) {
     const p = prev.get(n.vmName);
-    if (p === undefined) continue;
-    if (p && !n.reachable) out.push({ kind: "node_unreachable", vmName: n.vmName, observedAt, detail: "benchmark API stopped answering" });
-    else if (!p && n.reachable) out.push({ kind: "node_recovered", vmName: n.vmName, observedAt, detail: "benchmark API answering again" });
+    if (!p) {
+      state.set(n.vmName, { reportedUp: n.reachable, misses: 0, firstMissAt: null });
+      continue;
+    }
+    if (n.reachable) {
+      if (!p.reportedUp) events.push({ kind: "node_recovered", vmName: n.vmName, observedAt, detail: "benchmark API answering again" });
+      state.set(n.vmName, { reportedUp: true, misses: 0, firstMissAt: null });
+      continue;
+    }
+    if (!p.reportedUp) {
+      state.set(n.vmName, p);
+      continue;
+    }
+    const misses = p.misses + 1;
+    const firstMissAt = p.firstMissAt ?? observedAt;
+    if (misses >= missesToReport) {
+      events.push({
+        kind: "node_unreachable",
+        vmName: n.vmName,
+        observedAt: firstMissAt,
+        detail: `benchmark API stopped answering (${misses} checks in a row)`,
+      });
+      state.set(n.vmName, { reportedUp: false, misses: 0, firstMissAt: null });
+    } else {
+      state.set(n.vmName, { reportedUp: true, misses, firstMissAt });
+    }
   }
-  return out;
+  return { events, state };
 }
 
 /** Cap from the wire schema (`EventReport.events.max`). */

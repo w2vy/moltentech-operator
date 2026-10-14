@@ -6,7 +6,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { EventReport, NodeSample, SCHEMA_VERSION } from "@moltentech/protocol";
 import type { CoalitionConfig } from "./config";
-import { diffLifecycle, diffReachability, postEvents } from "./events";
+import { diffLifecycle, trackReachability, postEvents, UNREACHABLE_AFTER_MISSES, type ReachState } from "./events";
 import { sampleFromBenchmarks } from "./stats";
 
 const T = "2026-09-12T20:00:00.000Z";
@@ -17,7 +17,7 @@ const F = (onDeterministicList: boolean | null, benchmarkStatus: string | null =
 
 test("first sight of a node is a baseline: no event", () => {
   assert.deepEqual(diffLifecycle(new Map(), [L("a", false)], T), []);
-  assert.deepEqual(diffReachability(new Map(), [{ vmName: "a", reachable: false }], T), []);
+  assert.deepEqual(trackReachability(new Map(), [{ vmName: "a", reachable: false }], T).events, []);
 });
 
 test("det-list true → false is node_expired; false → true is node_recovered", () => {
@@ -49,12 +49,39 @@ test("🔴 a re-running benchmark, or a node that did not answer, is NOT benchma
   assert.deepEqual(ev.map((e) => [e.vmName, e.kind]), [["c", "benchmark_failed"]]);
 });
 
-test("reachability edges", () => {
-  const prev = new Map([["a", true], ["b", false], ["c", true]]);
-  const ev = diffReachability(prev, [
-    { vmName: "a", reachable: false }, { vmName: "b", reachable: true }, { vmName: "c", reachable: true },
-  ], T);
-  assert.deepEqual(ev.map((e) => [e.vmName, e.kind]), [["a", "node_unreachable"], ["b", "node_recovered"]]);
+const at = (min: number) => new Date(Date.parse(T) + min * 60_000).toISOString();
+/** Run passes in order; each pass is the `reachable` of node "a". Returns every event emitted. */
+function runPasses(passes: boolean[]) {
+  let state: ReadonlyMap<string, ReachState> = new Map();
+  const all = [];
+  for (const [i, reachable] of passes.entries()) {
+    const r = trackReachability(state, [{ vmName: "a", reachable }], at(i * 5));
+    state = r.state;
+    all.push(...r.events);
+  }
+  return all;
+}
+
+test("🔴 one missed check (a FluxOS update restart) says nothing (prod 2026-10-14)", () => {
+  assert.deepEqual(runPasses([true, false, true, true]), []);
+});
+
+test("two misses in a row still say nothing", () => {
+  assert.equal(UNREACHABLE_AFTER_MISSES, 3);
+  assert.deepEqual(runPasses([true, false, false, true]), []);
+});
+
+test("three misses in a row: node_unreachable dated at the FIRST miss, once; back is node_recovered", () => {
+  const ev = runPasses([true, false, false, false, false, true]);
+  assert.deepEqual(ev.map((e) => [e.kind, e.observedAt]), [["node_unreachable", at(5)], ["node_recovered", at(25)]]);
+});
+
+test("a miss run broken by an answer starts counting again", () => {
+  assert.deepEqual(runPasses([true, false, false, true, false, false, true]), []);
+});
+
+test("a node first seen unreachable is a baseline; its first answer is node_recovered", () => {
+  assert.deepEqual(runPasses([false, false, true]).map((e) => e.kind), ["node_recovered"]);
 });
 
 test("every emitted event validates against the wire schema", () => {
