@@ -1,3 +1,4 @@
+import type { InventoryHost, IsoRefreshStatus } from "@moltentech/protocol";
 import { reloadInventory, type AgentConfig } from "./config";
 import { refreshIso, type IsoRefreshResult } from "./executor";
 import { getNodeStatuses, getStorageIsoNames } from "./health";
@@ -9,6 +10,42 @@ export type IsoRefreshDeps = {
   nodeStatuses?: (cfg: AgentConfig) => Promise<Map<string, string> | null>;
   listIsos?: ListIsosFn;
 };
+
+/**
+ * Last refresh outcome per Proxmox node, carried to the hub on every inventory assert
+ * (`InventoryHost.isoRefresh`). In memory on purpose: a restart runs a refresh straight away,
+ * so the hub is never more than one refresh behind, and `failures` restarting at 0 costs at
+ * most one extra 6-hour cycle before the hub alerts.
+ */
+const isoStatus = new Map<string, IsoRefreshStatus>();
+
+/** Record one refresh outcome for `nodeName`, counting failures in a row. */
+export function recordIsoRefresh(nodeName: string, result: IsoRefreshResult, now: Date = new Date()): IsoRefreshStatus {
+  const prev = isoStatus.get(nodeName);
+  const status: IsoRefreshStatus = result.ok
+    ? { ok: true, at: now.toISOString(), failures: 0, ...(result.iso ? { iso: result.iso } : {}) }
+    : {
+        ok: false,
+        at: now.toISOString(),
+        failures: (prev && !prev.ok ? prev.failures : 0) + 1,
+        error: (result.error || "unknown error").slice(0, 500),
+      };
+  isoStatus.set(nodeName, status);
+  return status;
+}
+
+/** `hosts` with each one's last refresh outcome attached (hosts never refreshed are left as-is). */
+export function withIsoRefreshStatus(hosts: InventoryHost[]): InventoryHost[] {
+  return hosts.map((h) => {
+    const status = isoStatus.get(h.nodeName);
+    return status ? { ...h, isoRefresh: status } : h;
+  });
+}
+
+/** Tests only. */
+export function resetIsoRefreshStatus(): void {
+  isoStatus.clear();
+}
 
 async function defaultNodeStatuses(cfg: AgentConfig): Promise<Map<string, string> | null> {
   if (!cfg.proxmox?.url || !cfg.proxmox.tokenId || !cfg.proxmox.tokenSecret) return null;
@@ -75,6 +112,7 @@ export async function refreshIsoOnce(
     try {
       const result: IsoRefreshResult = await refreshIsoFn(host.nodeName, storageIso, cfg.host.arcaneIso, cfg);
       const took = `${Math.round((Date.now() - started) / 1000)}s`;
+      recordIsoRefresh(host.nodeName, result);
       if (!result.ok) {
         console.error(`[agent] ISO refresh failed on ${host.nodeName} after ${took}: ${result.error}`);
         continue;
@@ -88,6 +126,7 @@ export async function refreshIsoOnce(
         );
       }
     } catch (err) {
+      recordIsoRefresh(host.nodeName, { ok: false, error: (err as Error).message });
       console.error(`[agent] ISO refresh error on ${host.nodeName}:`, (err as Error).message);
     }
   }
