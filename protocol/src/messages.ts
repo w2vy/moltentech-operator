@@ -461,6 +461,20 @@ export const VmMemoryMb = z
   .strict();
 export type VmMemoryMb = z.infer<typeof VmMemoryMb>;
 
+/** Outcome of the agent's most recent FluxLive ISO refresh on one host (`InventoryHost.isoRefresh`). */
+export const IsoRefreshStatus = z.object({
+  ok: z.boolean(),
+  /** When that refresh finished. */
+  at: Timestamp,
+  /** Failed refreshes IN A ROW on this host; 0 once one succeeds. */
+  failures: z.number().int().nonnegative(),
+  /** The failure, trimmed (absent when `ok`). */
+  error: z.string().max(500).optional(),
+  /** The ISO the host now holds (only when `ok`). */
+  iso: z.string().min(1).optional(),
+});
+export type IsoRefreshStatus = z.infer<typeof IsoRefreshStatus>;
+
 /** One agent-managed Proxmox host + the slots it carries (maps to a ProxmoxHost row). */
 export const InventoryHost = z.object({
   /** Globally-unique host label (ProxmoxHost.name). */
@@ -481,6 +495,17 @@ export const InventoryHost = z.object({
    * Read by the agent from its own inventory at provision time; a running VM keeps its size.
    */
   vmMemoryMb: VmMemoryMb.optional(),
+  /**
+   * The agent's last FluxLive ISO refresh on this host (protocol 0.6.25). Until this field, a
+   * failed refresh was one log line in the agent: the hub never saw it, which is how a missing
+   * `ca-certificates` left every refresh failing with nobody told. The hub alerts on
+   * `failures` in a row; the count lives HERE so it survives a hub redeploy without a sweep.
+   *
+   * OPTIONAL and `SCHEMA_VERSION` deliberately does NOT change (see `JobResult.failureClass`):
+   * an older agent omits it, an older hub strips it. Absent also means "no refresh has run on
+   * this host since the agent started" — an offline host is skipped and keeps its last value.
+   */
+  isoRefresh: IsoRefreshStatus.optional(),
   slots: z.array(InventorySlot),
 });
 export type InventoryHost = z.infer<typeof InventoryHost>;

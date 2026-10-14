@@ -2,7 +2,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { AgentConfig } from "./config";
 import type { IsoRefreshResult } from "./executor";
-import { refreshIsoOnce } from "./iso-refresh";
+import { IsoRefreshStatus, type InventoryHost } from "@moltentech/protocol";
+import { refreshIsoOnce, recordIsoRefresh, resetIsoRefreshStatus, withIsoRefreshStatus } from "./iso-refresh";
 
 const baseHost: AgentConfig["host"] = {
   network: "vmbr0",
@@ -157,4 +158,50 @@ test("every refresh failed and the name is bare → it is taken from the ISO sto
   });
   assert.deepEqual(looked, ["pve40/pve55-shared"]);
   assert.equal(cfg.host.arcaneIso, "FluxLive-1775071308.iso");
+});
+
+test("records each host's outcome and counts failures in a row, reset by a success", async () => {
+  resetIsoRefreshStatus();
+  const cfg = cfgWith({
+    inventory: [
+      { name: "h1", nodeName: "pve1", slots: [] },
+      { name: "h2", nodeName: "pve2", slots: [] },
+    ] as never,
+  });
+  const fail = async (node: string): Promise<IsoRefreshResult> =>
+    node === "pve1" ? { ok: false, error: "Unable to fetch latest release info" } : { ok: true, iso: "FluxLive-111.iso" };
+  await refreshIsoOnce(cfg, fail);
+  await refreshIsoOnce(cfg, fail);
+  const hosts = withIsoRefreshStatus(cfg.inventory as never);
+  assert.equal(hosts[0]!.isoRefresh?.ok, false);
+  assert.equal(hosts[0]!.isoRefresh?.failures, 2);
+  assert.equal(hosts[0]!.isoRefresh?.error, "Unable to fetch latest release info");
+  assert.equal(hosts[1]!.isoRefresh?.ok, true);
+  assert.equal(hosts[1]!.isoRefresh?.failures, 0);
+  assert.equal(hosts[1]!.isoRefresh?.iso, "FluxLive-111.iso");
+
+  await refreshIsoOnce(cfg, async () => ({ ok: true, iso: "FluxLive-111.iso" }));
+  assert.equal(withIsoRefreshStatus(cfg.inventory as never)[0]!.isoRefresh?.failures, 0);
+});
+
+test("a thrown refresh counts as a failure; a host never refreshed carries no status", async () => {
+  resetIsoRefreshStatus();
+  const cfg = cfgWith({ inventory: [{ name: "h1", nodeName: "pve1", slots: [] }] as never });
+  await refreshIsoOnce(cfg, async () => {
+    throw new Error("spawn arcane-mage ENOENT");
+  });
+  const [h1, h9] = withIsoRefreshStatus([
+    ...(cfg.inventory as never as InventoryHost[]),
+    { name: "h9", nodeName: "pve9", slots: [] },
+  ]);
+  assert.equal(h1!.isoRefresh?.failures, 1);
+  assert.equal(h1!.isoRefresh?.error, "spawn arcane-mage ENOENT");
+  assert.equal(h9!.isoRefresh, undefined);
+});
+
+test("the error is trimmed to the protocol's 500 characters", () => {
+  resetIsoRefreshStatus();
+  const s = recordIsoRefresh("pve1", { ok: false, error: "x".repeat(2000) });
+  assert.equal(s.error?.length, 500);
+  assert.ok(IsoRefreshStatus.safeParse(s).success);
 });

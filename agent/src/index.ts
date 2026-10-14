@@ -8,7 +8,7 @@ import { loadManifestKey } from "./signing";
 import { pickExecutor, deprovisionVm } from "./executor";
 import { collectOwnedVms, getVmDescription, type OwnedVm } from "./health";
 import { parseDescriptionDeadline, shouldSelfDestruct, wantsDescriptionDeadline } from "./trial-expiry";
-import { refreshIsoOnce } from "./iso-refresh";
+import { refreshIsoOnce, withIsoRefreshStatus } from "./iso-refresh";
 import { runDetached } from "./background";
 import { runPreflight, formatPreflight, checkManifestKey } from "./preflight";
 
@@ -143,7 +143,7 @@ async function main() {
     // No slots anywhere (none declared, or hosts with `slots: []`): nothing to assert.
     if (!declaresAnySlot(inventory)) return;
     try {
-      await client.assertInventory(inventory);
+      await client.assertInventory(withIsoRefreshStatus(inventory));
       const slots = inventory.reduce((n, h) => n + h.slots.length, 0);
       console.log(`[agent] declared inventory: ${inventory.length} host(s), ${slots} slot(s)`);
     } catch (err) {
