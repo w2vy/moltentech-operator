@@ -9,6 +9,7 @@ path to getting your nodes live in the first place.
 <img src="images/app-push.png" alt="Lock screen pushes" width="220">
 <img src="images/app-issues.png" alt="Issues list" width="220">
 <img src="images/app-fleet.png" alt="Fleet view" width="220">
+<img src="images/app-settings.png" alt="Settings" width="220">
 </p>
 
 *Illustrative screens with sample data.*
