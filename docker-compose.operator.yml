@@ -1,12 +1,13 @@
-# Operator-side marketplace stack (the remote-operator legs), used for the pve25
-# live E2E and as the basis for the public moltentech-operator repo.
+# Builds the operator agent from a source checkout (the generated `compose.yaml` from
+# `fh-toolkit init` runs the published image instead, and is what operators use):
+#   docker compose -f docker-compose.operator.yml --profile agent up -d --build
 #
-# The two services run on DIFFERENT hosts, gated by compose profiles:
-#   - on the operator's Proxmox box (pve25):   docker compose -f docker-compose.operator.yml --profile agent     up -d --build
-#   - beside MT (w2vy, for this test):          docker compose -f docker-compose.operator.yml --profile coalition up -d --build
+# Builds from the REPO ROOT context (protocol/ + arcane-mage/ in scope). Fill
+# .env.operator (see .env.operator.example); never commit it.
 #
-# Both build from the REPO ROOT context (protocol/ + arcane-mage/ in scope). Fill
-# .env.operator on each host (see .env.operator.example); never commit it.
+# The Coalition is not here: it runs as a Flux App from the published image
+# (operator-onboarding.md Step 4). Its old self-hosted service, published on :8088
+# behind a fluxapp-staging Caddy vhost, was removed 2026-10-15.
 name: moltentech-operator
 
 services:
@@ -21,19 +22,3 @@ services:
     restart: unless-stopped
     env_file: [.env.operator]
     # No published ports — the agent only dials out (MT 443 + local Proxmox :8006).
-
-  # Inbound leg: serves the signed manifest + stats, hosts checkout/manage, relays
-  # Stripe webhooks to MT. Stateless; the only secrets are the restricted Stripe key
-  # + webhook secret (env). The offline-signed manifest is mounted read-only.
-  coalition:
-    profiles: ["coalition"]
-    build:
-      context: .
-      dockerfile: ./coalition/Dockerfile
-    # No container_name (see agent) — auto-named per project so instances coexist.
-    restart: unless-stopped
-    env_file: [.env.operator]
-    volumes:
-      - ./coalition/manifest.json:/app/coalition/manifest.json:ro
-    ports:
-      - "8088:8088"   # fronted by the fluxapp-staging.moltentech.us Caddy vhost
