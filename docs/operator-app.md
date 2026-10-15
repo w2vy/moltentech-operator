@@ -1,4 +1,4 @@
-# The Operator App
+# The Flux Hub App
 
 Your fleet on your phone: alerts become **Issues**, Issues can push to your phone, and the
 whole fleet fits on one status board. It is the same for **Operators and Supporters**, on

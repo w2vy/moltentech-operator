@@ -1387,7 +1387,7 @@ FH stores only a **hash** of `agentKey`, an **encrypted** copy of `coalitionKey`
 the **public** half of `coalitionSigningKey`. It stores **none** of your Stripe or
 Proxmox credentials, and never the private half of anything you generated.
 
-## The Operator App (phone, Issues, status board)
+## The Flux Hub App (phone, Issues, status board)
 
 Once you are live, pair a phone: Flux Hub turns your alerts into **Issues** and pushes them
 to it — a web app at `/m`, paired by a QR from the console's **Phone** tab. Pairing,
