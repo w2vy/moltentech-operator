@@ -1,8 +1,8 @@
 # Flux Hub Onboarding
 
 This is the runbook to join Flux Hub: you run Flux nodes on your own Proxmox, and — if
-you choose to — customers rent them through Flux Hub (FH) and **pay you directly** on
-your own Stripe account. FH never holds your Proxmox or Stripe credentials and never
+you choose to — customers rent them through Flux Hub (FH) and **pay you directly** — by card on
+your own Stripe account, in FLUX to your own address, or both. FH never holds your Proxmox or Stripe credentials and never
 opens an inbound connection to you.
 
 ## The other two documents
@@ -24,7 +24,7 @@ should not:
 | Runs their own nodes | yes | yes |
 | Runs **Foundation nodes** on idle capacity | yes | yes |
 | Rents hardware out through the marketplace | no | yes |
-| Stripe account | **not needed** | required — you are merchant of record |
+| Payment method | **not needed** | Stripe **or** FLUX required (both is fine) — you are merchant of record |
 
 A **Supporter** lends the capacity they are not using: Flux Hub places Foundation nodes
 on their spare slots, alongside their own. Nothing is listed for sale, so there is no
@@ -40,16 +40,16 @@ Stripe account in the way. See the Supporter transcript in
 
 `fh-toolkit init` is an installation script you run once you have all the prerequisites
 configured, and it asks whether you are a Supporter or an Operator during that process.
-Upgrading to an Operator later is a simple process, mostly requiring setting up your
-Stripe account — the second block of that same transcript is exactly what the upgrade
+Upgrading to an Operator later is a simple process, mostly setting up how you get paid
+(a FLUX payout address, a Stripe account, or both) — the second block of that same transcript is exactly what the upgrade
 adds.
 
 fh-toolkit also has commands to test your configuration settings without exposing your keys.
 
 Either way you can still deploy your own nodes: **Grants** (`/operator/grants` on Flux Hub)
 put a slot from your fleet under a free rental, no payment involved. A Supporter can grant
-only to their own wallet; an Operator can grant to anyone. Stripe is what lets strangers
-buy from you.
+only to their own wallet; an Operator can grant to anyone. A payment method (Stripe or
+FLUX) is what lets strangers buy from you.
 
 ## What you run
 
@@ -75,7 +75,7 @@ customer ─buy──▶ │ storefront → calls your Coalition /checkout → S
 Step 0  Proxmox: token, storage, ISO          ← on your Proxmox
 Step 1  keygen + config.env  ─────────────┐   ← on your agent host
 Step 2  /onboard: paste + wallet-sign     ├─▶ THREE KEYS, issued once
-Step 3  Stripe (Operator only)  ──────────┘   (webhook needs your Coalition URL, which
+Step 3  Payment (Operator only)  ─────────┘   (webhook needs your Coalition URL, which
 Step 4  Deploy the Coalition on Flux           you already chose in Step 1 — see below)
 Step 5  Declare inventory.json
 Step 6  Run the agent
@@ -100,7 +100,9 @@ enable ProxMox Clustering. The agent automatically detects is Cluster mode is en
   and outbound 443 (a sidecar VM/LXC has not yet been tested, isolation seems simpler).
   The agent image bundles Node + Python + `arcane-mage`, so nothing else is needed on that host.
 - A **Flux** account with enough FLUX to register an app (the Coalition is a small, stateless container).
-- A **Stripe** account (you are merchant of record) - **Operator Only**.
+- **Operator only** — a way to get paid, at least one of (you are merchant of record):
+  - a **Flux payout address** (`t1…`/`t3…` on your wallet's Flux chain), and/or
+  - a **Stripe** account.
 - A **Flux wallet** (Zelcore or SSP) holding the ZelID/SSPID you will use as your
   `OWNER_ADDRESS`. This wallet signs onboarding and every privileged node action
   forever after — use one you will still control in a year.
@@ -500,13 +502,13 @@ answer was always "all of them"; hold some back later by editing `AGENT_LISTING_
 `config.env`.
 
 A Supporter can still be *given* nodes: a rental an admin **assigns** to you involves no
-payment method at all. Stripe is what lets strangers buy from you.
+payment method at all. A payment method (Stripe or FLUX) is what lets strangers buy from you.
 - **`init` finishes what it can.** It signs `manifest.json` for you — the file Step 2
   asks you to paste — so there is no separate `sign` command to remember on a first run.
   `MANIFEST_KEY` is derived from `manifest-key.pem`
   and written to both files, `MANIFEST_PUBKEY` is pinned, `SESSION_SECRET` is generated,
   and you are asked for the Proxmox token pair (Step 0.1 already printed it) and — if
-  you are selling — your Stripe keys.
+  you are selling — your FLUX payout address and/or Stripe keys.
 - So an empty value in the generated `secrets.env` means **another system has to issue
   it**, not that a question was skipped. On a self-hoster's first run exactly one is
   empty: `COALITION_SIGNING_KEY`, minted by `/onboard`.
@@ -751,12 +753,26 @@ Your provider now exists at FH in status `pending`. Step 7 activates it.
 
 ---
 
-## Step 3 — Stripe setup *(Operator only)*
+## Step 3 — Payment setup: FLUX and/or Stripe *(Operator only)*
 
 ⏭️ **Supporter? Skip this entire step and go to Step 4.** You have nothing for sale, so
-you need no Stripe account, no API key and no webhook. If you later upgrade to Operator,
-**come back here** — the upgrade instructions under *Ongoing operations* send you to
-`fh-toolkit level --set operator`, which asks for a Stripe key it assumes you already have.
+you need no payment setup at all. If you later upgrade to Operator, **come back here** —
+the upgrade instructions under *Ongoing operations* send you to
+`fh-toolkit level --set operator`, which asks for a FLUX payout address and Stripe keys
+it assumes you already have.
+
+An Operator needs **at least one** payment method; both is fine.
+
+- **FLUX** — no account, no keys, no webhook. Set `PROVIDER_FLUX_PAYOUT_ADDRESS` in
+  `config.env` (`init`/`level` ask for it, or `fh-toolkit stripe --flux-address t1…`),
+  then `fh-toolkit sign` — it is in the signed manifest — and `fh-toolkit env` writes
+  `FLUX_PAYMENTS=true` so the Coalition boots without Stripe. Customers pay FLUX straight
+  to your address; the hub watches the chain and hands over the node. Flux Hub takes no
+  cut. Use a **chain** address from your wallet, not your ZelID login. **FLUX only? You
+  are done with this step — go to Step 4.**
+- **Stripe** (card payments) — the rest of this step.
+
+### Stripe
 
 📷 **Click-by-click with screenshots:** [`stripe-setup.md`](stripe-setup.md) walks the
 whole of this step in the Stripe dashboard. The summary below is the same procedure.
@@ -805,13 +821,9 @@ whole of this step in the Stripe dashboard. The summary below is the same proced
    of which API key you use. A test-mode `rk_test_` paired with a live-mode `whsec_`
    fails the same silent way.
 
-> **Stripe is optional.** The Coalition needs `STRIPE_SECRET_KEY` + `STRIPE_WEBHOOK_SECRET`
-> only when you list a PAID tier *and* do not accept FLUX. A Supporter (`TIER_PRICES_JSON={}`)
-> needs no payment setup at all. An Operator may instead — or as well — accept **FLUX**: set
-> `PROVIDER_FLUX_PAYOUT_ADDRESS` in `config.env` (`fh-toolkit stripe --flux-address t1…`, then
-> `fh-toolkit sign` — it is in the signed manifest), and `fh-toolkit env` writes
-> `FLUX_PAYMENTS=true` so the Coalition boots without Stripe. Customers then pay FLUX straight to
-> your address; the hub watches the chain and hands over the node. Flux Hub takes no cut.
+> **When the Coalition needs Stripe.** `STRIPE_SECRET_KEY` + `STRIPE_WEBHOOK_SECRET` are
+> required only when you list a PAID tier *and* have no FLUX payout address. With a FLUX
+> address set they are optional; set them too and customers can choose card or FLUX.
 
 ---
 
@@ -845,6 +857,7 @@ a key becomes part of its value, and FH will reject the result (401).
 
 ```sh
 # secrets.env
+# STRIPE_* — only if you take card payments (Step 3); leave both empty for FLUX only.
 STRIPE_SECRET_KEY=rk_live_<restricted>
 STRIPE_WEBHOOK_SECRET=whsec_<from step 3>
 # SESSION_SECRET — SET THIS. Any long random string; it is only an HMAC key for the
@@ -1315,8 +1328,9 @@ include your provider slug.
 - **Inventory**: your hosts appear with the slots you declared, in `available`.
 - **Listing**: your price + slots offered land at FH within a heartbeat.
 - **Stats**: FH pulls `/stats`; benchmarks/uptime appear on your card.
-- **Checkout (test)**: with Stripe in test mode, rent one of your tiers from
-  `/providers` → you get a Stripe Checkout (your account) with a trial → FH records a
+- **Checkout (test)**: rent one of your tiers from `/providers`. Card: with Stripe in
+  test mode you get a Stripe Checkout (your account) with a trial. FLUX: you get a
+  24 h trial, then a FLUX payment to your address. Either way → FH records a
   rental → your agent provisions the node → result flows back.
 - **Authorization**: cancel that test rental and confirm the pending action shows up in
   `<COALITION_URL>/console` — and, if you have a Flux Hub login, at `/operator` too.
@@ -1478,7 +1492,8 @@ exactly like a phone (Phone tab → QR); leave notifications off on it, or **Mut
   restart. A removal does not delete the row — it disavows an unrented slot within a
   heartbeat and can be undone by re-adding the entry. See **Retiring a host** below.
 - **Upgrade Supporter → Operator** (or back): `fh-toolkit level --set operator`. It asks
-  which tiers you will offer, at what price, and for your Stripe pair — the same
+  which tiers you will offer, at what price, and for your FLUX payout address and/or
+  Stripe pair — the same
   questions `init` asks a seller — then edits **`config.env`, `secrets.env`, and the
   `AGENT_LISTING_JSON` line of `.env.operator`** (every priced tier, all declared slots
   offered). Nothing else in your directory is touched: not `manifest.json`, not
@@ -1490,11 +1505,11 @@ exactly like a phone (Phone tab → QR); leave notifications off on it, or **Mut
   `PROVIDER_LEVEL` is in your **signed manifest**, so this is a re-sign, not a config
   edit: `fh-toolkit sign` → `fh-toolkit env` → re-import `env.json` (Flux Hub reads the new manifest from your Coalition within 15 minutes; a paste at `/onboard` applies it at once). `level` also updates the level lines
   in `README.txt`. Until the hub re-ingests, it still has you as a Supporter, and
-  `fh-toolkit doctor` reports `MANIFEST_STALE`. Then **go back to Step 3** and create the
+  `fh-toolkit doctor` reports `MANIFEST_STALE`. **Go back to Step 3 first** if you have
+  no payment method yet: a FLUX payout address is all FLUX needs; for card, create the
   restricted Stripe key with the exact permission list there — upgrading does not create
-  one for you, and `level --set operator` will ask for a key you do not have yet. Register
-  your Stripe webhook endpoint, check it with `doctor --check-stripe`, and re-run `env` →
-  re-import.
+  one for you. Register your Stripe webhook endpoint, check it with
+  `doctor --check-stripe`, and re-run `env` → re-import.
 
   Run `fh-toolkit level` with no flags first to see where you stand, and
   `--dry-run` to read the diff before it writes. `--set supporter` is the way back: it
@@ -1517,7 +1532,8 @@ exactly like a phone (Phone tab → QR); leave notifications off on it, or **Mut
   provider auto-hides from the marketplace (data retained) and auto-re-lists on the next
   fresh update — so keep the agent and Coalition running.
 - **Customer cancel/refund**: cancellation is free during the trial; afterward you are
-  merchant of record — refunds/disputes are handled in your Stripe dashboard.
+  merchant of record — card refunds/disputes are handled in your Stripe dashboard; a FLUX
+  payment went straight to your address, so any refund is a FLUX send from you.
 
 ### Retiring a host
 
@@ -1573,8 +1589,8 @@ the file. The real boundary is the **Proxmox API token path ACL**.
 ## Trust model (why this is safe)
 
 - You hold **all** your own secrets; FH holds none of them. The agent is outbound-only
-  with no inbound ports. The Coalition's only secrets are a restricted Stripe key +
-  webhook secret — and they are protected by deploying the Coalition as a Flux
+  with no inbound ports. The Coalition's only payment secrets are a restricted Stripe
+  key + webhook secret (none at all if you take FLUX only) — and they are protected by deploying the Coalition as a Flux
   **enterprise app**, whose environment is encrypted (Step 4). Nothing about ArcaneOS
   is involved: ArcaneOS is what the rented node VMs boot, not what the Coalition runs on.
 - Ownership is proven by a wallet signature over your own manifest's bytes. FH can
