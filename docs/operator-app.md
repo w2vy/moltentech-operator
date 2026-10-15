@@ -5,6 +5,15 @@ whole fleet fits on one status board. It is the same for **Operators and Support
 every plan. This is the reference; [operator-onboarding.md](operator-onboarding.md) is the
 path to getting your nodes live in the first place.
 
+<p>
+<img src="images/app-push.png" alt="Lock screen pushes" width="220">
+<img src="images/app-issues.png" alt="Issues list" width="220">
+<img src="images/app-fleet.png" alt="Fleet view" width="220">
+<img src="images/app-settings.png" alt="Settings" width="220">
+</p>
+
+*Illustrative screens with sample data.*
+
 Flux Hub turns your alerts into **Issues** and can push them to your phone. Nothing to
 install on your side beyond the phone itself: the app is a web app (PWA) served by Flux Hub
 at `/m`, and it pairs to your operator account from the desktop console.
@@ -72,7 +81,7 @@ How pushes behave:
 
 - **One push per Issue**, when it opens. Repeats never push.
 - More than **3** at once become **one summary** push.
-- A node Issue that pushed and then cleared by itself sends **✅ Back up**, which replaces the
+- A node Issue that pushed and then cleared by itself sends **✅ Recovered**, which replaces the
   down notification on the phone.
 - Critical and warning pushes are sent high-urgency so Android delivers them on an idle
   phone.
