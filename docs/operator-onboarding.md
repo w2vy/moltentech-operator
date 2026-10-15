@@ -1198,8 +1198,8 @@ Each verb is one compose command in the directory (`start`=`up -d`, `stop`=`down
 ⚠️ If you see **"self-signed certificate in certificate chain"**, the image is missing
 its CA store — it is not a middlebox on your network and not a Proxmox cert problem.
 
-(`docker-compose.operator.yml` in the repo is a different thing: it **builds from a
-source checkout** and runs both legs. The generated `compose.yaml` is the one you want.)
+(`docker-compose.operator.yml` in the repo is a different thing: it **builds the agent from a
+source checkout**. The generated `compose.yaml` is the one you want.)
 
 `priceCents` must be ≥ the FH platform floor and should match `TIER_PRICES_JSON` in the
 Coalition.

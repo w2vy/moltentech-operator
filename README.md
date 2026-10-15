@@ -28,12 +28,13 @@ git clone --recurse-submodules https://github.com/w2vy/moltentech-operator.git
 cd moltentech-operator
 cp .env.operator.example .env.operator   # fill the subset each host needs
 
-# On the operator's Proxmox box (or any Docker host with LAN reach to :8006):
-docker compose -f docker-compose.operator.yml --profile agent    up -d --build
-
-# On your Flux node (the inbound leg):
-docker compose -f docker-compose.operator.yml --profile coalition up -d --build
+# Build and run the agent from source, on any Docker host with LAN reach to :8006:
+docker compose -f docker-compose.operator.yml --profile agent up -d --build
 ```
+
+Most operators run the published images instead: `fh-toolkit init` writes a
+`compose.yaml` for the agent, and the Coalition (the inbound leg) is deployed as a
+Flux App from `w2vy/coalition:latest` — see the onboarding guide below.
 
 Already cloned without submodules? `git submodule update --init --recursive`.
 
