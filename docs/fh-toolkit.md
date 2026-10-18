@@ -665,6 +665,14 @@ IS a manifest field, so the closing steps say `fh-toolkit sign` → `env` + re-i
 (`FLUX_PAYOUT_IS_ZELID`), a bad checksum (`FLUX_PAYOUT_ADDRESS_INVALID`), and on paid tiers
 with no Stripe line and no address (`PAID_TIERS_NO_PAYMENT_RAIL`).
 
+**Foundation rewards.** `init` asks every level for `PROVIDER_REWARD_ADDRESS`: the Flux
+**chain** address (`t1…`/`t3…`) the Flux Foundation pays your share of node rewards to, for
+the Foundation nodes you host. It is separate from the payout address above — setting it
+does not turn on FLUX rentals, so a card-only Operator or a Supporter can still be paid.
+Blank = the hub uses `PROVIDER_FLUX_PAYOUT_ADDRESS`; with both blank you cannot be paid. It
+is a manifest field: to add or change it later, edit `config.env`, then `fh-toolkit sign` →
+`env` + re-import (or paste at `/onboard`).
+
 ### `inventory`
 
 ```

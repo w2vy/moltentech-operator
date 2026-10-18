@@ -19,6 +19,7 @@ import { isFluxTAddress, looksLikeZelId } from "./flux-address";
  *   TRIAL_DAYS                                      -> trialDays
  *   PROVIDER_LEVEL                                  -> level (supporter | operator)
  *   PROVIDER_FLUX_PAYOUT_ADDRESS                    -> fluxPayoutAddress (Pay-by-Flux; t1…/t3…)
+ *   PROVIDER_REWARD_ADDRESS                         -> rewardAddress (Foundation rewards; t1…/t3…)
  *   MANUAL_APPROVAL ("true"/"false")                -> manualApproval
  *   OWNER_ADDRESS                                   -> ownerAddress (optional; the
  *                                                      wallet that authorizes this
@@ -111,6 +112,17 @@ export function renderManifestBodyFromConfig(configText: string): Record<string,
       );
     }
     body.fluxPayoutAddress = addr;
+  }
+  // Foundation reward address. Same emit-only-when-set rule, same check.
+  if (env.PROVIDER_REWARD_ADDRESS) {
+    const addr = env.PROVIDER_REWARD_ADDRESS.trim();
+    if (!isFluxTAddress(addr)) {
+      throw new Error(
+        `config.env: PROVIDER_REWARD_ADDRESS must be a Flux t1…/t3… chain address, got "${addr}"` +
+          (looksLikeZelId(addr) ? " — that is a ZelID/SSP LOGIN address; open the wallet's Flux chain and copy its receive address" : ""),
+      );
+    }
+    body.rewardAddress = addr;
   }
   return body;
 }
