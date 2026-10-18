@@ -96,6 +96,14 @@ export const ProviderManifestBody = Envelope.extend({
    * hub tells customers to send money here — it must be something the owner wallet signed.
    */
   fluxPayoutAddress: FluxTAddress.optional(),
+  /**
+   * Foundation rewards: the Flux CHAIN address (t1…/t3…) the Flux Foundation pays this
+   * provider's share of node rewards to, for the Foundation nodes it hosts. Separate from
+   * `fluxPayoutAddress` so an operator who takes card payments only — or a Supporter, who
+   * sells nothing — can still be paid. Absent = the hub falls back to `fluxPayoutAddress`.
+   * Signed for the same reason: someone is told to send money here. OPTIONAL, no default.
+   */
+  rewardAddress: FluxTAddress.optional(),
   /** Operator-selectable free-trial window in days (1–30); MT defaults missing to 1. */
   trialDays: z.number().int().min(1).max(30).default(1),
   /** Cautious operators may require manual approval before provisioning a trial. */

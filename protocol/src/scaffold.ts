@@ -153,6 +153,10 @@ export interface Answers {
   /** Pay-by-Flux: the operator's own Flux chain address (t1…/t3…) rentals are paid to.
    * Signed in the manifest. Blank = card payments only. */
   fluxPayoutAddress?: string;
+  /** Foundation rewards: the Flux chain address (t1…/t3…) the Flux Foundation pays this
+   * provider's share of node rewards to. Signed in the manifest. Blank = the hub uses
+   * `fluxPayoutAddress`. Asked of every level: a Supporter hosts Foundation nodes too. */
+  rewardAddress?: string;
   /**
    * The Coalition console's session secret. Any long random string — it has no
    * external issuer, so `init` GENERATES one when this is absent rather than sending
@@ -453,7 +457,14 @@ export function renderConfigEnv(a: Answers): string {
     "# and hands over the node when the payment confirms. Blank = card payments only. With it",
     "# set you may sell with no Stripe account at all. Signed in the manifest: changing it is a",
     "# re-sign + re-paste.",
-    `PROVIDER_FLUX_PAYOUT_ADDRESS=${a.fluxPayoutAddress ?? ""}`
+    `PROVIDER_FLUX_PAYOUT_ADDRESS=${a.fluxPayoutAddress ?? ""}`,
+    "",
+    "# PROVIDER_REWARD_ADDRESS — where the Flux Foundation pays your share of node rewards for",
+    "# the Foundation nodes you host: a Flux CHAIN address of yours (t1…/t3…, NOT your ZelID/SSP",
+    "# login address). Blank = PROVIDER_FLUX_PAYOUT_ADDRESS is used; with both blank you cannot",
+    "# be paid. Setting it does NOT turn on FLUX payments for rentals. Signed in the manifest:",
+    "# changing it is a re-sign + re-paste.",
+    `PROVIDER_REWARD_ADDRESS=${a.rewardAddress ?? ""}`
   );
   // ALWAYS emitted, even empty. An absent line is invisible: the operator has nothing
   // to notice and nothing to fill in, and the omission only surfaces at the first

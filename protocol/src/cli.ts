@@ -1539,6 +1539,23 @@ async function askAnswers(ctx: Ctx): Promise<Answers> {
       // whether the tool forgot to ask or decided they do not need one.
       console.log("\nStripe — skipped: a Supporter sells nothing and needs no Stripe account.");
     }
+    // Foundation rewards — every level: a Supporter hosts Foundation nodes too.
+    console.log("\nFoundation rewards — the Flux Foundation pays your share of node rewards to a Flux chain address of yours.");
+    const rewardAddress = (
+      await askUntil(
+        fluxPayoutAddress
+          ? "  Reward address (t1…/t3…), blank to use your Flux payout address"
+          : "  Reward address (t1…/t3… from your wallet's Flux chain), blank to add later",
+        (v) => {
+          const t = v.trim();
+          if (t === "" || isFluxTAddress(t)) return undefined;
+          return looksLikeZelId(t)
+            ? "that is a ZelID/SSP LOGIN address — open the wallet's Flux chain and copy its receive address (t1…)."
+            : `"${t}" is not a Flux t1…/t3… address.`;
+        },
+        ""
+      )
+    ).trim();
     // Card chips are an operator thing: a Supporter has no card to put them on.
     const facilities: Facilities = level === "operator" ? await askFacilities(ask, askUntil) : {};
     const tiers = Object.keys(tierPricesCents);
@@ -1596,6 +1613,7 @@ async function askAnswers(ctx: Ctx): Promise<Answers> {
       stripeSecretKey: stripeSecretKey || undefined,
       stripeWebhookSecret: stripeWebhookSecret || undefined,
       fluxPayoutAddress: fluxPayoutAddress || undefined,
+      rewardAddress: rewardAddress || undefined,
     };
   });
 }

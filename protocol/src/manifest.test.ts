@@ -172,3 +172,25 @@ test("fluxPayoutAddress: a t1/t3 chain address parses, a ZelID does not, omitted
   assert.equal(ProviderManifest.safeParse(body("t1d1FRcLh5nrF7ubbTzwV7KiqvA8bXKED8f")).success, false, "checksum");
   assert.equal("fluxPayoutAddress" in ProviderManifest.parse(body()), false);
 });
+
+test("rewardAddress: a t1/t3 chain address parses, a ZelID does not, omitted is byte-identical", () => {
+  const { publicKeyBase64 } = generateEd25519();
+  const body = (rewardAddress?: string): Record<string, unknown> => ({
+    schemaVersion: 2,
+    provider: { slug: "reward-test", name: "Reward Test" },
+    coalitionUrl: "https://coalition.example",
+    pubkey: publicKeyBase64,
+    hardware: [{ name: "pve-01" }],
+    trialDays: 1,
+    manualApproval: false,
+    serviceFlags: {},
+    trustedSelfClaim: false,
+    publishedAt: "2026-10-18T00:00:00.000Z",
+    signature: "x",
+    ...(rewardAddress === undefined ? {} : { rewardAddress }),
+  });
+  assert.equal(ProviderManifest.safeParse(body("t1d1FRcLh5nrF7ubbTzwV7KiqvA8bXKED8e")).success, true);
+  assert.equal(ProviderManifest.safeParse(body("1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2")).success, false, "ZelID");
+  assert.equal(ProviderManifest.safeParse(body("t1d1FRcLh5nrF7ubbTzwV7KiqvA8bXKED8f")).success, false, "checksum");
+  assert.equal("rewardAddress" in ProviderManifest.parse(body()), false);
+});

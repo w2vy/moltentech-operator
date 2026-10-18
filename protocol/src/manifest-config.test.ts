@@ -136,3 +136,18 @@ test("PROVIDER_FLUX_PAYOUT_ADDRESS maps to fluxPayoutAddress (absent when unset;
   );
   assert.throws(() => renderManifestBodyFromConfig(SAMPLE + "\nPROVIDER_FLUX_PAYOUT_ADDRESS=nope"), /t1…\/t3…/);
 });
+
+test("PROVIDER_REWARD_ADDRESS maps to rewardAddress on its own (absent when unset; a ZelID is refused by name)", () => {
+  assert.equal("rewardAddress" in renderManifestBodyFromConfig(SAMPLE), false, "legacy bytes unchanged");
+  const T1 = "t1d1FRcLh5nrF7ubbTzwV7KiqvA8bXKED8e";
+  const body = renderManifestBodyFromConfig(SAMPLE + `\nPROVIDER_REWARD_ADDRESS= ${T1} `);
+  assert.equal(body.rewardAddress, T1, "trimmed");
+  assert.equal("fluxPayoutAddress" in body, false, "a reward address does not turn on FLUX rentals");
+  const stamped = { ...body, pubkey: "x", publishedAt: new Date().toISOString() };
+  assert.equal(ProviderManifestBody.safeParse(stamped).success, true);
+  assert.throws(
+    () => renderManifestBodyFromConfig(SAMPLE + "\nPROVIDER_REWARD_ADDRESS=1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2"),
+    /LOGIN address/,
+  );
+  assert.throws(() => renderManifestBodyFromConfig(SAMPLE + "\nPROVIDER_REWARD_ADDRESS=nope"), /PROVIDER_REWARD_ADDRESS.*t1…\/t3…/);
+});

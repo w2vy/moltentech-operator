@@ -758,7 +758,9 @@ Your provider now exists at FH in status `pending`. Step 7 activates it.
 ## Step 3 — Payment setup: FLUX and/or Stripe *(Operator only)*
 
 ⏭️ **Supporter? Skip this entire step and go to Step 4.** You have nothing for sale, so
-you need no payment setup at all. If you later upgrade to Operator, **come back here** —
+you need no payment setup at all. (The **reward address** `init` asked for —
+`PROVIDER_REWARD_ADDRESS`, where the Flux Foundation pays your share of node rewards — is
+not a payment method and is not part of this step.) If you later upgrade to Operator, **come back here** —
 the upgrade instructions under *Ongoing operations* send you to
 `fh-toolkit level --set operator`, which asks for a FLUX payout address and Stripe keys
 it assumes you already have.
