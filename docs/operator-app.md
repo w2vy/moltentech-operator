@@ -29,12 +29,12 @@ customer) or **Info**; the list sorts open before acked, then by severity, newes
 - Most Issues **auto-clear**: when the condition is gone (the node is back, the job
   succeeded), Flux Hub resolves it and marks it *Auto-cleared*. One marked *needs resolve*
   has no condition to watch — you **Resolve** it yourself once dealt with.
-- Resolved Issues stay on the page for 24 h. The **Alerts** tab is still there: it is the
+- Resolved Issues stay on the page for 24 h. The **Alerts** page (Issues → Alerts) is still there: it is the
   raw feed the Issues are built from.
 
 ## Pair a phone
 
-1. On the desktop console open the **Phone** tab (`/operator/devices`), type a device name,
+1. On the desktop console open **Setup → Phone** (`/operator/devices`), type a device name,
    and make a pairing QR. The code is good for **5 minutes** and works once.
 2. Scan it with the phone's camera and tap **Pair this phone**. The phone lands on
    **Set up this phone**, which detects the platform and walks you through:
@@ -54,7 +54,7 @@ A paired device is a **read-and-ack** session: it can open `/m` and `/wall` and 
 on the hub. It cannot sign — the **Sign** tab shows what is waiting for your signature, and
 you sign on the desktop as before.
 
-**Revoke** a device from the Phone tab (the phone's own Settings only lists devices). To pair
+**Revoke** a device from Setup → Phone (the phone's own Settings only lists devices). To pair
 the same phone again, make a new QR and repeat the steps; it picks up its notification
 subscription again. A phone that says its session is gone was revoked — pair it again.
 
@@ -102,10 +102,10 @@ the **contact email** you gave at `/onboard`. Ack the Issue and it never fires.
 
 ## The status board
 
-The **Status** tab (`/operator/status`) is your whole fleet on one screen: hosts, slots and
+The **Status** page (My Fleet → Status, `/operator/status`) is your whole fleet on one screen: hosts, slots and
 open Issues. **Open the wall view** (`/wall`) for a full-screen, read-only version for a
 screen on the wall — it refreshes every 30 s and says so if it stops. A wall screen pairs
-exactly like a phone (Phone tab → QR); leave notifications off on it, or **Mute this device**.
+exactly like a phone (Setup → Phone → QR); leave notifications off on it, or **Mute this device**.
 
 ## Your customers on the app
 
