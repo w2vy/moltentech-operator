@@ -773,6 +773,13 @@ export const NodeHealth = z.object({
   running: z.boolean(),
   /** Raw Proxmox status (running|stopped|paused|…) or "missing" if not found. */
   status: z.string().min(1),
+  /**
+   * Bytes the VM has received since it started — Proxmox's own `netin` counter, from the same
+   * qemu listing that gives `status`. A running total, not a rate: the hub divides the change
+   * between two reports by the time between them, so the agent keeps no state. It resets when
+   * the VM restarts. Absent from agents before 0.11.67, and for a VM that is not running.
+   */
+  netIn: z.number().int().nonnegative().optional(),
 });
 export type NodeHealth = z.infer<typeof NodeHealth>;
 

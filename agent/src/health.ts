@@ -14,7 +14,7 @@ const insecureAgent = new https.Agent({ rejectUnauthorized: false });
  * protocol/src/messages.ts for what may not: a tag read back FROM the hypervisor is the VM's own
  * state and may gate; the same string arriving on a job never may.
  */
-export type Vm = { name?: string; status?: string; tags?: string; vmid?: number | string };
+export type Vm = { name?: string; status?: string; tags?: string; vmid?: number | string; netin?: number };
 
 /** One owned VM as the agent sees it locally: its reported status, and its own tag chips. */
 export type OwnedVm = {
@@ -33,6 +33,8 @@ export type OwnedVm = {
    * real fact from a call we make anyway, not because something depends on it.
    */
   vmid: number | null;
+  /** Proxmox `netin` (bytes received since the VM started), when the listing carried one. */
+  netIn: number | null;
 };
 
 /**
@@ -54,6 +56,11 @@ export function parseVmTags(tags?: string | null): string[] {
 function parseVmid(raw?: number | string): number | null {
   const n = typeof raw === "string" ? Number(raw) : raw;
   return typeof n === "number" && Number.isInteger(n) && n > 0 ? n : null;
+}
+
+/** A byte counter as Proxmox sends it: a whole, non-negative number, or nothing. */
+function parseNetIn(v: unknown): number | null {
+  return typeof v === "number" && Number.isSafeInteger(v) && v >= 0 ? v : null;
 }
 
 /** GET a Proxmox API path via the local token, returning its `data` payload. */
@@ -205,7 +212,14 @@ export async function collectHealth(
   owned: { vmName: string; nodeName: string }[]
 ): Promise<NodeHealth[]> {
   const vms = await collectOwnedVms(cfg, owned);
-  return vms.map(({ vmName, status }) => ({ vmName, running: status === "running", status }));
+  return vms.map(toNodeHealth);
+}
+
+/** What the hub is told about one owned VM — the pure half of `collectHealth`. */
+export function toNodeHealth({ vmName, status, netIn }: OwnedVm): NodeHealth {
+  const running = status === "running";
+  // Only a running VM's counter means anything; a stopped one reads 0 and would look like a reset.
+  return running && netIn != null ? { vmName, running, status, netIn } : { vmName, running, status };
 }
 
 /**
@@ -259,7 +273,7 @@ export async function collectOwnedVms(
 export function ownedVmsForNode(
   nodeName: string,
   vmNames: string[],
-  vms: Array<{ name?: string; status?: string; tags?: string; vmid?: number | string }>
+  vms: Array<{ name?: string; status?: string; tags?: string; vmid?: number | string; netin?: number }>
 ): OwnedVm[] {
   const byName = new Map(vms.map((v) => [v.name, v]));
   return vmNames.map((vmName) => {
@@ -271,7 +285,8 @@ export function ownedVmsForNode(
           status: String(vm.status ?? "unknown"),
           tags: parseVmTags(vm.tags),
           vmid: parseVmid(vm.vmid),
+          netIn: parseNetIn(vm.netin),
         }
-      : { vmName, nodeName, status: "missing", tags: [], vmid: null };
+      : { vmName, nodeName, status: "missing", tags: [], vmid: null, netIn: null };
   });
 }
