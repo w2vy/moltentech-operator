@@ -136,7 +136,7 @@ test("a declared VM that is not on the hypervisor reports missing, with no tags"
   const owned = ownedVmsForNode("pve50", ["ms-186-c8"], []);
   // `vmid: null` alongside the empty tags: absent means there is nothing to address either.
   assert.deepEqual(owned, [
-    { vmName: "ms-186-c8", nodeName: "pve50", status: "missing", tags: [], vmid: null },
+    { vmName: "ms-186-c8", nodeName: "pve50", status: "missing", tags: [], vmid: null, netIn: null },
   ]);
 });
 
