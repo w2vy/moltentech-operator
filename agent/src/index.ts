@@ -6,7 +6,7 @@ import { MtClient, type MtClientAuth } from "./client";
 import { CoalitionClient } from "./coalition-client";
 import { loadManifestKey } from "./signing";
 import { pickExecutor, deprovisionVm } from "./executor";
-import { collectOwnedVms, getVmDescription, type OwnedVm } from "./health";
+import { collectOwnedVms, getVmDescription, toNodeHealth, type OwnedVm } from "./health";
 import { parseDescriptionDeadline, shouldSelfDestruct, wantsDescriptionDeadline } from "./trial-expiry";
 import { refreshIsoOnce, withIsoRefreshStatus } from "./iso-refresh";
 import { runDetached } from "./background";
@@ -187,11 +187,7 @@ async function main() {
       // ONE Proxmox listing, two consumers: the health report the hub gets, and the local trial
       // sweep below. `tags` rides along in the same response, so the sweep costs no extra call.
       const vms = await collectOwnedVms(cfg, owned);
-      const health = vms.map(({ vmName, status }) => ({
-        vmName,
-        running: status === "running",
-        status,
-      }));
+      const health = vms.map(toNodeHealth);
       if (health.length > 0) {
         await client.reportHealth(health);
         console.log(`[agent] reported health for ${health.length} node(s)`);

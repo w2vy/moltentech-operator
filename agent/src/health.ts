@@ -8,7 +8,7 @@ const insecureAgent = new https.Agent({ rejectUnauthorized: false });
 /**
  * One VM as the Proxmox node listing returns it.
  *
- * `tags` is included in `GET /nodes/{node}/qemu` — the same call `collectHealth` already makes
+ * `tags` is included in `GET /nodes/{node}/qemu` — the same call the health report already makes
  * every cycle — so reading a VM's own marker costs **no extra API call**. It was simply being
  * discarded. See `trial-expiry.ts` for what may be done with it, and the provenance rule in
  * protocol/src/messages.ts for what may not: a tag read back FROM the hypervisor is the VM's own
@@ -202,20 +202,10 @@ export async function getClusterVmIds(cfg: AgentConfig): Promise<Set<number>> {
 }
 
 /**
- * Build a NodeHealth[] for the agent's owned VMs by querying the LOCAL Proxmox.
- * If a hypervisor is unreachable we report nothing for its VMs (not "down") — the
- * MT-side staleness check covers an unreachable agent/hypervisor, so we never emit
- * a false down just because the API call failed.
+ * What the hub is told about one owned VM — the agent's health loop (`index.ts`) maps
+ * `collectOwnedVms` through this, so it is the ONLY place the health report is shaped. An
+ * unreachable hypervisor yields no entries (not "down"); the hub's staleness check covers it.
  */
-export async function collectHealth(
-  cfg: AgentConfig,
-  owned: { vmName: string; nodeName: string }[]
-): Promise<NodeHealth[]> {
-  const vms = await collectOwnedVms(cfg, owned);
-  return vms.map(toNodeHealth);
-}
-
-/** What the hub is told about one owned VM — the pure half of `collectHealth`. */
 export function toNodeHealth({ vmName, status, netIn }: OwnedVm): NodeHealth {
   const running = status === "running";
   // Only a running VM's counter means anything; a stopped one reads 0 and would look like a reset.
@@ -225,7 +215,7 @@ export function toNodeHealth({ vmName, status, netIn }: OwnedVm): NodeHealth {
 /**
  * The same single pass, before it is narrowed to what the hub is told.
  *
- * `collectHealth` is a projection of this and nothing else, so the trial sweep and the health
+ * The health report is a projection of this and nothing else, so the trial sweep and the health
  * report can never disagree about what is on the hypervisor — and neither costs a second query.
  * The hub deliberately never receives `tags`: the marker is the operator's own state, read
  * locally, acted on locally.
