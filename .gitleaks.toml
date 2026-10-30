@@ -1,8 +1,8 @@
 # gitleaks configuration.
 #
 # Extends the default ruleset - every built-in rule stays active. This file only
-# allowlists two SYNTHETIC test fixtures that trip the high-entropy `generic-api-key`
-# rule. Both were verified by hand before being listed here:
+# allowlists three SYNTHETIC test fixtures that trip the high-entropy `generic-api-key`
+# rule (or the `private-key` rule). All were verified by hand before being listed here:
 #
 #  - `fluxIdentityKey` in agent/src/executor.test.ts - has the shape of an uncompressed
 #    WIF private key (51 chars, base58 charset, leading K), which is why it scores 5.55
@@ -14,8 +14,16 @@
 #    used in a negative assertion ("refused for any other pinned owner"). Addresses are
 #    public by design.
 #
+#  - the "pasted private key" fixture in protocol/src/console-auth.test.ts (first added in
+#    aa9bf74, PR #215) - `-----BEGIN OPENSSH PRIVATE KEY-----` around one line that is only the
+#    `openssh-key-v1` / none / none / 1 key / ssh-ed25519 header, byte-identical at the start of
+#    EVERY unencrypted ed25519 key. No key material. The match gitleaks reports runs from that
+#    BEGIN string into the test code after it, so the entry is anchored on that code
+#    (`")!, /PRIVATE/);`), which no real key contains. The test now builds the BEGIN line
+#    in pieces; the entry stays because the scan covers full history.
+#
 # Allowlisted by exact value, not by file path: a genuine secret added to these same
-# test files is still caught. If either fixture is ever changed, the allowlist stops
+# test files is still caught. If any fixture is ever changed, the allowlist stops
 # matching and gitleaks flags it - the safe direction to fail.
 
 [extend]
@@ -26,4 +34,5 @@ description = "Verified-synthetic test fixtures (see header)"
 regexes = [
   '''Kx1abcdefghijkmnopqrstuvwxyz0123456789ABCDEFGHJKLMN''',
   '''1BoatSLRHtKNngkdXEeobR76b53LETtpyT''',
+  '''^-----BEGIN OPENSSH PRIVATE KEY-----"\)!, /PRIVATE/\);''',
 ]
