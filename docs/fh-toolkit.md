@@ -717,6 +717,49 @@ listing counts) needs `fh-agent restart`.
 
 ---
 
+## `console-auth`
+
+```
+fh-toolkit console-auth [--dir <dir>] [--ssh-key <key|file.pub>] [--console-password] [--console-hash <hash>] [--clear]
+```
+
+Your login on the nodes the agent provisions: an SSH key, a console password, or both. Two
+lines of `.env.operator`, the agent's file:
+
+| Line | Unset | Set by |
+|---|---|---|
+| `OPERATOR_SSH_PUBKEY` | no key on the node | `--ssh-key` |
+| `CONSOLE_PASSWORD_HASH` | `!` — password login **locked** | `--console-password` or `--console-hash` |
+
+With no flags it shows what is set now and asks: paste the `.pub` line (Enter keeps it,
+`none` removes it), then `set` / `lock` / Enter for the password. The password is typed
+twice, never echoed, and never stored — only its SHA-512 crypt hash (`$6$…`), which the node's
+login accepts. A terminal that cannot hide input is refused rather than asked.
+
+Scripted:
+
+```
+fh-toolkit console-auth --ssh-key "$(cat ~/.ssh/id_ed25519.pub)"     # key only
+fh-toolkit console-auth --console-password                           # prompts, hidden
+fh-toolkit console-auth --console-hash "$(mkpasswd -m yescrypt)"     # a hash made elsewhere
+fh-toolkit console-auth --clear                                      # back to no key, locked
+```
+
+`--ssh-key` takes the key itself or a `.pub` file in the operator directory — the toolkit
+runs in a container and does not see `~/.ssh`, hence `"$(cat …)"`. The key is checked the way
+the node's installer checks it (a bad one would fail the whole provision); a private key is
+refused by name. `--ssh-key ""` removes it.
+
+⚠️ **Only nodes provisioned after `fh-agent restart` get it.** The agent stamps both values
+into a node's ArcaneOS config when it builds the VM; nodes already running keep the login
+they were built with, until they are reprovisioned.
+
+⚠️ **Both values are written single-quoted** (`CONSOLE_PASSWORD_HASH='$6$…'`). Compose
+expands `$` in an `env_file` value, so an unquoted hash reaches the agent cut to `$6`. Edit
+by hand only if you keep the quotes.
+
+---
+
 ## `level`
 
 ```
@@ -1328,8 +1371,8 @@ configuration. Read it before anything else:
 | `PROXMOX_STORAGE_ISO` | `local` | default under the host's `storageIso`; must be readable by every host |
 | `PROXMOX_STORAGE_IMPORT` | `local` | must have **Import** content enabled — `doctor --check-proxmox` checks it |
 | `ARCANE_ISO` | `FluxLive.iso` | ⚠️ the default matches **no real file** — published builds are dated, e.g. `FluxLive-1775071308.iso`. Set the exact filename in `PROXMOX_STORAGE_ISO`, or declare inventory and let ISO auto-refresh fill it in. `doctor --check-proxmox` FAILs while it is wrong |
-| `OPERATOR_SSH_PUBKEY` | `""` | |
-| `CONSOLE_PASSWORD_HASH` | `!` | |
+| `OPERATOR_SSH_PUBKEY` | `""` | your SSH key on newly provisioned nodes — set with `console-auth` |
+| `CONSOLE_PASSWORD_HASH` | `!` | console password hash on newly provisioned nodes; `!` = locked. Single-quoted — set with `console-auth` |
 | `AGENT_INVENTORY_PATH` | — | normally `/data/inventory.json`; `AGENT_INVENTORY_JSON` is the inline alternative. **The toolkit follows this too**: `doctor`, `inventory` and `level` resolve the container path through your compose file's bind mounts (`./config:/config` + `/config/x.json` → `config/x.json`), so a non-default layout is linted and rewritten where the agent actually reads |
 | `AGENT_LISTING_JSON` | — | what to offer for sale, re-asserted each heartbeat. How much hardware you **have** comes from inventory, not from here |
 | `AGENT_DRY_RUN` | `0` | `1` = talk to FH, touch nothing |
@@ -1362,6 +1405,7 @@ store. It is not a middlebox on your network and not a Proxmox certificate probl
 | Stripe minted my webhook secret | `stripe --stripe-webhook whsec_…` |
 | I added a Proxmox host or slot | `inventory` (Enter through the rest) → `env` → re-import (hub reads it within 15 min; or paste at `/onboard`) |
 | I rotated the Proxmox token | `proxmox`, then `fh-agent restart` |
+| I want to log in to my nodes | `console-auth`, then `fh-agent restart` (new nodes only) |
 | Build the directory without the wizard | `keygen` → `slug` → `proxmox` → `stripe` → `inventory` → `sign` |
 | Ready to deploy the Coalition | `env` → import `env.json` into the Flux app (**enterprise**) |
 | Ready to start the agent | `fh-agent doctor`, then `fh-agent start` |

@@ -35,6 +35,9 @@
  *                                       be a bare manifest OR an owner-signed wrapper (shipped
  *                                       whole so MT ingests it owner-verified). Verifies the manifest (and any
  *                                       owner) signature first. Output contains SECRETS — never commit it.
+ *   console-auth [--dir <dir>] [--ssh-key <key|file>] [--console-password] [--console-hash <h>] [--clear]
+ *                                       OPERATOR_SSH_PUBKEY + CONSOLE_PASSWORD_HASH in .env.operator:
+ *                                       your login on nodes provisioned after the next agent restart.
  *   level  [--dir <dir>]                show PROVIDER_LEVEL, tiers and Stripe state
  *   level  --set <supporter|operator>   change it surgically — config.env + secrets.env
  *                                        only, never manifest.json/SESSION_SECRET/inventory.
@@ -150,6 +153,14 @@ import {
 } from "./scaffold";
 import { verifyManifestOwnerSignature } from "./wallet";
 import { resolveInventorySource } from "./inventory-source";
+import {
+  isConsoleHash,
+  normalizeSshPubkey,
+  quoteEnvValue,
+  sha512Crypt,
+  sshPubkeyProblem,
+  unquoteEnvValue,
+} from "./console-auth";
 import {
   generateEd25519,
   exportPrivateKeyPem,
@@ -2204,6 +2215,100 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
       console.log("  fh-agent restart    (= docker compose up -d --force-recreate; `docker restart` does NOT reload it)");
       return 0;
     }
+    case "console-auth": {
+      // How the operator logs in to the nodes the agent builds: OPERATOR_SSH_PUBKEY and
+      // CONSOLE_PASSWORD_HASH in .env.operator. Unset, a node has no key and a locked
+      // console (`!`). Both are stamped in at PROVISION, so only nodes built after the
+      // restart get them — see console-auth.ts, including why the values are quoted.
+      rejectUnknownFlags("console-auth", args, ["--dir", "--ssh-key", "--console-hash"], ["--console-password", "--clear"]);
+      const od = readOperatorDir("console-auth", dirFlag(args));
+      if (od.operatorText === undefined) die(`${od.operatorPath} not found — run \`fh-toolkit proxmox\` (or \`init\`) first.`);
+      const opEnv = parseConfigEnv(od.operatorText);
+      const curKey = unquoteEnvValue(opEnv.OPERATOR_SSH_PUBKEY) ?? "";
+      const curHash = unquoteEnvValue(opEnv.CONSOLE_PASSWORD_HASH) || "!";
+      const describe = (k: string, h: string) =>
+        `  SSH key:          ${k ? `${k.split(" ")[0]} …${k.split(" ")[2] ? ` ${k.split(" ")[2]}` : ""}` : "(none)"}\n` +
+        `  Console password: ${h === "!" ? "locked" : "set"}`;
+
+      /** A key given as a path (relative to the operator dir or the cwd) or pasted. */
+      // Never echo `v` unless it is one word: a pasted private key would land in the scrollback.
+      const readKey = (v: string): string => {
+        if (/-----BEGIN|PRIVATE KEY/.test(v)) die("--ssh-key: that is a PRIVATE key — give the .pub file.");
+        const path = [join(od.dir, v), resolve(v)].find((p) => v && !v.startsWith("ssh-") && existsSync(p));
+        if (!path && !/\s/.test(v.trim()) && !v.startsWith("ssh-") && !v.startsWith("ecdsa-") && !v.startsWith("sk-")) {
+          die(`--ssh-key: ${v} is not a file here (the toolkit sees only the operator dir) — paste the key: --ssh-key "$(cat ${v})"`);
+        }
+        const line = path ? (readFileSync(path, "utf8").split("\n").find((l) => l.trim()) ?? "") : v;
+        const why = sshPubkeyProblem(line);
+        if (why) die(`--ssh-key: ${why}.`);
+        return normalizeSshPubkey(line);
+      };
+      const askPassword = async (askHidden: AskHidden): Promise<string> => {
+        for (;;) {
+          const a = await askHidden("  New console password");
+          if (a === null) die("this terminal cannot hide what you type, so the password is not asked for here. Use --console-hash.");
+          if (!a) die("empty password — nothing written.");
+          const b = await askHidden("  Again");
+          if (a === b) return sha512Crypt(a);
+          console.log("    the two did not match — again.");
+        }
+      };
+
+      let key = curKey;
+      let hash = curHash;
+      const flagKey = flag(args, "--ssh-key");
+      const flagHash = flag(args, "--console-hash");
+      const scripted = flagKey !== undefined || flagHash !== undefined || args.includes("--console-password") || args.includes("--clear");
+      if (scripted) {
+        if (args.includes("--clear")) {
+          key = "";
+          hash = "!";
+        }
+        if (flagKey !== undefined) key = flagKey === "" ? "" : readKey(flagKey);
+        if (flagHash !== undefined) {
+          if (!isConsoleHash(flagHash)) die("--console-hash takes a crypt hash ($6$… or $y$…, from `mkpasswd`) or ! — not the password itself.");
+          hash = flagHash;
+        }
+        if (args.includes("--console-password")) hash = await withPrompts(ctx, (_ask, _askUntil, askHidden) => askPassword(askHidden));
+      } else {
+        console.log(`fh-toolkit console-auth — your login on the nodes the agent provisions. Now:\n${describe(curKey, curHash)}\n`);
+        ({ key, hash } = await withPrompts(ctx, async (ask, askUntil, askHidden) => {
+          const k = await askUntil(
+            "  SSH public key (paste the .pub line; Enter keeps, `none` removes)",
+            (a) => (!a || a === "none" ? undefined : (sshPubkeyProblem(a) ?? undefined)),
+            ""
+          );
+          const p = (await ask("  Console password: set / lock / Enter keeps", "")).toLowerCase();
+          return {
+            key: !k ? curKey : k === "none" ? "" : normalizeSshPubkey(k),
+            hash: p === "set" ? await askPassword(askHidden) : p === "lock" ? "!" : curHash,
+          };
+        }));
+      }
+
+      let text = od.operatorText;
+      const changes: string[] = [];
+      if (key !== curKey) {
+        text = upsertEnvLine(text, "OPERATOR_SSH_PUBKEY", key ? quoteEnvValue(key) : "");
+        changes.push(`OPERATOR_SSH_PUBKEY: ${key ? "set" : "removed"}`);
+      }
+      if (hash !== curHash) {
+        text = upsertEnvLine(text, "CONSOLE_PASSWORD_HASH", quoteEnvValue(hash));
+        changes.push(`CONSOLE_PASSWORD_HASH: ${hash === "!" ? "locked" : "set"}`);
+      }
+      if (changes.length === 0) {
+        console.log("\nNothing to change — .env.operator already says exactly this.");
+        return 0;
+      }
+      writeWithBackup(od.operatorPath, od.operatorText, text);
+      console.log("\nWrote .env.operator (previous version kept as .env.operator.bak)");
+      for (const c of changes) console.log(`  ${c}`);
+      console.log(`\n${describe(key, hash)}`);
+      console.log("\nThe agent reads .env.operator ONLY at start, and stamps these into a node when it");
+      console.log("PROVISIONS it — nodes already built keep the login they were built with:");
+      console.log("  fh-agent restart");
+      return 0;
+    }
     case "stripe": {
       // What you SELL: tier prices (config.env), the listing the agent asserts
       // (.env.operator) and the Stripe pair (secrets.env) — the selling block of `init`,
@@ -3476,7 +3581,7 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
     case "-h":
     default:
       console.log(
-        "usage: fh-toolkit <keygen|coalition-keygen|init|slug|proxmox|stripe|inventory|level|doctor|host-check|burn|sign|env|verify|wrapper|version> [options]\n"
+        "usage: fh-toolkit <keygen|coalition-keygen|init|slug|proxmox|stripe|inventory|console-auth|level|doctor|host-check|burn|sign|env|verify|wrapper|version> [options]\n"
       );
       console.log("  keygen           [--out <dir>]");
       console.log("  coalition-keygen [--out <dir>]   Phase D signing key (operator-held custody)");
@@ -3491,6 +3596,8 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
       console.log("            hosts, storage and slots → data/inventory.json, HOSTS, storage lines, listing counts");
       console.log("  (slug → proxmox → stripe → inventory is what `init` asks, one file at a time; each");
       console.log("   works instead of init on a fresh directory, or after setup to change one thing)");
+      console.log("  console-auth [--dir <dir>] [--ssh-key <key|file.pub>] [--console-password] [--console-hash <h>] [--clear]");
+      console.log("            your SSH key + console password on nodes the agent provisions (default: none, locked)");
       console.log("  level     [--dir <dir>]                      show your level, tiers and Stripe state");
       console.log("            --set <supporter|operator> [--price <tier>=<usd>] [--stripe-key <k>] [--flux-address <t1…>]");
       console.log("            [--stripe-webhook <k>] [--dry-run] [--yes]");
