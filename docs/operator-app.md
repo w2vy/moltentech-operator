@@ -79,6 +79,7 @@ which silences one device (a spare phone, a wall screen).
 | **Push for** | Critical + Warning | Or **Critical** only. Notices (new customers) follow warnings. Info never pushes. |
 | **Quiet hours** | none | Inside the window only critical pushes; everything else arrives as **one summary** when it ends. |
 | **Critical email** | 15 min | 5 / 10 / 15 / 30 / 60 min — see below. |
+| **Daily digest** | off | One email at 08:00 in your time zone — see below. |
 | **Areas that push** | all | Nodes, Jobs, Signing, Inventory, Billing, Support, Other. |
 
 How pushes behave:
@@ -95,10 +96,10 @@ Disturb, so a **critical** Issue still open and **unacked** after the set time g
 email** and one re-push — whatever On call, Push for, quiet hours or areas say. It goes to
 the **contact email** you gave at `/onboard`. Ack the Issue and it never fires.
 
-> **Coming (phase 4):** today an operator alarm can reach you twice — a push *and* the
-> existing alert email. The email cutover will stop alarm emails for operators with a paired,
-> on-call phone (the critical email above stays), and move customer-activity emails (e.g. a
-> cancelled subscription) into a **daily digest**. Emails to your customers do not change.
+**The daily digest** is one email at **08:00** in your time zone, to your contact email: the
+Issues still open, and yesterday's rental activity (for example a subscription cancelled or
+renewed). It is off until you switch on **Daily digest**; no contact email = no digest. Emails
+to your customers do not change.
 
 ## The status board
 
