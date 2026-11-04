@@ -12,6 +12,7 @@
  *                                       .env.operator, inventory.json and the Flux app spec.
  *                                       --answers runs the SAME generator non-interactively.
  *   doctor [--dir <dir>] [--check-stripe] [--check-proxmox] [--check-hub]
+ *   diagnose [--dir <dir>] [--vm <name>] [--dry-run]   everything support needs, secrets removed
  *                                       check that the generated files agree with each other.
  *                                       File-level and offline unless a --check-* flag asks
  *                                       otherwise: --check-stripe proves the webhook is on
@@ -107,6 +108,7 @@ import {
   tokenSetupCommands,
 } from "./proxmox-token";
 import { planVmMemory, TIER_DEFAULT_MB, vmMemoryAdvice } from "./vm-memory";
+import { buildBundle, bundleFileName, bundleSummary, LOGS_FILE_RE } from "./diagnose";
 import { hostCheckScript } from "./host-check";
 import { burnScript, parseBurnPlan } from "./burn";
 import { describeVm, nodeOf, parseKeepList, retireAdoptedMarks } from "./existing-nodes";
@@ -1930,6 +1932,203 @@ function freshSecretsEnv(od: OperatorDir): string {
   });
 }
 
+/** Every `doctor` check, shared with `diagnose`. Probe chatter goes to `log`; the caller reports. */
+async function runDoctorChecks(
+  ctx: Ctx,
+  dir: string,
+  checks: { stripe: boolean; proxmox: boolean; hub: boolean },
+  log: (line: string) => void = console.log,
+): Promise<{ report: DoctorReport; survey?: ProxmoxSurvey }> {
+  let survey: ProxmoxSurvey | undefined;
+  // The runbook's "which value must match where" table, executed. File-level by
+  // DEFAULT: no network, no secrets held. Two opt-in flags cross that line on
+  // purpose — `--check-stripe` and `--check-proxmox` — because the two failures
+  // that cost the most (wrong Stripe account, spinning storage) are invisible to
+  // any amount of file comparison. Without a flag, nothing here leaves the disk.
+  const read = (f: string): string | undefined => {
+    const p = join(dir, f);
+    return existsSync(p) ? readFileSync(p, "utf8") : undefined;
+  };
+  // The inventory is wherever the AGENT reads it — AGENT_INVENTORY_JSON / AGENT_INVENTORY_PATH
+  // through the compose mounts — not a layout doctor assumes (inventory-source.ts).
+  const invSrc = locateInventory(dir);
+  const inventory = invSrc.inlineText ?? read(invSrc.relPath);
+  const configText = read("config.env");
+  // Price rules come from MT itself when we can reach it — the minimum is MT's to
+  // set, and a copy in this repo is only a fallback. MT_BASE_URL is read from the
+  // operator's own config so no flag is needed.
+  const mtBaseUrl = configText ? parseConfigEnv(configText).MT_BASE_URL : undefined;
+  const tierMinimums = mtBaseUrl ? ((await cachedTierMinimums(ctx, mtBaseUrl)) ?? undefined) : undefined;
+  // Same bargain as the tier fetch: one credential-free GET-shaped call to the hub
+  // named in config.env, fail-soft. Asked with `self` so the provider's own registered
+  // names do not come back as "taken"; what does come back is a collision with someone
+  // else — the one thing no file on this disk can know.
+  const nameCheck = mtBaseUrl && configText ? await checkNames(mtBaseUrl, nameCheckRequestForConfig(configText, inventory), ctx.fetch ?? fetch) : undefined;
+  const report = runDoctor({
+    configEnv: configText,
+    secretsEnv: read("secrets.env"),
+    envOperator: read(".env.operator"),
+    inventoryJson: inventory,
+    inventoryLabel: invSrc.label,
+    manifestJson: read("manifest.json"),
+    tierMinimums,
+    nameCheck,
+  });
+  // Silence about the inventory read as "checked" in the 2026-09-19 case: the file
+  // sat under config/ and every inventory rule was skipped without a word.
+  if (inventory === undefined) {
+    report.unproven = [...(report.unproven ?? []), `inventory: nothing at ${invSrc.label} — hosts, slot names, storage and listing counts unchecked`];
+  }
+  if (mtBaseUrl && configText && nameCheck === null) {
+    report.unproven = [...(report.unproven ?? []), `name check: could not reach ${mtBaseUrl} — slug, prefix and VM names unchecked against the hub`];
+  }
+  // Opt-in, because it is the only check that puts a secret in memory and the only
+  // one that talks to a third party. Everything it does is a read-only GET. It
+  // catches what no file can: a well-formed config wired to the WRONG Stripe
+  // account, which fails only after a customer has paid.
+  if (checks.stripe) {
+    const secretsText = read("secrets.env");
+    const operatorText = read(".env.operator");
+    const secrets = secretsText ? parseConfigEnv(secretsText) : {};
+    const operator = operatorText ? parseConfigEnv(operatorText) : {};
+    const stripeSecretKey = secrets.STRIPE_SECRET_KEY || operator.STRIPE_SECRET_KEY;
+    const coalitionUrl = configText ? parseConfigEnv(configText).COALITION_URL : undefined;
+    if (!stripeSecretKey) {
+      log("--check-stripe: no STRIPE_SECRET_KEY in secrets.env or .env.operator — skipped.\n");
+    } else if (!coalitionUrl) {
+      log("--check-stripe: no COALITION_URL in config.env — skipped.\n");
+    } else {
+      report.findings.push(
+        ...(await probeStripeWiring({ stripeSecretKey, coalitionUrl, mtBaseUrl }))
+      );
+      // "(live)" read as LIVE MODE next to an rk_test_ key; say what was actually
+      // done — the API was reached — and which mode the key selects.
+      const mode = /^(rk|sk)_test_/.test(stripeSecretKey) ? "test mode" : "live mode";
+      report.filesChecked.push(`stripe API reached, ${mode}`);
+    }
+  }
+  // Same opt-in bargain as --check-stripe: file-level doctor stays credential-free
+  // and offline, and this flag is how you ask for the one thing no file can answer —
+  // whether the token in .env.operator actually works, and whether the storage it
+  // names spins. `init` runs these at the moment the token is typed; this is for
+  // re-runs, and for an operator who filled the files in by hand.
+  if (checks.proxmox) {
+    const operatorText = read(".env.operator");
+    const operator = operatorText ? parseConfigEnv(operatorText) : {};
+    const url = operator.PROXMOX_URL;
+    const tokenId = operator.PROXMOX_TOKEN_ID;
+    const tokenSecret = operator.PROXMOX_TOKEN_SECRET;
+    if (!url || !tokenId || !tokenSecret) {
+      log("--check-proxmox: .env.operator is missing PROXMOX_URL / _TOKEN_ID / _TOKEN_SECRET — skipped.\n");
+    } else {
+      const probe = await probeProxmox({ url, tokenId, tokenSecret });
+      survey = probe.survey;
+      log(`proxmox API — ${url}`);
+      log(formatProbe(probe.checks) + "\n");
+      noteUnproven(report, "proxmox", probe.checks);
+      for (const check of probe.checks) {
+        if (check.status !== "fail") continue;
+        report.findings.push({
+          severity: "error",
+          rule: "PROXMOX_CHECK_FAILED",
+          file: ".env.operator",
+          message: `${check.name}: ${check.detail}`,
+        });
+      }
+      // The storage the operator actually configured, judged. This is the check that
+      // exists because a `local-lvm` default on a WD Red provisions fine and then
+      // fails every benchmark with nothing in any log to say why.
+      const images = operator.PROXMOX_STORAGE_IMAGES;
+      const iso = operator.PROXMOX_STORAGE_ISO;
+      // Same default as the agent (agent/src/config.ts): unset means `local`.
+      const importStore = operator.PROXMOX_STORAGE_IMPORT || "local";
+      for (const [node, options] of Object.entries(probe.survey?.storages ?? {})) {
+        const chosen = options.find((o) => o.id === images);
+        if (chosen?.rotational === true) {
+          report.findings.push({
+            severity: "error",
+            rule: "DOC_DEFAULT_STORAGE_IS_HDD",
+            file: ".env.operator",
+            message:
+              `PROXMOX_STORAGE_IMAGES="${images}" is ROTATIONAL on ${node} (${chosen.why}) — ` +
+              `nodes provision fine and then fail every benchmark, with no visible cause.`,
+          });
+        }
+        // Can each storage hold what it was named for? Proxmox states this outright, so
+        // it is knowable rather than guessed — and the ISO half went unchecked until an
+        // operator set it to `local-lvm` (LVM-thin, no ISO content) and lost two
+        // provisions to a pydantic error on an empty `iso_name`, four hours downstream.
+        for (const [name, id, need] of [
+          ["PROXMOX_STORAGE_ISO", iso, "iso"],
+          ["PROXMOX_STORAGE_IMAGES", images, "images"],
+          // The third storage arcane-mage validates. Unchecked until 2026-10-05, when an
+          // operator's provision failed "Storage type missing on hypervisor" with ISO and
+          // images both passing here.
+          ["PROXMOX_STORAGE_IMPORT", importStore, "import"],
+        ] as const) {
+          const problem = storageContentProblem(id ?? "", options, need);
+          if (problem) {
+            report.findings.push({
+              severity: "error",
+              rule: "STORAGE_CANNOT_HOLD_CONTENT",
+              file: ".env.operator",
+              message: `${name} on ${node}: ${problem}`,
+            });
+          }
+        }
+      }
+      report.filesChecked.push("proxmox API reached");
+    }
+  }
+  // The third opt-in probe, and the only one that proves a KEY rather than a
+  // configuration. It exists because every passive signal an operator has is
+  // key-blind: Flux Hub's stats pull is unauthenticated, so a Coalition holding a
+  // dead credential presents exactly as a healthy one until a customer's checkout
+  // fails. See hub-probe.ts for what is provable from here and what is not.
+  if (checks.hub) {
+    const secretsText = read("secrets.env");
+    const operatorText = read(".env.operator");
+    const secrets = secretsText ? parseConfigEnv(secretsText) : {};
+    const operator = operatorText ? parseConfigEnv(operatorText) : {};
+    const config = configText ? parseConfigEnv(configText) : {};
+    if (!mtBaseUrl) {
+      log("--check-hub: no MT_BASE_URL in config.env — skipped.\n");
+    } else {
+      const probe = await probeHub({
+        mtBaseUrl,
+        coalitionUrl: config.COALITION_URL,
+        // Phase E step 4: the bearers are gone; the signature is what doctor proves.
+        manifestKey: secrets.MANIFEST_KEY || operator.MANIFEST_KEY,
+        providerSlug: config.PROVIDER_SLUG,
+        localPubkey: read("manifest-pubkey.txt"),
+        localManifestJson: read("manifest.json"),
+      });
+      log(`hub API — ${mtBaseUrl}`);
+      log(formatProbe(probe.checks) + "\n");
+      noteUnproven(report, "hub", probe.checks);
+      report.findings.push(...probe.findings);
+      report.filesChecked.push("hub API reached");
+    }
+  }
+  // The wrapper is the one piece of an operator's setup that lives OUTSIDE every file
+  // this command reads, so nothing else can catch it. It is checked here rather than
+  // on every command because a line that says "fine" every time is a line nobody reads.
+  const wrapper = wrapperStatus(process.env);
+  if (wrapper.state !== "current") {
+    report.findings.push({
+      severity: "warning",
+      rule: wrapper.state === "stale" ? "WRAPPER_STALE" : "WRAPPER_UNKNOWN",
+      file: "~/.fh-toolkit.sh",
+      message: `${wrapper.message}. ${wrapper.fix} reinstalls it.`,
+      // The convention for a fix-bearing finding: the summary IS the instruction,
+      // because that headline is what closes the report and is the next thing typed.
+      summary: `run \`${wrapper.fix}\``,
+      fix: wrapper.fix,
+    });
+  }
+  return { report, survey };
+}
+
 export async function runCommand(cmd: string | undefined, args: string[], ctx: Ctx): Promise<number> {
   switch (cmd) {
     case "coalition-keygen": {
@@ -2792,195 +2991,66 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
     }
     case "doctor": {
       rejectUnknownFlags("doctor", args, ["--dir"], ["--check-hub", "--check-proxmox", "--check-stripe"]);
-      // The runbook's "which value must match where" table, executed. File-level by
-      // DEFAULT: no network, no secrets held. Two opt-in flags cross that line on
-      // purpose — `--check-stripe` and `--check-proxmox` — because the two failures
-      // that cost the most (wrong Stripe account, spinning storage) are invisible to
-      // any amount of file comparison. Without a flag, nothing here leaves the disk.
-      const dir = flag(args, "--dir") ?? ".";
+      const { report } = await runDoctorChecks(ctx, flag(args, "--dir") ?? ".", {
+        stripe: args.includes("--check-stripe"),
+        proxmox: args.includes("--check-proxmox"),
+        hub: args.includes("--check-hub"),
+      });
+      const { text, ok } = formatReport(report);
+      console.log(text);
+      if (!ok) return 1;
+      return 0;
+    }
+    case "diagnose": {
+      rejectUnknownFlags("diagnose", args, ["--dir", "--vm"], ["--dry-run"]);
+      // Everything an operator would otherwise paste into a support chat, with the secrets
+      // out. Phase 1 stops at the file: nothing leaves this box, and `--dry-run` is accepted
+      // now so the flag means the same thing once the hub can answer.
+      const dir = dirFlag(args);
       const read = (f: string): string | undefined => {
         const p = join(dir, f);
         return existsSync(p) ? readFileSync(p, "utf8") : undefined;
       };
-      // The inventory is wherever the AGENT reads it — AGENT_INVENTORY_JSON / AGENT_INVENTORY_PATH
-      // through the compose mounts — not a layout doctor assumes (inventory-source.ts).
+      const files = { config: read("config.env"), secrets: read("secrets.env"), operator: read(".env.operator") };
+      if (!files.config && !files.secrets && !files.operator) {
+        die(`no config.env, secrets.env or .env.operator in ${dir} — run this from your operator directory.`);
+      }
+      const probeOutput: string[] = [];
+      console.log("Running every doctor check (read-only), this can take a minute…");
+      const { report, survey } = await runDoctorChecks(ctx, dir, { stripe: false, proxmox: true, hub: true }, (l) => probeOutput.push(l));
       const invSrc = locateInventory(dir);
-      const inventory = invSrc.inlineText ?? read(invSrc.relPath);
-      const configText = read("config.env");
-      // Price rules come from MT itself when we can reach it — the minimum is MT's to
-      // set, and a copy in this repo is only a fallback. MT_BASE_URL is read from the
-      // operator's own config so no flag is needed.
-      const mtBaseUrl = configText ? parseConfigEnv(configText).MT_BASE_URL : undefined;
-      const tierMinimums = mtBaseUrl ? ((await cachedTierMinimums(ctx, mtBaseUrl)) ?? undefined) : undefined;
-      // Same bargain as the tier fetch: one credential-free GET-shaped call to the hub
-      // named in config.env, fail-soft. Asked with `self` so the provider's own registered
-      // names do not come back as "taken"; what does come back is a collision with someone
-      // else — the one thing no file on this disk can know.
-      const nameCheck = mtBaseUrl && configText ? await checkNames(mtBaseUrl, nameCheckRequestForConfig(configText, inventory), ctx.fetch ?? fetch) : undefined;
-      const report = runDoctor({
-        configEnv: configText,
-        secretsEnv: read("secrets.env"),
-        envOperator: read(".env.operator"),
-        inventoryJson: inventory,
-        inventoryLabel: invSrc.label,
-        manifestJson: read("manifest.json"),
-        tierMinimums,
-        nameCheck,
+      const logsName = process.env.FH_DIAGNOSE_LOGS;
+      const logsPath = logsName && LOGS_FILE_RE.test(logsName) ? join(dir, logsName) : undefined;
+      const { bundle, leaks } = buildBundle({
+        now: new Date(),
+        toolkit: readBuildInfo(process.env, pkgVersion()),
+        wrapper: wrapperStatus(process.env).state,
+        agentRunning: process.env.FH_AGENT_RUNNING,
+        focusVm: flag(args, "--vm"),
+        files,
+        report,
+        probeOutput,
+        inventoryText: invSrc.inlineText ?? read(invSrc.relPath),
+        survey,
+        logs: !logsPath
+          ? { status: "not-provided" }
+          : existsSync(logsPath)
+            ? { status: "read", text: readFileSync(logsPath, "utf8") }
+            : { status: "missing" },
       });
-      // Silence about the inventory read as "checked" in the 2026-09-19 case: the file
-      // sat under config/ and every inventory rule was skipped without a word.
-      if (inventory === undefined) {
-        report.unproven = [...(report.unproven ?? []), `inventory: nothing at ${invSrc.label} — hosts, slot names, storage and listing counts unchecked`];
+      if (leaks.length > 0) {
+        // The location and the rule, never the value: this text gets pasted to people.
+        console.error("STOPPED: a secret is still in the bundle, so no file was written.");
+        for (const leak of leaks) console.error(`  ${leak.path}: ${leak.rule}`);
+        console.error("Move that value out of the named field, then run diagnose again.");
+        return 1;
       }
-      if (mtBaseUrl && configText && nameCheck === null) {
-        report.unproven = [...(report.unproven ?? []), `name check: could not reach ${mtBaseUrl} — slug, prefix and VM names unchecked against the hub`];
-      }
-      // Opt-in, because it is the only check that puts a secret in memory and the only
-      // one that talks to a third party. Everything it does is a read-only GET. It
-      // catches what no file can: a well-formed config wired to the WRONG Stripe
-      // account, which fails only after a customer has paid.
-      if (args.includes("--check-stripe")) {
-        const secretsText = read("secrets.env");
-        const operatorText = read(".env.operator");
-        const secrets = secretsText ? parseConfigEnv(secretsText) : {};
-        const operator = operatorText ? parseConfigEnv(operatorText) : {};
-        const stripeSecretKey = secrets.STRIPE_SECRET_KEY || operator.STRIPE_SECRET_KEY;
-        const coalitionUrl = configText ? parseConfigEnv(configText).COALITION_URL : undefined;
-        if (!stripeSecretKey) {
-          console.log("--check-stripe: no STRIPE_SECRET_KEY in secrets.env or .env.operator — skipped.\n");
-        } else if (!coalitionUrl) {
-          console.log("--check-stripe: no COALITION_URL in config.env — skipped.\n");
-        } else {
-          report.findings.push(
-            ...(await probeStripeWiring({ stripeSecretKey, coalitionUrl, mtBaseUrl }))
-          );
-          // "(live)" read as LIVE MODE next to an rk_test_ key; say what was actually
-          // done — the API was reached — and which mode the key selects.
-          const mode = /^(rk|sk)_test_/.test(stripeSecretKey) ? "test mode" : "live mode";
-          report.filesChecked.push(`stripe API reached, ${mode}`);
-        }
-      }
-      // Same opt-in bargain as --check-stripe: file-level doctor stays credential-free
-      // and offline, and this flag is how you ask for the one thing no file can answer —
-      // whether the token in .env.operator actually works, and whether the storage it
-      // names spins. `init` runs these at the moment the token is typed; this is for
-      // re-runs, and for an operator who filled the files in by hand.
-      if (args.includes("--check-proxmox")) {
-        const operatorText = read(".env.operator");
-        const operator = operatorText ? parseConfigEnv(operatorText) : {};
-        const url = operator.PROXMOX_URL;
-        const tokenId = operator.PROXMOX_TOKEN_ID;
-        const tokenSecret = operator.PROXMOX_TOKEN_SECRET;
-        if (!url || !tokenId || !tokenSecret) {
-          console.log("--check-proxmox: .env.operator is missing PROXMOX_URL / _TOKEN_ID / _TOKEN_SECRET — skipped.\n");
-        } else {
-          const probe = await probeProxmox({ url, tokenId, tokenSecret });
-          console.log(`proxmox API — ${url}`);
-          console.log(formatProbe(probe.checks) + "\n");
-          noteUnproven(report, "proxmox", probe.checks);
-          for (const check of probe.checks) {
-            if (check.status !== "fail") continue;
-            report.findings.push({
-              severity: "error",
-              rule: "PROXMOX_CHECK_FAILED",
-              file: ".env.operator",
-              message: `${check.name}: ${check.detail}`,
-            });
-          }
-          // The storage the operator actually configured, judged. This is the check that
-          // exists because a `local-lvm` default on a WD Red provisions fine and then
-          // fails every benchmark with nothing in any log to say why.
-          const images = operator.PROXMOX_STORAGE_IMAGES;
-          const iso = operator.PROXMOX_STORAGE_ISO;
-          // Same default as the agent (agent/src/config.ts): unset means `local`.
-          const importStore = operator.PROXMOX_STORAGE_IMPORT || "local";
-          for (const [node, options] of Object.entries(probe.survey?.storages ?? {})) {
-            const chosen = options.find((o) => o.id === images);
-            if (chosen?.rotational === true) {
-              report.findings.push({
-                severity: "error",
-                rule: "DOC_DEFAULT_STORAGE_IS_HDD",
-                file: ".env.operator",
-                message:
-                  `PROXMOX_STORAGE_IMAGES="${images}" is ROTATIONAL on ${node} (${chosen.why}) — ` +
-                  `nodes provision fine and then fail every benchmark, with no visible cause.`,
-              });
-            }
-            // Can each storage hold what it was named for? Proxmox states this outright, so
-            // it is knowable rather than guessed — and the ISO half went unchecked until an
-            // operator set it to `local-lvm` (LVM-thin, no ISO content) and lost two
-            // provisions to a pydantic error on an empty `iso_name`, four hours downstream.
-            for (const [name, id, need] of [
-              ["PROXMOX_STORAGE_ISO", iso, "iso"],
-              ["PROXMOX_STORAGE_IMAGES", images, "images"],
-              // The third storage arcane-mage validates. Unchecked until 2026-10-05, when an
-              // operator's provision failed "Storage type missing on hypervisor" with ISO and
-              // images both passing here.
-              ["PROXMOX_STORAGE_IMPORT", importStore, "import"],
-            ] as const) {
-              const problem = storageContentProblem(id ?? "", options, need);
-              if (problem) {
-                report.findings.push({
-                  severity: "error",
-                  rule: "STORAGE_CANNOT_HOLD_CONTENT",
-                  file: ".env.operator",
-                  message: `${name} on ${node}: ${problem}`,
-                });
-              }
-            }
-          }
-          report.filesChecked.push("proxmox API reached");
-        }
-      }
-      // The third opt-in probe, and the only one that proves a KEY rather than a
-      // configuration. It exists because every passive signal an operator has is
-      // key-blind: Flux Hub's stats pull is unauthenticated, so a Coalition holding a
-      // dead credential presents exactly as a healthy one until a customer's checkout
-      // fails. See hub-probe.ts for what is provable from here and what is not.
-      if (args.includes("--check-hub")) {
-        const secretsText = read("secrets.env");
-        const operatorText = read(".env.operator");
-        const secrets = secretsText ? parseConfigEnv(secretsText) : {};
-        const operator = operatorText ? parseConfigEnv(operatorText) : {};
-        const config = configText ? parseConfigEnv(configText) : {};
-        if (!mtBaseUrl) {
-          console.log("--check-hub: no MT_BASE_URL in config.env — skipped.\n");
-        } else {
-          const probe = await probeHub({
-            mtBaseUrl,
-            coalitionUrl: config.COALITION_URL,
-            // Phase E step 4: the bearers are gone; the signature is what doctor proves.
-            manifestKey: secrets.MANIFEST_KEY || operator.MANIFEST_KEY,
-            providerSlug: config.PROVIDER_SLUG,
-            localPubkey: read("manifest-pubkey.txt"),
-            localManifestJson: read("manifest.json"),
-          });
-          console.log(`hub API — ${mtBaseUrl}`);
-          console.log(formatProbe(probe.checks) + "\n");
-          noteUnproven(report, "hub", probe.checks);
-          report.findings.push(...probe.findings);
-          report.filesChecked.push("hub API reached");
-        }
-      }
-      // The wrapper is the one piece of an operator's setup that lives OUTSIDE every file
-      // this command reads, so nothing else can catch it. It is checked here rather than
-      // on every command because a line that says "fine" every time is a line nobody reads.
-      const wrapper = wrapperStatus(process.env);
-      if (wrapper.state !== "current") {
-        report.findings.push({
-          severity: "warning",
-          rule: wrapper.state === "stale" ? "WRAPPER_STALE" : "WRAPPER_UNKNOWN",
-          file: "~/.fh-toolkit.sh",
-          message: `${wrapper.message}. ${wrapper.fix} reinstalls it.`,
-          // The convention for a fix-bearing finding: the summary IS the instruction,
-          // because that headline is what closes the report and is the next thing typed.
-          summary: `run \`${wrapper.fix}\``,
-          fix: wrapper.fix,
-        });
-      }
-      const { text, ok } = formatReport(report);
-      console.log(text);
-      if (!ok) return 1;
+      const outPath = join(dir, bundleFileName(files.config, bundle.createdAt));
+      const json = `${JSON.stringify(bundle, null, 2)}\n`;
+      writeFileSync(outPath, json, { mode: 0o600 });
+      for (const line of bundleSummary(bundle)) console.log(line);
+      console.log(`\nWrote ${outPath} (${Math.ceil(json.length / 1024)} KB). Nothing was sent.`);
+      console.log("Read it over, then send that file to Flux Hub support if you need help.");
       return 0;
     }
     case "level": {
@@ -3581,7 +3651,7 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
     case "-h":
     default:
       console.log(
-        "usage: fh-toolkit <keygen|coalition-keygen|init|slug|proxmox|stripe|inventory|console-auth|level|doctor|host-check|burn|sign|env|verify|wrapper|version> [options]\n"
+        "usage: fh-toolkit <keygen|coalition-keygen|init|slug|proxmox|stripe|inventory|console-auth|level|doctor|diagnose|host-check|burn|sign|env|verify|wrapper|version> [options]\n"
       );
       console.log("  keygen           [--out <dir>]");
       console.log("  coalition-keygen [--out <dir>]   Phase D signing key (operator-held custody)");
@@ -3602,6 +3672,7 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
       console.log("            --set <supporter|operator> [--price <tier>=<usd>] [--stripe-key <k>] [--flux-address <t1…>]");
       console.log("            [--stripe-webhook <k>] [--dry-run] [--yes]");
       console.log("  doctor    [--dir <dir>] [--check-proxmox] [--check-stripe] [--check-hub]");
+      console.log("  diagnose  [--dir <dir>] [--vm <name>] [--dry-run]   a support file, secrets removed");
       console.log("  host-check [<host>] [--room [<tier>]] [--dir <dir>]  small-RAM host? prints a read-only check");
       console.log("            to run ON the host: fh-toolkit host-check pve1 | ssh root@pve1 bash");
       console.log("  burn [<host>] [--plan nimbus:1,...] [--fill max|<pct>] [--keep] [--no-retry] [--dir <dir>]");

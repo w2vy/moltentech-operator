@@ -6,9 +6,10 @@
  * actually reach the daemon.
  */
 import test from "node:test";
+import { LOGS_FILE_RE } from "./diagnose";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { writeFileSync, readFileSync, chmodSync, existsSync, mkdirSync } from "node:fs";
+import { writeFileSync, readFileSync, chmodSync, existsSync, mkdirSync, readdirSync } from "node:fs";
 import { tmpDir } from "./test-tmp";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -110,6 +111,35 @@ test("the header says where it came from and how to regenerate it", () => {
 });
 
 // ---------------------------------------------------------------- fh-toolkit()
+
+test("⭐ diagnose: the logs are collected here, handed in by name, and removed after", () => {
+  const box = shellBox();
+  box.run("fh-toolkit diagnose --vm bz-1");
+  const calls = box.argv();
+  const logs = calls.find((a) => a[0] === "compose" && a[1] === "logs");
+  assert.ok(logs, "no compose logs call");
+  assert.deepEqual(logs, ["compose", "logs", "--no-color", "--no-log-prefix", "--timestamps", "--tail", "20000", "agent"]);
+  const run = calls.find((a) => a[0] === "run" && a.at(-1) === "bz-1");
+  assert.ok(run, "no docker run");
+  const name = run.find((a) => a.startsWith("FH_DIAGNOSE_LOGS="))?.slice("FH_DIAGNOSE_LOGS=".length);
+  assert.ok(name && LOGS_FILE_RE.test(name), `bad temp name: ${name}`);
+  assert.ok(!existsSync(join(box.dir, name)), "temp log file left behind");
+  assert.ok(run.some((a) => a.startsWith("FH_AGENT_RUNNING=")));
+});
+
+test("diagnose: the container's exit code comes back, and the temp file still goes", () => {
+  const box = shellBox();
+  assert.throws(() => box.run("fh-toolkit diagnose", { DOCKER_EXIT: "1" }));
+  assert.ok(!readdirSync(box.dir).some((f) => f.startsWith(".fh-diagnose-logs.")));
+});
+
+test("every other command passes no empty argument and no diagnose env", () => {
+  const box = shellBox();
+  box.run("fh-toolkit doctor");
+  const line = box.argv().find((a) => a.includes("run"))?.join(" ") ?? "";
+  assert.ok(!line.includes("FH_DIAGNOSE") && !line.includes("  "), line);
+  assert.ok(!box.argv().some((a) => a[0] === "compose"));
+});
 
 test("⭐ the toolkit passes -i, the guarded -t, the mount and the handshake", () => {
   const box = shellBox();

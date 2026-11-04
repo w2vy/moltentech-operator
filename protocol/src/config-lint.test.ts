@@ -106,6 +106,20 @@ test("ENVFILE_NO_EXPANSION does not fire on a plain value", () => {
   assert.ok(!rules(report).includes("ENVFILE_NO_EXPANSION"));
 });
 
+test("ENVFILE_QUOTED_VALUE: the single quotes console-auth writes are not a fault", () => {
+  const hash = "$" + "6$salt$hash";
+  const envOperator = `CONSOLE_PASSWORD_HASH='${hash}'\nOPERATOR_SSH_PUBKEY='ssh-ed25519 AAAA op@host'\n`;
+  assert.ok(!rules(runDoctor({ envOperator })).includes("ENVFILE_QUOTED_VALUE"));
+  // Only those keys, only that quote, only that file.
+  for (const input of [
+    { envOperator: "PROXMOX_NETWORK='vmbr0'\n" },
+    { envOperator: `CONSOLE_PASSWORD_HASH="${hash}"\n` },
+    { configEnv: `CONSOLE_PASSWORD_HASH='${hash}'\n` },
+  ]) {
+    assert.ok(rules(runDoctor(input)).includes("ENVFILE_QUOTED_VALUE"), JSON.stringify(input));
+  }
+});
+
 test("ENVFILE_QUOTED_VALUE: wrapping quotes become part of the value", () => {
   const report = runDoctor({ configEnv: 'PROVIDER_NAME="Acme Nodes"\n' });
   assert.ok(rules(report).includes("ENVFILE_QUOTED_VALUE"));
