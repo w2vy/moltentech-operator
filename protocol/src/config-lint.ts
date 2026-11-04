@@ -170,6 +170,9 @@ const SECRET_KEYS_BANNED_IN_CONFIG = [
 /** `.env.operator` legitimately holds Proxmox creds and MANIFEST_KEY — that is its job.
  * What does NOT belong there is Stripe: those are the Coalition's, and a copy here is
  * either a stray paste or a live key in a file nobody treats as sensitive. */
+/** Written single-quoted by `fh-toolkit console-auth`. */
+const CONSOLE_AUTH_KEYS = ["OPERATOR_SSH_PUBKEY", "CONSOLE_PASSWORD_HASH"];
+
 const SECRET_KEYS_BANNED_IN_OPERATOR = ["STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET"];
 
 /** Value-shape detectors for secrets that landed under an innocent key name. */
@@ -198,8 +201,12 @@ function lintValueShape(entries: EnvEntry[], file: string): Finding[] {
           `literally. Run the command yourself and paste the RESULT.`,
       });
     }
-    // Wrapping quotes survive into the value; "abc" is four characters, not three.
-    if (e.value.length >= 2 && /^(".*"|'.*')$/.test(e.value)) {
+    // Wrapping quotes survive into the value; "abc" is four characters, not three. The one
+    // exception is `console-auth`, which single-quotes these on purpose: Compose expands `$`
+    // in an env file, so a bare `$6$s$h` arrives as `$6`. Removing the quotes breaks the hash.
+    const quotedByConsoleAuth =
+      file === ".env.operator" && CONSOLE_AUTH_KEYS.includes(e.key) && /^'.*'$/.test(e.value);
+    if (!quotedByConsoleAuth && e.value.length >= 2 && /^(".*"|'.*')$/.test(e.value)) {
       found.push({
         rule: "ENVFILE_QUOTED_VALUE",
         severity: "error",

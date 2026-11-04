@@ -29,7 +29,7 @@ export const TOOLKIT_IMAGE = "ghcr.io/w2vy/fh-toolkit:latest";
  * from a stale one from one predating the handshake entirely (`undefined`). That is the
  * whole point of the exercise — a stale wrapper used to be undetectable from either side.
  */
-export const WRAPPER_VERSION = 10;
+export const WRAPPER_VERSION = 11;
 
 /** Where `--update-wrapper` installs, unless the operator overrides it. */
 export const WRAPPER_RC = "${FH_TOOLKIT_RC:-$HOME/.fh-toolkit.sh}";
@@ -131,8 +131,25 @@ export function toolkitFunction(): string {
   # FH_WRAPPER lets the container tell a current wrapper from a stale one; \`doctor\`
   # reports the mismatch. /etc/hosts read-only so hostnames resolve inside the container
   # as they do at your prompt — see operator-onboarding.md Step 0.5 for the loopback edge.
-  docker run --rm -i $tty -e FH_WRAPPER=${WRAPPER_VERSION} -v "$PWD:/work" \\
+  # \`diagnose\` needs what only this side can see: the container has no Docker socket, so
+  # the agent's logs and running version are collected here and handed in. The temp file
+  # sits in $PWD because that is the one directory the container shares, and mktemp makes
+  # it private to you. A failed collection leaves it empty, which diagnose reports.
+  local -a diag=()
+  local diag_logs=""
+  if [ "$1" = "diagnose" ]; then
+    diag_logs="$(mktemp .fh-diagnose-logs.XXXXXX)" || return 1
+    docker compose logs --no-color --no-log-prefix --timestamps --tail 20000 agent > "$diag_logs" 2>/dev/null
+    diag=(-e "FH_DIAGNOSE_LOGS=$diag_logs")
+    if type fh-agent-running-version >/dev/null 2>&1; then
+      diag+=(-e "FH_AGENT_RUNNING=$(fh-agent-running-version)")
+    fi
+  fi
+  docker run --rm -i $tty -e FH_WRAPPER=${WRAPPER_VERSION} "\${diag[@]}" -v "$PWD:/work" \\
     -v /etc/hosts:/etc/hosts:ro -u "$(id -u):$(id -g)" "$img" "$@"
+  local rc=$?
+  [ -n "$diag_logs" ] && rm -f "$diag_logs"
+  return $rc
 }`;
 }
 

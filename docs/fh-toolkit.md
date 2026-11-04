@@ -111,8 +111,25 @@ fh-toolkit() {
   # FH_WRAPPER lets the container tell a current wrapper from a stale one; `doctor`
   # reports the mismatch. /etc/hosts read-only so hostnames resolve inside the container
   # as they do at your prompt — see operator-onboarding.md Step 0.5 for the loopback edge.
-  docker run --rm -i $tty -e FH_WRAPPER=10 -v "$PWD:/work" \
+  # `diagnose` needs what only this side can see: the container has no Docker socket, so
+  # the agent's logs and running version are collected here and handed in. The temp file
+  # sits in $PWD because that is the one directory the container shares, and mktemp makes
+  # it private to you. A failed collection leaves it empty, which diagnose reports.
+  local -a diag=()
+  local diag_logs=""
+  if [ "$1" = "diagnose" ]; then
+    diag_logs="$(mktemp .fh-diagnose-logs.XXXXXX)" || return 1
+    docker compose logs --no-color --no-log-prefix --timestamps --tail 20000 agent > "$diag_logs" 2>/dev/null
+    diag=(-e "FH_DIAGNOSE_LOGS=$diag_logs")
+    if type fh-agent-running-version >/dev/null 2>&1; then
+      diag+=(-e "FH_AGENT_RUNNING=$(fh-agent-running-version)")
+    fi
+  fi
+  docker run --rm -i $tty -e FH_WRAPPER=11 "${diag[@]}" -v "$PWD:/work" \
     -v /etc/hosts:/etc/hosts:ro -u "$(id -u):$(id -g)" "$img" "$@"
+  local rc=$?
+  [ -n "$diag_logs" ] && rm -f "$diag_logs"
+  return $rc
 }
 ```
 
@@ -286,7 +303,7 @@ the cue to run this.
 # `fh-toolkit`
 
 ```
-fh-toolkit <keygen|init|slug|proxmox|stripe|inventory|level|doctor|sign|env|verify> [options]   # one command, then exit
+fh-toolkit <keygen|init|slug|proxmox|stripe|inventory|level|doctor|diagnose|sign|env|verify> [options]   # one command, then exit
 fh-toolkit                                                  # an interactive session
 ```
 
@@ -307,6 +324,7 @@ in your operator directory, `doctor`, `sign` and `env` take no arguments at all.
 | `slug` | your slug, VM name prefix and hub — checked with Flux Hub | `config.env` (if any) | `config.env`; re-signs `manifest.json` when present |
 | `level` | show or change Supporter ⇄ Operator | `config.env`, `secrets.env` | those two, and only those |
 | `doctor` | prove every file agrees; optionally prove the live wiring | all of them | — |
+| `diagnose` | a support file: every check, logs and Proxmox state, secrets removed | all of them, agent logs | `fh-diagnose-<slug>-<time>.json` |
 | `sign` | re-sign after a `config.env` edit | `config.env`, key | `manifest.json` |
 | `env` | assemble the Flux environment blob | config + secrets + manifest | `env.json` |
 | `verify` | re-check a signature you were handed | a manifest | — |
@@ -873,6 +891,38 @@ sell anything new. Check your fleet on Flux Hub before you rely on that.
 | `LEVEL_SUPPORTER_WITH_PRICES` | `supporter`, prices set | The reverse, and the one that costs money. The prices are right there; the level in the *signed* manifest is what stops anything being listed. |
 
 ---
+
+## `diagnose`
+
+```
+fh-toolkit diagnose [--dir <dir>] [--vm <name>] [--dry-run]
+```
+
+Gathers what support would otherwise ask you to paste into one file. Run it at your shell
+prompt in your operator directory. **Nothing is sent.** It writes
+`fh-diagnose-<slug>-<time>.json`, readable only by you, and prints what went in. Read it
+over, then pass it on if you need help.
+
+| In the file | Notes |
+|---|---|
+| `doctor` findings | every check except `--check-stripe`; all are read-only |
+| Config | values for an approved list of settings; every other key says only `set` or `empty`; `secrets.env` is names only |
+| Inventory | hosts, storages, networks and slots |
+| Proxmox | nodes, memory, storages with their content types, VMs |
+| Agent logs | about a week with timestamps; the newest 20 of any repeated line, the rest counted |
+| Versions | toolkit, wrapper and the running agent |
+
+`--vm <name>` adds that VM's Proxmox row and slot at the top. `--dry-run` is accepted and
+changes nothing yet, because the file is all this command makes for now.
+
+**Secrets.** Every value in your files that is not on the approved list is removed from the
+logs and check output by exact match. Patterns then catch keys, tokens, password hashes,
+logins in URLs, and email addresses. Each removal reads `[redacted:<kind>]`, and the file
+counts them. If a credential is still found anywhere, for example a key typed into
+`PROVIDER_NAME`, the command stops, names the field, and writes nothing.
+
+Logs say `NOT INCLUDED` when the command runs inside an interactive `fh-toolkit` session, or
+with a wrapper older than v11, because only the wrapper can reach Docker.
 
 ## `doctor`
 
