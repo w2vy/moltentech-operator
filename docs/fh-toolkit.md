@@ -903,7 +903,7 @@ an answer. Run it at your shell prompt in your operator directory. It writes
 `fh-diagnose-<slug>-<time>.json`, readable only by you, prints what went in, and asks:
 
 ```
-Send this to Flux Hub? The hub keeps it 30 days and passes it to an AI service for an answer. [y/N]
+Send this to Flux Hub? The hub keeps it 30 days, plus up to 30 in backups, and passes it to an AI service for an answer. [y/N]
 ```
 
 On **y** you get the likely cause, the steps to fix it, and a support ID like `DG-0042`. If you

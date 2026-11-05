@@ -3070,7 +3070,7 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
         return nothingSent();
       }
       const answer = await withPrompts(ctx, async (ask) =>
-        (await ask(`\nSend this to Flux Hub? The hub keeps it 30 days and passes it to an AI service for an answer. [y/N]`)).toLowerCase()
+        (await ask(`\nSend this to Flux Hub? The hub keeps it 30 days, plus up to 30 in backups, and passes it to an AI service for an answer. [y/N]`)).toLowerCase()
       );
       if (!answer.startsWith("y")) return nothingSent();
       console.log("Sending. The answer can take a minute…");
