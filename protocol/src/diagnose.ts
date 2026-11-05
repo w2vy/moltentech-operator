@@ -30,6 +30,8 @@ export const LOG_TAIL_LINES = 2000;
 /** How many of one line shape to keep, newest first. */
 export const KEEP_PER_SHAPE = 20;
 export const MAX_LINE_CHARS = 2000;
+/** A few sentences. The logs and doctor carry the detail. */
+export const MAX_NOTE_CHARS = 1000;
 
 /** The temp file the wrapper writes. Anything else in FH_DIAGNOSE_LOGS is not ours to read. */
 export const LOGS_FILE_RE = /^\.fh-diagnose-logs\.[A-Za-z0-9]+$/;
@@ -289,6 +291,8 @@ export interface BundleInput {
   wrapper: string;
   agentRunning?: string;
   focusVm?: string;
+  /** `--note`: the trouble in the operator's words. */
+  note?: string;
   files: EnvFiles;
   report: DoctorReport;
   probeOutput: string[];
@@ -323,6 +327,8 @@ export function buildBundle(input: BundleInput) {
     if (logLines.length > 0) logStatus = "collected";
   }
 
+  // Redacted like the logs: people paste things into a note.
+  const note = clean(input.note?.trim() ?? "").slice(0, MAX_NOTE_CHARS) || null;
   const proxmox = input.survey ? narrowSurvey(input.survey) : null;
   const inventory = inventoryHosts(input.inventoryText);
   const vm = input.focusVm;
@@ -344,6 +350,7 @@ export function buildBundle(input: BundleInput) {
     wrapper: input.wrapper,
     agentRunning: input.agentRunning ?? "unknown",
     focus,
+    note,
     config: env.config,
     doctor: {
       findings: input.report.findings.map(cleanFinding),
@@ -387,6 +394,7 @@ export function bundleSummary(bundle: Bundle): string[] {
     `Inventory:       ${bundle.inventory ? `${bundle.inventory.length} host(s)` : "NOT INCLUDED: none found"}`,
     `Agent logs:      ${logNote[bundle.logs.status]}`,
     `Secrets removed: ${removed.length > 0 ? removed.join(", ") : "none found in the text"}`,
+    ...(bundle.note ? [`Your note:       ${bundle.note}`] : []),
     ...(bundle.focus ? [`Focus VM:        ${bundle.focus.vm}${bundle.focus.proxmox || bundle.focus.inventory ? "" : " (not found in Proxmox or the inventory)"}`] : []),
   ];
 }
