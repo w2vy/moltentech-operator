@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  nodesToJudge,
   parseEnvLines,
   runDoctor,
   formatReport,
@@ -645,4 +646,34 @@ test("Pay-by-Flux: payout address rules, and paid tiers with no rail at all", ()
   assert.deepEqual(rules(runDoctor({ configEnv: GOOD_CONFIG + "PROVIDER_FLUX_PAYOUT_ADDRESS=nope\n", secretsEnv: secretsStripe })), ["FLUX_PAYOUT_ADDRESS_INVALID"]);
   // Empty value = off, nothing to say.
   assert.deepEqual(rules(runDoctor({ configEnv: GOOD_CONFIG + "PROVIDER_FLUX_PAYOUT_ADDRESS=\n", secretsEnv: secretsStripe })), []);
+});
+
+const CLUSTER = ["pve20", "pve45", "pve60"];
+const ENV = { images: "ssd", iso: "local" };
+
+test("doctor judges only the nodes in the inventory, and names the rest", () => {
+  const { judged, skipped } = nodesToJudge(CLUSTER, JSON.stringify([{ name: "a", nodeName: "pve45" }]), ENV);
+  assert.deepEqual(judged, [{ node: "pve45", images: "ssd", iso: "local" }]);
+  assert.deepEqual(skipped, ["pve20", "pve60"]);
+});
+
+test("a host row's storages win over .env.operator, as they do in the agent", () => {
+  const inventory = JSON.stringify({ hosts: [{ name: "pve45", storageImages: "ss1", storageIso: "shared" }, { name: "pve60" }] });
+  assert.deepEqual(nodesToJudge(CLUSTER, inventory, ENV).judged, [
+    { node: "pve45", images: "ss1", iso: "shared" },
+    { node: "pve60", images: "ssd", iso: "local" },
+  ]);
+});
+
+test("a row's nodeName beats another row's name, as inventoryHostFor does", () => {
+  const inventory = JSON.stringify([{ name: "pve45", storageImages: "wrong" }, { nodeName: "pve45", storageImages: "right" }]);
+  assert.equal(nodesToJudge(CLUSTER, inventory, ENV).judged[0]?.images, "right");
+});
+
+test("an inventory doctor cannot use never silences the storage checks", () => {
+  for (const inventory of [undefined, "not json", "[]", JSON.stringify([{ name: "pve99" }])]) {
+    const { judged, skipped } = nodesToJudge(CLUSTER, inventory, ENV);
+    assert.deepEqual(judged.map((j) => j.node), CLUSTER, String(inventory));
+    assert.deepEqual(skipped, []);
+  }
 });

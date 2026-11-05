@@ -79,6 +79,7 @@ import {
   fetchTierMinimums,
   lintManifestFreshness,
   normalizeInventory,
+  nodesToJudge,
   TIER_FLOORS_CENTS,
   type DoctorReport,
 } from "./config-lint";
@@ -2039,11 +2040,16 @@ async function runDoctorChecks(
       // The storage the operator actually configured, judged. This is the check that
       // exists because a `local-lvm` default on a WD Red provisions fine and then
       // fails every benchmark with nothing in any log to say why.
-      const images = operator.PROXMOX_STORAGE_IMAGES;
-      const iso = operator.PROXMOX_STORAGE_ISO;
       // Same default as the agent (agent/src/config.ts): unset means `local`.
       const importStore = operator.PROXMOX_STORAGE_IMPORT || "local";
-      for (const [node, options] of Object.entries(probe.survey?.storages ?? {})) {
+      const storages = probe.survey?.storages ?? {};
+      const { judged, skipped } = nodesToJudge(Object.keys(storages), inventory, {
+        images: operator.PROXMOX_STORAGE_IMAGES,
+        iso: operator.PROXMOX_STORAGE_ISO,
+      });
+      if (skipped.length > 0) log(`storage checks: not in your inventory, so not judged: ${skipped.join(", ")}\n`);
+      for (const { node, images, iso } of judged) {
+        const options = storages[node] ?? [];
         const chosen = options.find((o) => o.id === images);
         if (chosen?.rotational === true) {
           report.findings.push({
