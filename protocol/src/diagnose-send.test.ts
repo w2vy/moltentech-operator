@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { answerLines, answerPath, sendBundle } from "./diagnose-send";
+import { answerLines, answerPath, refusalLine, sendBundle } from "./diagnose-send";
 import type { HubHttp } from "./hub-probe";
 import { bodyHash, generateEd25519, verifyRequest } from "./signing";
 
@@ -90,4 +90,33 @@ test("an unreadable 200 is not an answer", async () => {
 
 test("the answer is saved under the name of the file that was sent", () => {
   assert.equal(answerPath("/op/fh-diagnose-buzznet-20261105-012000.json"), "/op/fh-diagnose-buzznet-20261105-012000.answer.txt");
+});
+
+test("a saved answer says nothing has changed and keeps its steps", () => {
+  const out = answerLines({ id: "DG-0012", status: "answered", cause: "x", confidence: "low", steps: ["Do y."], replay: true }).join("\n");
+  assert.match(out, /Nothing has changed since DG-0012, so this is the same answer\./);
+  assert.match(out, /1\. Do y\./);
+  assert.doesNotMatch(answerLines({ id: "DG-1", status: "answered", cause: "x", confidence: "low" }).join("\n"), /Nothing has changed/);
+});
+
+test("a review refusal names what is waiting, and control characters do not get through", () => {
+  const line = refusalLine(JSON.stringify({ reason: "review", waiting: ["DG-1", "DG-2\u001b[2J"] }));
+  assert.match(line, /not reviewed your earlier answers yet \(DG-1, DG-2\[2J\)/);
+  assert.doesNotMatch(line, /\u001b/);
+});
+
+test("a daily refusal, an older hub and an unreadable reply all read as the daily limit", () => {
+  for (const text of [JSON.stringify({ reason: "daily", limit: 10 }), JSON.stringify({ limit: 10 }), "not json"]) {
+    assert.match(refusalLine(text), /daily limit/);
+  }
+});
+
+test("sendBundle prints the review refusal and is not a send", async () => {
+  const result = await sendBundle(input, async () => ({
+    status: 429,
+    text: JSON.stringify({ reason: "review", waiting: ["DG-1"] }),
+    headers: {},
+  }));
+  assert.equal(result.sent, false);
+  assert.match(result.lines.join("\n"), /not reviewed your earlier answers yet \(DG-1\)/);
 });

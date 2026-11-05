@@ -915,7 +915,11 @@ The answer is saved beside the file as `fh-diagnose-<slug>-<time>.answer.txt`, r
 
 Flux Hub deletes the file and the answer after 30 days. Copies can stay in its database backups for up to 30 more days.
 
-On anything else, nothing leaves your box. The limit is 10 sends a day.
+On anything else, nothing leaves your box.
+
+If nothing has changed since an answer in the last 24 hours, you get that same answer again, and it uses up no limit. That compares your config, inventory, Proxmox, doctor findings, the kinds of lines in your logs, and your slots, jobs and issues on Flux Hub.
+
+Flux Hub support is told about each new answer. Once 3 of your answers are waiting for review, a new send has to wait until support reviews one. There is also a limit of 10 sends a day.
 
 | In the file | Notes |
 |---|---|

@@ -59,6 +59,7 @@ export function answerLines(reply: Record<string, unknown>): string[] {
   }
   const steps = Array.isArray(reply.steps) ? reply.steps.map(plain) : [];
   return [
+    ...(reply.replay === true ? ["", `Nothing has changed since ${id}, so this is the same answer.`] : []),
     "",
     `Likely cause (${plain(reply.confidence)} confidence):`,
     ...plain(reply.cause).split("\n").map((l) => `  ${l}`),
@@ -72,6 +73,20 @@ export function answerLines(reply: Record<string, unknown>): string[] {
 /** The answer sits beside the file that was sent, under the same name. */
 export function answerPath(bundlePath: string): string {
   return bundlePath.replace(/\.json$/, "") + ".answer.txt";
+}
+
+/** The hub's words for a 429. A hub or a reply that does not say why means the daily limit. */
+export function refusalLine(text: string): string {
+  try {
+    const reply = JSON.parse(text) as { reason?: unknown; waiting?: unknown };
+    if (reply.reason === "review") {
+      const waiting = Array.isArray(reply.waiting) ? reply.waiting.map(plain).join(", ") : "";
+      return `Flux Hub support has not reviewed your earlier answers yet${waiting ? ` (${waiting})` : ""}. You can send a new file once one is reviewed. A file with no changes still gets its saved answer.`;
+    }
+  } catch {
+    // Not JSON: the daily line below is still the honest guess for a 429.
+  }
+  return "You reached the daily limit for diagnose. Try again tomorrow.";
 }
 
 export async function sendBundle(input: SendInput, http: HubHttp = sendHttp): Promise<SendResult> {
@@ -114,7 +129,7 @@ export async function sendBundle(input: SendInput, http: HubHttp = sendHttp): Pr
     401: "Flux Hub rejected your signature. Run `fh-toolkit doctor --check-hub`.",
     404: "This Flux Hub does not offer diagnose yet.",
     413: "The file is too large to send.",
-    429: "You reached the daily limit for diagnose. Try again tomorrow.",
+    429: refusalLine(res.text),
   };
   return { sent: false, lines: [refused[res.status] ?? `Flux Hub answered ${res.status}.`, FILE_NOTE] };
 }
