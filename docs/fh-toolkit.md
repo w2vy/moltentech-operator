@@ -990,6 +990,8 @@ counted as an unproven check, never an error.
 
 ### `--check-proxmox`
 
+Storage is judged only on the nodes in your inventory, using each host's own storages where it sets them. Doctor prints the nodes it left out. If it can't read your inventory, or none of its hosts are in the cluster, it judges every node.
+
 Reads `PROXMOX_URL` / `PROXMOX_TOKEN_ID` / `PROXMOX_TOKEN_SECRET` from `.env.operator`
 and proves the token actually works. Read-only; nothing is created. Skipped with a
 message if any of the three is absent.

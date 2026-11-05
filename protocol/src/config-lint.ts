@@ -828,6 +828,9 @@ function lintSkeletonSlots(entries: EnvEntry[], file: string, opts: { supporter?
 
 export interface InventoryHost {
   name?: string;
+  nodeName?: string;
+  storageImages?: string;
+  storageIso?: string;
   slots?: Array<{ vmName?: string; lanIp?: string }>;
 }
 
@@ -845,6 +848,49 @@ export function normalizeInventory(parsed: unknown): InventoryHost[] | null {
     return (parsed as { hosts: InventoryHost[] }).hosts;
   }
   return null;
+}
+
+export interface NodeStorages {
+  node: string;
+  images?: string;
+  iso?: string;
+}
+
+/**
+ * Which Proxmox nodes doctor judges, and with which storages. An operator on a shared cluster
+ * uses a few of its nodes, so a storage that is off on the others is not a problem (11-04: five
+ * false errors on `ssd` for an operator whose only host was pve45).
+ *
+ * Rows are matched and storages resolved as the agent does (`inventoryHostFor`, `effectiveHost`
+ * in agent/src/executor.ts): the row wins, then `.env.operator`.
+ *
+ * With no readable inventory, or none of its hosts in the cluster, every node is judged. A wrong
+ * inventory must not silence the check that would have found the problem.
+ */
+export function nodesToJudge(
+  nodes: string[],
+  inventoryText: string | undefined,
+  env: { images?: string; iso?: string }
+): { judged: NodeStorages[]; skipped: string[] } {
+  let hosts: InventoryHost[] = [];
+  try {
+    hosts = (inventoryText ? normalizeInventory(JSON.parse(inventoryText)) : null) ?? [];
+  } catch {
+    // doctor's inventory lint reports the bad file; this only falls back to every node.
+  }
+  const rowFor = (node: string) => hosts.find((h) => h.nodeName === node) ?? hosts.find((h) => h.name === node);
+  const used = nodes.filter((node) => rowFor(node));
+  if (used.length === 0) {
+    return { judged: nodes.map((node) => ({ node, images: env.images, iso: env.iso })), skipped: [] };
+  }
+  return {
+    judged: used.map((node) => ({
+      node,
+      images: rowFor(node)?.storageImages ?? env.images,
+      iso: rowFor(node)?.storageIso ?? env.iso,
+    })),
+    skipped: nodes.filter((node) => !used.includes(node)),
+  };
 }
 
 /**
