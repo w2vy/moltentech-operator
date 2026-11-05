@@ -831,7 +831,7 @@ export interface InventoryHost {
   nodeName?: string;
   storageImages?: string;
   storageIso?: string;
-  slots?: Array<{ vmName?: string; lanIp?: string }>;
+  slots?: Array<{ vmName?: string; lanIp?: string; storagePool?: string | null }>;
 }
 
 /**
@@ -852,7 +852,8 @@ export function normalizeInventory(parsed: unknown): InventoryHost[] | null {
 
 export interface NodeStorages {
   node: string;
-  images?: string;
+  /** Where this node's VM disks go. More than one when slots name their own storage. */
+  images: string[];
   iso?: string;
 }
 
@@ -861,8 +862,10 @@ export interface NodeStorages {
  * uses a few of its nodes, so a storage that is off on the others is not a problem (11-04: five
  * false errors on `ssd` for an operator whose only host was pve45).
  *
- * Rows are matched and storages resolved as the agent does (`inventoryHostFor`, `effectiveHost`
- * in agent/src/executor.ts): the row wins, then `.env.operator`.
+ * Rows are matched and storages resolved as the agent does (`inventoryHostFor`, `effectiveHost`,
+ * `provisionStorages` in agent/src/executor.ts): a slot's `storagePool`, then the host row, then
+ * `.env.operator`. A default that every slot overrides holds no disks, so it is not judged
+ * (11-04: three false HDD errors for hosts whose slots all use `ssd`).
  *
  * With no readable inventory, or none of its hosts in the cluster, every node is judged. A wrong
  * inventory must not silence the check that would have found the problem.
@@ -881,14 +884,23 @@ export function nodesToJudge(
   const rowFor = (node: string) => hosts.find((h) => h.nodeName === node) ?? hosts.find((h) => h.name === node);
   const used = nodes.filter((node) => rowFor(node));
   if (used.length === 0) {
-    return { judged: nodes.map((node) => ({ node, images: env.images, iso: env.iso })), skipped: [] };
+    return {
+      judged: nodes.map((node) => ({ node, images: env.images ? [env.images] : [], iso: env.iso })),
+      skipped: [],
+    };
   }
   return {
-    judged: used.map((node) => ({
-      node,
-      images: rowFor(node)?.storageImages ?? env.images,
-      iso: rowFor(node)?.storageIso ?? env.iso,
-    })),
+    judged: used.map((node) => {
+      const row = rowFor(node);
+      const fallback = row?.storageImages ?? env.images;
+      const slots = Array.isArray(row?.slots) ? row.slots : [];
+      const pools = slots.length > 0 ? slots.map((s) => s.storagePool ?? fallback) : [fallback];
+      return {
+        node,
+        images: [...new Set(pools.filter((p): p is string => !!p))],
+        iso: row?.storageIso ?? env.iso,
+      };
+    }),
     skipped: nodes.filter((node) => !used.includes(node)),
   };
 }

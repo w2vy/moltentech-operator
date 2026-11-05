@@ -994,7 +994,7 @@ counted as an unproven check, never an error.
 
 ### `--check-proxmox`
 
-Storage is judged only on the nodes in your inventory, using each host's own storages where it sets them. Doctor prints the nodes it left out. If it can't read your inventory, or none of its hosts are in the cluster, it judges every node.
+Storage is judged only on the nodes in your inventory, using a slot's `storagePool`, then the host's own storages, then `.env.operator`, as the agent does. A default that every slot overrides isn't judged. Doctor prints the nodes it left out. If it can't read your inventory, or none of its hosts are in the cluster, it judges every node.
 
 Reads `PROXMOX_URL` / `PROXMOX_TOKEN_ID` / `PROXMOX_TOKEN_SECRET` from `.env.operator`
 and proves the token actually works. Read-only; nothing is created. Skipped with a
@@ -1004,7 +1004,7 @@ The check that pays for the flag: it resolves `PROXMOX_STORAGE_IMAGES` through i
 volume group to the real device and **fails if it is rotational**:
 
 ```
-DOC_DEFAULT_STORAGE_IS_HDD  PROXMOX_STORAGE_IMAGES="local-lvm" is ROTATIONAL on pve30
+DOC_DEFAULT_STORAGE_IS_HDD  Images storage "local-lvm" is ROTATIONAL on pve30
 ```
 
 ⚠️ A pool on spinning media provisions fine and then **fails every benchmark with nothing

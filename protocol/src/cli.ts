@@ -2050,16 +2050,18 @@ async function runDoctorChecks(
       if (skipped.length > 0) log(`storage checks: not in your inventory, so not judged: ${skipped.join(", ")}\n`);
       for (const { node, images, iso } of judged) {
         const options = storages[node] ?? [];
-        const chosen = options.find((o) => o.id === images);
-        if (chosen?.rotational === true) {
-          report.findings.push({
-            severity: "error",
-            rule: "DOC_DEFAULT_STORAGE_IS_HDD",
-            file: ".env.operator",
-            message:
-              `PROXMOX_STORAGE_IMAGES="${images}" is ROTATIONAL on ${node} (${chosen.why}) — ` +
-              `nodes provision fine and then fail every benchmark, with no visible cause.`,
-          });
+        for (const pool of images) {
+          const chosen = options.find((o) => o.id === pool);
+          if (chosen?.rotational === true) {
+            report.findings.push({
+              severity: "error",
+              rule: "DOC_DEFAULT_STORAGE_IS_HDD",
+              file: ".env.operator",
+              message:
+                `Images storage "${pool}" is ROTATIONAL on ${node} (${chosen.why}) — ` +
+                `nodes provision fine and then fail every benchmark, with no visible cause.`,
+            });
+          }
         }
         // Can each storage hold what it was named for? Proxmox states this outright, so
         // it is knowable rather than guessed — and the ISO half went unchecked until an
@@ -2067,7 +2069,7 @@ async function runDoctorChecks(
         // provisions to a pydantic error on an empty `iso_name`, four hours downstream.
         for (const [name, id, need] of [
           ["PROXMOX_STORAGE_ISO", iso, "iso"],
-          ["PROXMOX_STORAGE_IMAGES", images, "images"],
+          ...images.map((pool) => ["Images storage", pool, "images"] as const),
           // The third storage arcane-mage validates. Unchecked until 2026-10-05, when an
           // operator's provision failed "Storage type missing on hypervisor" with ISO and
           // images both passing here.

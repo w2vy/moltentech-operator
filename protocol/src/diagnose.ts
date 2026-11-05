@@ -243,7 +243,7 @@ export type LogsState =
   | { status: "read"; text: string };
 
 const HOST_FIELDS = ["name", "nodeName", "network", "storageImages", "storageIso", "storageImport"];
-const SLOT_FIELDS = ["vmName", "tier", "ipAddress", "lanIp", "gateway", "apiPort", "network"];
+const SLOT_FIELDS = ["vmName", "tier", "ipAddress", "lanIp", "gateway", "apiPort", "network", "storagePool"];
 
 type Row = Record<string, unknown>;
 
