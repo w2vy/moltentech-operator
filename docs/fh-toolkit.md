@@ -913,6 +913,8 @@ failed jobs and open issues.
 
 The answer is saved beside the file as `fh-diagnose-<slug>-<time>.answer.txt`, readable only by you. Flux Hub also keeps it for 30 days in your operator console, under Issues > Diagnose.
 
+Flux Hub deletes the file and the answer after 30 days. Copies can stay in its database backups for up to 30 more days.
+
 On anything else, nothing leaves your box. The limit is 10 sends a day.
 
 | In the file | Notes |
