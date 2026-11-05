@@ -239,12 +239,12 @@ test("an ordinary long setting off the list is redacted but cannot stop the bund
 test("the survey and inventory carry only their named fields", () => {
   const storages = { prox02: [{ ...STORAGE, extra: "no" }] };
   const inventoryText = JSON.stringify([
-    { name: "prox02", storageImages: "local-lvm", apiToken: "no", slots: [{ vmName: "bz-1", tier: "cumulus", lanIp: "10.0.0.9/24", identityKey: "no" }] },
+    { name: "prox02", storageImages: "local-lvm", apiToken: "no", slots: [{ vmName: "bz-1", tier: "cumulus", lanIp: "10.0.0.9/24", storagePool: "ssd", identityKey: "no" }] },
   ]);
   const { bundle } = buildBundle(base({ survey: { ...survey, storages }, inventoryText }));
   assert.ok(!JSON.stringify(bundle.proxmox).includes("extra"));
   assert.deepEqual(bundle.inventory, [
-    { name: "prox02", storageImages: "local-lvm", slots: [{ vmName: "bz-1", tier: "cumulus", lanIp: "10.0.0.9/24" }] },
+    { name: "prox02", storageImages: "local-lvm", slots: [{ vmName: "bz-1", tier: "cumulus", lanIp: "10.0.0.9/24", storagePool: "ssd" }] },
   ]);
 });
 

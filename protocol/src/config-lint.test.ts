@@ -653,21 +653,21 @@ const ENV = { images: "ssd", iso: "local" };
 
 test("doctor judges only the nodes in the inventory, and names the rest", () => {
   const { judged, skipped } = nodesToJudge(CLUSTER, JSON.stringify([{ name: "a", nodeName: "pve45" }]), ENV);
-  assert.deepEqual(judged, [{ node: "pve45", images: "ssd", iso: "local" }]);
+  assert.deepEqual(judged, [{ node: "pve45", images: ["ssd"], iso: "local" }]);
   assert.deepEqual(skipped, ["pve20", "pve60"]);
 });
 
 test("a host row's storages win over .env.operator, as they do in the agent", () => {
   const inventory = JSON.stringify({ hosts: [{ name: "pve45", storageImages: "ss1", storageIso: "shared" }, { name: "pve60" }] });
   assert.deepEqual(nodesToJudge(CLUSTER, inventory, ENV).judged, [
-    { node: "pve45", images: "ss1", iso: "shared" },
-    { node: "pve60", images: "ssd", iso: "local" },
+    { node: "pve45", images: ["ss1"], iso: "shared" },
+    { node: "pve60", images: ["ssd"], iso: "local" },
   ]);
 });
 
 test("a row's nodeName beats another row's name, as inventoryHostFor does", () => {
   const inventory = JSON.stringify([{ name: "pve45", storageImages: "wrong" }, { nodeName: "pve45", storageImages: "right" }]);
-  assert.equal(nodesToJudge(CLUSTER, inventory, ENV).judged[0]?.images, "right");
+  assert.equal(nodesToJudge(CLUSTER, inventory, ENV).judged[0]?.images[0], "right");
 });
 
 test("an inventory doctor cannot use never silences the storage checks", () => {
@@ -676,4 +676,14 @@ test("an inventory doctor cannot use never silences the storage checks", () => {
     assert.deepEqual(judged.map((j) => j.node), CLUSTER, String(inventory));
     assert.deepEqual(skipped, []);
   }
+});
+
+test("a default every slot overrides is not judged, as in the agent", () => {
+  const row = { name: "pve45", storageImages: "local-lvm", slots: [{ storagePool: "ssd" }, { storagePool: "ssd" }] };
+  assert.deepEqual(nodesToJudge(CLUSTER, JSON.stringify([row]), ENV).judged[0]?.images, ["ssd"]);
+});
+
+test("a slot with no storagePool still uses the default, so a real HDD stays visible", () => {
+  const row = { name: "pve45", storageImages: "local-lvm", slots: [{ storagePool: "ssd" }, {}, { storagePool: null }] };
+  assert.deepEqual(nodesToJudge(CLUSTER, JSON.stringify([row]), ENV).judged[0]?.images, ["ssd", "local-lvm"]);
 });
