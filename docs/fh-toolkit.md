@@ -903,13 +903,17 @@ an answer. Run it at your shell prompt in your operator directory. It writes
 `fh-diagnose-<slug>-<time>.json`, readable only by you, prints what went in, and asks:
 
 ```
-Send this to Flux Hub? The hub keeps it 30 days and passes it to an AI service for an answer. [y/N]
+Send this to Flux Hub? The hub keeps it 30 days, plus up to 30 in backups, and passes it to an AI service for an answer. [y/N]
 ```
 
 On **y** you get the likely cause, the steps to fix it, and a support ID like `DG-0042`. If you
 still need help, quote the ID and support can read the same file and answer. The AI service
 is Anthropic's Claude. Flux Hub adds its own records for your provider: versions, slots,
 failed jobs and open issues.
+
+The answer is saved beside the file as `fh-diagnose-<slug>-<time>.answer.txt`, readable only by you. Flux Hub also keeps it for 30 days in your operator console, under Issues > Diagnose.
+
+Flux Hub deletes the file and the answer after 30 days. Copies can stay in its database backups for up to 30 more days.
 
 On anything else, nothing leaves your box. The limit is 10 sends a day.
 

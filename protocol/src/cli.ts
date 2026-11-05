@@ -110,7 +110,7 @@ import {
 } from "./proxmox-token";
 import { planVmMemory, TIER_DEFAULT_MB, vmMemoryAdvice } from "./vm-memory";
 import { buildBundle, bundleFileName, bundleSummary, LOGS_FILE_RE } from "./diagnose";
-import { sendBundle } from "./diagnose-send";
+import { answerPath, sendBundle } from "./diagnose-send";
 import { hostCheckScript } from "./host-check";
 import { burnScript, parseBurnPlan } from "./burn";
 import { describeVm, nodeOf, parseKeepList, retireAdoptedMarks } from "./existing-nodes";
@@ -3070,7 +3070,7 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
         return nothingSent();
       }
       const answer = await withPrompts(ctx, async (ask) =>
-        (await ask(`\nSend this to Flux Hub? The hub keeps it 30 days and passes it to an AI service for an answer. [y/N]`)).toLowerCase()
+        (await ask(`\nSend this to Flux Hub? The hub keeps it 30 days, plus up to 30 in backups, and passes it to an AI service for an answer. [y/N]`)).toLowerCase()
       );
       if (!answer.startsWith("y")) return nothingSent();
       console.log("Sending. The answer can take a minute…");
@@ -3081,6 +3081,16 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
         body: JSON.stringify(bundle),
       });
       for (const line of result.lines) console.log(line);
+      if (result.sent) {
+        // A failed save must not read as a failed send: the answer is already on the screen.
+        const savedPath = answerPath(outPath);
+        try {
+          writeFileSync(savedPath, `${result.lines.join("\n").trim()}\n`, { mode: 0o600 });
+          console.log(`\nSaved this answer to ${savedPath}.`);
+        } catch (err) {
+          console.log(`\nCould not save this answer: ${(err as Error).message}`);
+        }
+      }
       return result.sent ? 0 : 1;
     }
     case "level": {

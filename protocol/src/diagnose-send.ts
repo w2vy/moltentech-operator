@@ -69,6 +69,11 @@ export function answerLines(reply: Record<string, unknown>): string[] {
   ];
 }
 
+/** The answer sits beside the file that was sent, under the same name. */
+export function answerPath(bundlePath: string): string {
+  return bundlePath.replace(/\.json$/, "") + ".answer.txt";
+}
+
 export async function sendBundle(input: SendInput, http: HubHttp = sendHttp): Promise<SendResult> {
   const url = `${input.mtBaseUrl.replace(/\/+$/, "")}${PATH}`;
   let res: Awaited<ReturnType<HubHttp>>;
