@@ -12,7 +12,7 @@
  *                                       .env.operator, inventory.json and the Flux app spec.
  *                                       --answers runs the SAME generator non-interactively.
  *   doctor [--dir <dir>] [--check-stripe] [--check-proxmox] [--check-hub]
- *   diagnose [--dir <dir>] [--vm <name>] [--dry-run]   everything support needs, secrets removed
+ *   diagnose [--dir <dir>] [--vm <name>] [--dry-run]   support file + AI answer, secrets removed
  *                                       check that the generated files agree with each other.
  *                                       File-level and offline unless a --check-* flag asks
  *                                       otherwise: --check-stripe proves the webhook is on
@@ -109,6 +109,7 @@ import {
 } from "./proxmox-token";
 import { planVmMemory, TIER_DEFAULT_MB, vmMemoryAdvice } from "./vm-memory";
 import { buildBundle, bundleFileName, bundleSummary, LOGS_FILE_RE } from "./diagnose";
+import { sendBundle } from "./diagnose-send";
 import { hostCheckScript } from "./host-check";
 import { burnScript, parseBurnPlan } from "./burn";
 import { describeVm, nodeOf, parseKeepList, retireAdoptedMarks } from "./existing-nodes";
@@ -3004,8 +3005,7 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
     case "diagnose": {
       rejectUnknownFlags("diagnose", args, ["--dir", "--vm"], ["--dry-run"]);
       // Everything an operator would otherwise paste into a support chat, with the secrets
-      // out. Phase 1 stops at the file: nothing leaves this box, and `--dry-run` is accepted
-      // now so the flag means the same thing once the hub can answer.
+      // out. The file is always written. It only leaves this box on a yes at the prompt.
       const dir = dirFlag(args);
       const read = (f: string): string | undefined => {
         const p = join(dir, f);
@@ -3049,9 +3049,33 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
       const json = `${JSON.stringify(bundle, null, 2)}\n`;
       writeFileSync(outPath, json, { mode: 0o600 });
       for (const line of bundleSummary(bundle)) console.log(line);
-      console.log(`\nWrote ${outPath} (${Math.ceil(json.length / 1024)} KB). Nothing was sent.`);
-      console.log("Read it over, then send that file to Flux Hub support if you need help.");
-      return 0;
+      console.log(`\nWrote ${outPath} (${Math.ceil(json.length / 1024)} KB).`);
+      const nothingSent = (): number => {
+        console.log("Nothing was sent. Read the file over, then send it to Flux Hub support if you need help.");
+        return 0;
+      };
+      if (args.includes("--dry-run") || (!ctx.rl && !process.stdin.isTTY)) return nothingSent();
+      const secrets = parseConfigEnv(files.secrets ?? "");
+      const config = parseConfigEnv(files.config ?? "");
+      const operator = parseConfigEnv(files.operator ?? "");
+      const manifestKey = secrets.MANIFEST_KEY || operator.MANIFEST_KEY;
+      if (!config.MT_BASE_URL || !config.PROVIDER_SLUG || !manifestKey) {
+        console.log("Cannot send: MT_BASE_URL, PROVIDER_SLUG or MANIFEST_KEY is missing.");
+        return nothingSent();
+      }
+      const answer = await withPrompts(ctx, async (ask) =>
+        (await ask(`\nSend this to Flux Hub? The hub keeps it 30 days and passes it to an AI service for an answer. [y/N]`)).toLowerCase()
+      );
+      if (!answer.startsWith("y")) return nothingSent();
+      console.log("Sending. The answer can take a minute…");
+      const result = await sendBundle({
+        mtBaseUrl: config.MT_BASE_URL,
+        manifestKey,
+        providerSlug: config.PROVIDER_SLUG,
+        body: JSON.stringify(bundle),
+      });
+      for (const line of result.lines) console.log(line);
+      return result.sent ? 0 : 1;
     }
     case "level": {
       rejectUnknownFlags("level", args, ["--dir", "--set", "--price", "--stripe-key", "--stripe-webhook", "--flux-address"], ["--dry-run", "--yes"]);

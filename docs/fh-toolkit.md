@@ -324,7 +324,7 @@ in your operator directory, `doctor`, `sign` and `env` take no arguments at all.
 | `slug` | your slug, VM name prefix and hub — checked with Flux Hub | `config.env` (if any) | `config.env`; re-signs `manifest.json` when present |
 | `level` | show or change Supporter ⇄ Operator | `config.env`, `secrets.env` | those two, and only those |
 | `doctor` | prove every file agrees; optionally prove the live wiring | all of them | — |
-| `diagnose` | a support file: every check, logs and Proxmox state, secrets removed | all of them, agent logs | `fh-diagnose-<slug>-<time>.json` |
+| `diagnose` | a support file with secrets removed, and on your yes an AI answer from Flux Hub | all of them, agent logs | `fh-diagnose-<slug>-<time>.json` |
 | `sign` | re-sign after a `config.env` edit | `config.env`, key | `manifest.json` |
 | `env` | assemble the Flux environment blob | config + secrets + manifest | `env.json` |
 | `verify` | re-check a signature you were handed | a manifest | — |
@@ -898,10 +898,20 @@ sell anything new. Check your fleet on Flux Hub before you rely on that.
 fh-toolkit diagnose [--dir <dir>] [--vm <name>] [--dry-run]
 ```
 
-Gathers what support would otherwise ask you to paste into one file. Run it at your shell
-prompt in your operator directory. **Nothing is sent.** It writes
-`fh-diagnose-<slug>-<time>.json`, readable only by you, and prints what went in. Read it
-over, then pass it on if you need help.
+Gathers what support would otherwise ask you to paste into one file, then offers to get you
+an answer. Run it at your shell prompt in your operator directory. It writes
+`fh-diagnose-<slug>-<time>.json`, readable only by you, prints what went in, and asks:
+
+```
+Send this to Flux Hub? The hub keeps it 30 days and passes it to an AI service for an answer. [y/N]
+```
+
+On **y** you get the likely cause, the steps to fix it, and a support ID like `DG-0042`. If you
+still need help, quote the ID and support can read the same file and answer. The AI service
+is Anthropic's Claude. Flux Hub adds its own records for your provider: versions, slots,
+failed jobs and open issues.
+
+On anything else, nothing leaves your box. The limit is 10 sends a day.
 
 | In the file | Notes |
 |---|---|
@@ -912,8 +922,11 @@ over, then pass it on if you need help.
 | Agent logs | about a week with timestamps; the newest 20 of any repeated line, the rest counted |
 | Versions | toolkit, wrapper and the running agent |
 
-`--vm <name>` adds that VM's Proxmox row and slot at the top. `--dry-run` is accepted and
-changes nothing yet, because the file is all this command makes for now.
+`--vm <name>` adds that VM's Proxmox row and slot at the top. `--dry-run` writes the file and
+never asks to send it. A run with no terminal behaves the same way.
+
+The answer is advice from an AI that read your logs. It runs nothing on your box. Read a
+suggested command before you run it.
 
 **Secrets.** Every value in your files that is not on the approved list is removed from the
 logs and check output by exact match. Patterns then catch keys, tokens, password hashes,
