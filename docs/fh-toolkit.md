@@ -911,6 +911,8 @@ still need help, quote the ID and support can read the same file and answer. The
 is Anthropic's Claude. Flux Hub adds its own records for your provider: versions, slots,
 failed jobs and open issues.
 
+The answer is saved beside the file as `fh-diagnose-<slug>-<time>.answer.txt`, readable only by you. Flux Hub also keeps it for 30 days in your operator console, under Issues > Diagnose.
+
 On anything else, nothing leaves your box. The limit is 10 sends a day.
 
 | In the file | Notes |

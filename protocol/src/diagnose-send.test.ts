@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { answerLines, sendBundle } from "./diagnose-send";
+import { answerLines, answerPath, sendBundle } from "./diagnose-send";
 import type { HubHttp } from "./hub-probe";
 import { bodyHash, generateEd25519, verifyRequest } from "./signing";
 
@@ -86,4 +86,8 @@ test("a dead link and a bad key are reported, not thrown", async () => {
 test("an unreadable 200 is not an answer", async () => {
   const r = await sendBundle(input, reply(200, "<html>"));
   assert.equal(r.sent, false);
+});
+
+test("the answer is saved under the name of the file that was sent", () => {
+  assert.equal(answerPath("/op/fh-diagnose-buzznet-20261105-012000.json"), "/op/fh-diagnose-buzznet-20261105-012000.answer.txt");
 });
