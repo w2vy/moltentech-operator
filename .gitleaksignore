@@ -21,3 +21,8 @@
 # closes the exposure. The current fixture was replaced with an obviously-fake UUID so
 # this cannot recur.
 fae138de58e7d6121abbf419daffca3d3915da8f:agent/src/executor.test.ts:generic-api-key:307
+
+# A test fixture, not a secret: base64 of the words "not a key", used to prove a bad key is
+# reported rather than thrown. The next commit builds it at runtime, so it only remains in this
+# one commit's history on a PR branch.
+f2d72acedffa5f17b3152b1c1e4fc68d8088e010:protocol/src/diagnose-send.test.ts:generic-api-key:82

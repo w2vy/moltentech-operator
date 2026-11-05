@@ -79,7 +79,7 @@ test("a dead link and a bad key are reported, not thrown", async () => {
     throw new Error("connect refused");
   });
   assert.match(dead.lines.join("\n"), /Could not reach .*connect refused/);
-  const badKey = await sendBundle({ ...input, manifestKey: "bm90IGEga2V5" }, reply(200));
+  const badKey = await sendBundle({ ...input, manifestKey: Buffer.from("not a key").toString("base64") }, reply(200));
   assert.equal(badKey.sent, false);
 });
 
