@@ -895,7 +895,7 @@ sell anything new. Check your fleet on Flux Hub before you rely on that.
 ## `diagnose`
 
 ```
-fh-toolkit diagnose [--dir <dir>] [--vm <name>] [--dry-run]
+fh-toolkit diagnose [--dir <dir>] [--vm <name>] [--note "what you see"] [--dry-run]
 ```
 
 Gathers what support would otherwise ask you to paste into one file, then offers to get you
@@ -917,12 +917,15 @@ Flux Hub deletes the file and the answer after 30 days. Copies can stay in its d
 
 On anything else, nothing leaves your box.
 
-If nothing has changed since an answer in the last 24 hours, you get that same answer again, and it uses up no limit. That compares your config, inventory, Proxmox, doctor findings, the kinds of lines in your logs, and your slots, jobs and issues on Flux Hub.
+Use `--note` to say what is wrong in your own words, such as `--note "node 3 stopped earning yesterday"`. The AI starts from it. A note goes in the file with the rest, up to 1000 characters, and secrets are removed from it. A new note gets a new answer.
+
+If nothing has changed since an answer in the last 24 hours, you get that same answer again, and it uses up no limit. That compares your note, config, inventory, Proxmox, doctor findings, the kinds of lines in your logs, and your slots, jobs and issues on Flux Hub.
 
 Flux Hub support is told about each new answer. Once 3 of your answers are waiting for review, a new send has to wait until support reviews one. There is also a limit of 10 sends a day.
 
 | In the file | Notes |
 |---|---|
+| Your note | what you passed with `--note`, if anything |
 | `doctor` findings | every check except `--check-stripe`; all are read-only |
 | Config | values for an approved list of settings; every other key says only `set` or `empty`; `secrets.env` is names only |
 | Inventory | hosts, storages, networks and slots |

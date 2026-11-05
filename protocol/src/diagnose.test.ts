@@ -351,3 +351,18 @@ test("cli: outside an operator directory it says so", () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("a note goes in the bundle trimmed, cut to size and with secrets out", () => {
+  const key = ["sk", "live", "abcdefgh12345678"].join("_"); // Built here so gitleaks does not flag it.
+  const { bundle } = buildBundle(base({ note: `  node 3 stopped, key ${key}  ` }));
+  assert.match(bundle.note ?? "", /^node 3 stopped, key /);
+  assert.doesNotMatch(bundle.note ?? "", /abcdefgh/);
+  assert.equal(buildBundle(base({ note: "word ".repeat(400) })).bundle.note?.length, 1000);
+});
+
+test("no note, or a blank one, is null and stays out of the summary", () => {
+  assert.equal(buildBundle(base({})).bundle.note, null);
+  assert.equal(buildBundle(base({ note: "   " })).bundle.note, null);
+  assert.doesNotMatch(bundleSummary(buildBundle(base({})).bundle).join("\n"), /Your note/);
+  assert.match(bundleSummary(buildBundle(base({ note: "node 3" })).bundle).join("\n"), /Your note: +node 3/);
+});

@@ -12,7 +12,7 @@
  *                                       .env.operator, inventory.json and the Flux app spec.
  *                                       --answers runs the SAME generator non-interactively.
  *   doctor [--dir <dir>] [--check-stripe] [--check-proxmox] [--check-hub]
- *   diagnose [--dir <dir>] [--vm <name>] [--dry-run]   support file + AI answer, secrets removed
+ *   diagnose [--dir <dir>] [--vm <name>] [--note <text>] [--dry-run]   support file + AI answer, secrets removed
  *                                       check that the generated files agree with each other.
  *                                       File-level and offline unless a --check-* flag asks
  *                                       otherwise: --check-stripe proves the webhook is on
@@ -3011,7 +3011,7 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
       return 0;
     }
     case "diagnose": {
-      rejectUnknownFlags("diagnose", args, ["--dir", "--vm"], ["--dry-run"]);
+      rejectUnknownFlags("diagnose", args, ["--dir", "--vm", "--note"], ["--dry-run"]);
       // Everything an operator would otherwise paste into a support chat, with the secrets
       // out. The file is always written. It only leaves this box on a yes at the prompt.
       const dir = dirFlag(args);
@@ -3035,6 +3035,7 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
         wrapper: wrapperStatus(process.env).state,
         agentRunning: process.env.FH_AGENT_RUNNING,
         focusVm: flag(args, "--vm"),
+        note: flag(args, "--note"),
         files,
         report,
         probeOutput,
@@ -3714,7 +3715,7 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
       console.log("            --set <supporter|operator> [--price <tier>=<usd>] [--stripe-key <k>] [--flux-address <t1…>]");
       console.log("            [--stripe-webhook <k>] [--dry-run] [--yes]");
       console.log("  doctor    [--dir <dir>] [--check-proxmox] [--check-stripe] [--check-hub]");
-      console.log("  diagnose  [--dir <dir>] [--vm <name>] [--dry-run]   a support file, secrets removed");
+      console.log("  diagnose  [--dir <dir>] [--vm <name>] [--note <text>] [--dry-run]   a support file, secrets removed");
       console.log("  host-check [<host>] [--room [<tier>]] [--dir <dir>]  small-RAM host? prints a read-only check");
       console.log("            to run ON the host: fh-toolkit host-check pve1 | ssh root@pve1 bash");
       console.log("  burn [<host>] [--plan nimbus:1,...] [--fill max|<pct>] [--keep] [--no-retry] [--dir <dir>]");
