@@ -929,7 +929,7 @@ Flux Hub support is told about each new answer. Once 3 of your answers are waiti
 | `doctor` findings | every check except `--check-stripe`; all are read-only |
 | Config | values for an approved list of settings; every other key says only `set` or `empty`; `secrets.env` is names only |
 | Inventory | hosts, storages, networks and slots |
-| Proxmox | nodes, memory, storages with their content types, VMs |
+| Proxmox | nodes, memory, processor (model, sockets, cores, threads), storages with their content types, VMs |
 | Agent logs | about a week with timestamps; the newest 20 of any repeated line, the rest counted |
 | Versions | toolkit, wrapper and the running agent |
 
