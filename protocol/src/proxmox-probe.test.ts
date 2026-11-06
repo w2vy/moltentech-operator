@@ -4,6 +4,7 @@ import {
   probeProxmox,
   explainProxmoxError,
   classifyRotational,
+  hostCpu,
   ssdImageStorages,
   isoStorages,
   describeStorage,
@@ -315,4 +316,19 @@ test("a healthy hypervisor names the bridges it saw, so the pass is checkable", 
   const bridges = probe.checks.find((c) => c.name.includes("bridges visible"))!;
   assert.equal(bridges.status, "pass");
   assert.equal(bridges.detail, "vmbr0", "only the bridge — a vlan is not somewhere a VM can attach");
+});
+
+test("survey: each host's processor comes from its status, the clock speed left out", async () => {
+  const status = { memory: { total: 34359738368 }, cpuinfo: { model: "Intel(R) Xeon(R) CPU E5-4620 v2 @ 2.60GHz", sockets: 4, cores: 32, cpus: 64, mhz: "2800.824" } };
+  const { survey } = await probeProxmox(CREDS, fakeGet({ "/api2/json/nodes/pve30/status": status }));
+  assert.deepEqual(survey?.cpu?.pve30, { model: "Intel(R) Xeon(R) CPU E5-4620 v2 @ 2.60GHz", sockets: 4, cores: 32, threads: 64 });
+  assert.equal(survey?.memoryMb?.pve30, 32768);
+});
+
+test("survey: a host whose status fails or has no cpuinfo is simply absent", async () => {
+  const failed = await probeProxmox(CREDS, fakeGet({ "/api2/json/nodes/pve30/status": new Error("HTTP 403") }));
+  assert.equal(failed.survey?.cpu, undefined);
+  assert.equal(hostCpu(undefined), null);
+  assert.equal(hostCpu({ model: "Xeon", sockets: 2, cores: 0, cpus: 56 }), null);
+  assert.equal(hostCpu({ model: " ", sockets: 2, cores: 14, cpus: 56 }), null);
 });

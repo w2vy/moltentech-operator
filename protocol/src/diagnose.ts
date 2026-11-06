@@ -282,7 +282,7 @@ function narrowSurvey(survey: ProxmoxSurvey) {
       list.map(({ vmid, name, status, cpus, maxmem, maxdisk, tags }) => ({ vmid, name, status, cpus, maxmem, maxdisk, tags })),
     ])
   );
-  return { nodes: survey.nodes, storages, vms, memoryMb: survey.memoryMb ?? {} };
+  return { nodes: survey.nodes, storages, vms, memoryMb: survey.memoryMb ?? {}, cpu: survey.cpu ?? {} };
 }
 
 export interface BundleInput {

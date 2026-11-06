@@ -187,6 +187,26 @@ export interface ProxmoxSurvey {
   vms?: Record<string, QemuVm[]>;
   /** Node name -> total RAM in MB (`GET /nodes/<node>/status`). Best-effort, like `vms`. */
   memoryMb?: Record<string, number>;
+  /** Node name -> its processor (`GET /nodes/<node>/status`). Best-effort, like `vms`. */
+  cpu?: Record<string, HostCpu>;
+}
+
+/** The host's processor, as `cpuinfo` reports it. The clock speed is left out: it moves. */
+export interface HostCpu {
+  model: string;
+  sockets: number;
+  /** Physical cores across every socket: 32 on a 4-socket, 8-core host (pve40). */
+  cores: number;
+  /** Logical CPUs across every socket. */
+  threads: number;
+}
+
+/** Null when the reply has no usable `cpuinfo`: a partial answer would read as a small host. */
+export function hostCpu(info: unknown): HostCpu | null {
+  const { model, sockets, cores, cpus } = (info ?? {}) as Record<string, unknown>;
+  if (typeof model !== "string" || !model.trim()) return null;
+  if (![sockets, cores, cpus].every((n) => typeof n === "number" && n > 0)) return null;
+  return { model: model.trim(), sockets: sockets as number, cores: cores as number, threads: cpus as number };
 }
 
 /** One VM from `GET /nodes/<node>/qemu`, narrowed to what the existing-node scan reads. */
@@ -484,10 +504,13 @@ export async function probeProxmox(
 
   for (const node of survey.nodes) {
     // Host RAM, for sizing VMs on a host that cannot fit the tier's default (askHosts).
+    // The processor is for `fh-toolkit diagnose`.
     try {
-      const st = await get<{ memory?: { total?: number } }>(creds, `/api2/json/nodes/${node}/status`);
+      const st = await get<{ memory?: { total?: number }; cpuinfo?: unknown }>(creds, `/api2/json/nodes/${node}/status`);
       const total = st?.memory?.total;
       if (typeof total === "number" && total > 0) (survey.memoryMb ??= {})[node] = Math.floor(total / 1048576);
+      const cpu = hostCpu(st?.cpuinfo);
+      if (cpu) (survey.cpu ??= {})[node] = cpu;
     } catch {
       /* best-effort */
     }
