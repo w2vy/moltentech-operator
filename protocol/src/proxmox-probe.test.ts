@@ -319,9 +319,9 @@ test("a healthy hypervisor names the bridges it saw, so the pass is checkable", 
 });
 
 test("survey: each host's processor comes from its status, the clock speed left out", async () => {
-  const status = { memory: { total: 34359738368 }, cpuinfo: { model: "Intel(R) Xeon(R) CPU E5-2680 v4 @ 2.40GHz", sockets: 2, cores: 14, cpus: 56, mhz: "2399.98" } };
+  const status = { memory: { total: 34359738368 }, cpuinfo: { model: "Intel(R) Xeon(R) CPU E5-4620 v2 @ 2.60GHz", sockets: 4, cores: 32, cpus: 64, mhz: "2800.824" } };
   const { survey } = await probeProxmox(CREDS, fakeGet({ "/api2/json/nodes/pve30/status": status }));
-  assert.deepEqual(survey?.cpu?.pve30, { model: "Intel(R) Xeon(R) CPU E5-2680 v4 @ 2.40GHz", sockets: 2, coresPerSocket: 14, threads: 56 });
+  assert.deepEqual(survey?.cpu?.pve30, { model: "Intel(R) Xeon(R) CPU E5-4620 v2 @ 2.60GHz", sockets: 4, cores: 32, threads: 64 });
   assert.equal(survey?.memoryMb?.pve30, 32768);
 });
 

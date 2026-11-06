@@ -81,7 +81,7 @@ const survey: ProxmoxSurvey = {
   storages: { prox02: [STORAGE] },
   vms: { prox02: [VM] },
   memoryMb: { prox02: 64000 },
-  cpu: { prox02: { model: "AMD EPYC 7763 64-Core Processor", sockets: 2, coresPerSocket: 64, threads: 256 } },
+  cpu: { prox02: { model: "AMD EPYC 7763 64-Core Processor", sockets: 2, cores: 128, threads: 256 } },
 };
 
 const base = (over: Partial<BundleInput> = {}): BundleInput => ({
@@ -98,7 +98,7 @@ const base = (over: Partial<BundleInput> = {}): BundleInput => ({
 
 test("the bundle carries each host's processor", () => {
   const { bundle } = buildBundle(base());
-  assert.deepEqual(bundle.proxmox?.cpu.prox02, { model: "AMD EPYC 7763 64-Core Processor", sockets: 2, coresPerSocket: 64, threads: 256 });
+  assert.deepEqual(bundle.proxmox?.cpu.prox02, { model: "AMD EPYC 7763 64-Core Processor", sockets: 2, cores: 128, threads: 256 });
 });
 
 test("⭐ config: approved keys show values, every other key shows only that it is set", () => {

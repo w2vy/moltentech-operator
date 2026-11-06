@@ -195,7 +195,8 @@ export interface ProxmoxSurvey {
 export interface HostCpu {
   model: string;
   sockets: number;
-  coresPerSocket: number;
+  /** Physical cores across every socket: 32 on a 4-socket, 8-core host (pve40). */
+  cores: number;
   /** Logical CPUs across every socket. */
   threads: number;
 }
@@ -205,7 +206,7 @@ export function hostCpu(info: unknown): HostCpu | null {
   const { model, sockets, cores, cpus } = (info ?? {}) as Record<string, unknown>;
   if (typeof model !== "string" || !model.trim()) return null;
   if (![sockets, cores, cpus].every((n) => typeof n === "number" && n > 0)) return null;
-  return { model: model.trim(), sockets: sockets as number, coresPerSocket: cores as number, threads: cpus as number };
+  return { model: model.trim(), sockets: sockets as number, cores: cores as number, threads: cpus as number };
 }
 
 /** One VM from `GET /nodes/<node>/qemu`, narrowed to what the existing-node scan reads. */
