@@ -34,6 +34,9 @@ export async function handleCheckout(
     line_items: [{ price: priceId, quantity: 1 }],
     customer_email: req.customer.email,
     payment_method_collection: "always",
+    // A promotion code box on the Stripe page: the operator makes codes in their own
+    // Stripe account (Product catalog, Coupons) to hand out, e.g. in promo posts.
+    allow_promotion_codes: true,
     subscription_data: { trial_period_days: cfg.trialDays, metadata },
     metadata,
     success_url: req.successUrl,
