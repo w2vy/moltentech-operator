@@ -8,6 +8,7 @@ import {
   TierKey,
   Timestamp,
 } from "./common";
+import { SignedCoupon } from "./coupon";
 
 // ───────────────────────────────────────────────────────────────────────────
 // 1. checkout-init  —  MT → operator Coalition
@@ -34,6 +35,13 @@ export const CheckoutInitRequest = Envelope.extend({
   idempotencyKey: z.string().min(1),
   successUrl: z.string().url(),
   cancelUrl: z.string().url(),
+  /**
+   * An operator coupon the customer applied (hub 2026-11-11). The Coalition re-verifies the
+   * signature against its OWN `OWNER_ADDRESS` before discounting anything, so the hub cannot
+   * invent a discount. The hub owns the use count; the Coalition cannot see it. Optional both
+   * ways: an older hub sends none; an older Coalition strips it and charges the full price.
+   */
+  coupon: SignedCoupon.optional(),
 });
 export type CheckoutInitRequest = z.infer<typeof CheckoutInitRequest>;
 
@@ -46,6 +54,8 @@ export const CheckoutInitResponse = Envelope.extend({
   /** Free-trial length applied (operator-selectable 1–30). Never 0: the node is
    *  delivered inside the trial, before the first charge — same rule as `Manifest.trialDays`. */
   trialDays: z.number().int().min(1).max(30),
+  /** The coupon code this session carries, once the Coalition accepted it. Absent = none. */
+  couponApplied: z.string().optional(),
 });
 export type CheckoutInitResponse = z.infer<typeof CheckoutInitResponse>;
 

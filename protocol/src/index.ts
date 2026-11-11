@@ -14,6 +14,7 @@ export * from "./common";
 export * from "./flux-address";
 export * from "./manifest";
 export * from "./messages";
+export * from "./coupon";
 export * from "./hub-refusal";
 export * from "./signed-record";
 export * from "./vm-annotation";

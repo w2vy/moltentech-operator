@@ -15,9 +15,21 @@ export interface StripeLike {
   checkout: { sessions: { create(args: Record<string, unknown>): Promise<{ url: string | null }> } };
   billingPortal: { sessions: { create(args: Record<string, unknown>): Promise<{ url: string }> } };
   subscriptions: {
-    retrieve(id: string): Promise<{ customer: string | { id: string }; status?: string }>;
+    retrieve(
+      id: string,
+      args?: Record<string, unknown>
+    ): Promise<{ customer: string | { id: string }; status?: string } & Record<string, unknown>>;
     update(id: string, args: Record<string, unknown>): Promise<unknown>;
     cancel(id: string): Promise<unknown>;
+  };
+  /** Operator coupons (coupon.ts). The wizard-preset restricted key has Coupons read+write (tested 2026-11-11). */
+  coupons: {
+    retrieve(id: string): Promise<Record<string, unknown>>;
+    create(args: Record<string, unknown>): Promise<{ id: string }>;
+  };
+  subscriptionSchedules: {
+    create(args: Record<string, unknown>): Promise<{ id: string; phases: { start_date: number }[] }>;
+    update(id: string, args: Record<string, unknown>): Promise<unknown>;
   };
   prices: {
     search(args: { query: string }): Promise<{ data: { id: string }[] }>;
