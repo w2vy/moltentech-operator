@@ -97,7 +97,7 @@ function fakeStripe(existing: Record<string, Record<string, unknown>> = {}) {
   const sessions: Record<string, any>[] = [];
   const created: Record<string, any>[] = [];
   const stripe = {
-    prices: { search: async () => ({ data: [{ id: "price_1" }] }) },
+    prices: { list: async () => ({ data: [{ id: "price_1" }] }) },
     checkout: { sessions: { create: async (a: Record<string, any>) => (sessions.push(a), { url: "https://checkout.stripe.test/s/1" }) } },
     coupons: {
       retrieve: async (id: string) => {

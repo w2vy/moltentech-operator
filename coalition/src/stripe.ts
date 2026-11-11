@@ -32,7 +32,7 @@ export interface StripeLike {
     update(id: string, args: Record<string, unknown>): Promise<unknown>;
   };
   prices: {
-    search(args: { query: string }): Promise<{ data: { id: string }[] }>;
+    list(args: { lookup_keys: string[]; active?: boolean; limit?: number }): Promise<{ data: { id: string }[] }>;
     create(args: Record<string, unknown>): Promise<{ id: string }>;
   };
   products: { create(args: Record<string, unknown>): Promise<{ id: string }> };
@@ -49,6 +49,12 @@ export function createStripe(secretKey: string): StripeLike {
  * Idempotently materialize the operator's recurring Price for (tier, priceCents)
  * via a deterministic lookup_key, so the single declared price flows straight into
  * Stripe with no stored Price IDs. Returns the Stripe Price id.
+ *
+ * ⚠️ `prices.list({ lookup_keys })`, NOT `prices.search`. Search is eventually consistent:
+ * a price created moments ago is missing from it for up to about a minute, so two checkouts
+ * seconds apart on a brand-new tier price both went on to create it, and the second failed on
+ * the `lookup_key` collision (Stripe test mode, 2026-11-11). `list` reads the lookup key
+ * directly. Two creates can still race; the loser re-reads the winner's price.
  */
 export async function ensurePrice(
   stripe: StripeLike,
@@ -57,8 +63,9 @@ export async function ensurePrice(
   priceCents: number
 ): Promise<string> {
   const lookupKey = `mt-${slug}-${tier}-${priceCents}`;
-  const found = await stripe.prices.search({ query: `lookup_key:'${lookupKey}'` });
-  if (found.data[0]) return found.data[0].id;
+  const lookup = async () => (await stripe.prices.list({ lookup_keys: [lookupKey], active: true, limit: 1 })).data[0]?.id;
+  const found = await lookup();
+  if (found) return found;
 
   // IaaS (business use) is the category that matches a rented node; Stripe Tax treats it
   // as non-taxable in the US, whereas the account default ("General - Electronically
@@ -67,12 +74,19 @@ export async function ensurePrice(
     name: `Flux Hub ${tier.toUpperCase()} (${slug})`,
     tax_code: "txcd_10101000",
   });
-  const price = await stripe.prices.create({
-    product: product.id,
-    unit_amount: priceCents,
-    currency: "usd",
-    recurring: { interval: "month" },
-    lookup_key: lookupKey,
-  });
-  return price.id;
+  try {
+    const price = await stripe.prices.create({
+      product: product.id,
+      unit_amount: priceCents,
+      currency: "usd",
+      recurring: { interval: "month" },
+      lookup_key: lookupKey,
+    });
+    return price.id;
+  } catch (err) {
+    // Another checkout created it between our read and our create.
+    const winner = await lookup();
+    if (winner) return winner;
+    throw err;
+  }
 }

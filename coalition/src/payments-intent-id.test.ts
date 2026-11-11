@@ -15,7 +15,7 @@ const cfg = { providerSlug: SLUG, tierPrices: { cumulus: 700 }, trialDays: 1 };
 function fakeStripe() {
   const sessions: Record<string, any>[] = [];
   const stripe = {
-    prices: { search: async () => ({ data: [{ id: "price_1" }] }) },
+    prices: { list: async () => ({ data: [{ id: "price_1" }] }) },
     checkout: {
       sessions: {
         create: async (args: Record<string, any>) => {

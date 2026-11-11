@@ -10,7 +10,7 @@ import type { StripeLike } from "./stripe.js";
 test("checkout session allows promotion codes", async () => {
   const sessions: Record<string, any>[] = [];
   const stripe = {
-    prices: { search: async () => ({ data: [{ id: "price_1" }] }) },
+    prices: { list: async () => ({ data: [{ id: "price_1" }] }) },
     checkout: {
       sessions: {
         create: async (args: Record<string, any>) => {
