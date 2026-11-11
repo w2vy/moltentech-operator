@@ -69,14 +69,9 @@ test("adopts the new ISO name into cfg.host.arcaneIso once staged, for the next 
   assert.equal(cfg.host.arcaneIso, "FluxLive-222.iso");
 });
 
-test("passes the current ISO through for reporting, and does not adopt on failure", async () => {
+test("does not adopt on failure", async () => {
   const cfg = cfgWith({ inventory: [{ name: "h1", nodeName: "pve1", slots: [] }] as never });
-  let receivedCurrentIso: string | undefined;
-  await refreshIsoOnce(cfg, async (_node, _storageIso, currentIso) => {
-    receivedCurrentIso = currentIso;
-    return { ok: false, error: "boom" };
-  });
-  assert.equal(receivedCurrentIso, "FluxLive-111.iso");
+  await refreshIsoOnce(cfg, async () => ({ ok: false, error: "boom" }));
   assert.equal(cfg.host.arcaneIso, "FluxLive-111.iso"); // unchanged on failure
 });
 

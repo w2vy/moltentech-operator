@@ -110,7 +110,7 @@ export async function refreshIsoOnce(
     );
     const started = Date.now();
     try {
-      const result: IsoRefreshResult = await refreshIsoFn(host.nodeName, storageIso, cfg.host.arcaneIso, cfg);
+      const result: IsoRefreshResult = await refreshIsoFn(host.nodeName, storageIso, cfg);
       const took = `${Math.round((Date.now() - started) / 1000)}s`;
       recordIsoRefresh(host.nodeName, result);
       if (!result.ok) {
