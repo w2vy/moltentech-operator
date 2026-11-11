@@ -194,7 +194,6 @@ export type AmResult = {
     vm_id?: number;
     changed?: boolean;
     iso?: string;
-    previous?: string;
     build?: string;
     severity?: string;
     release?: string;
@@ -547,7 +546,6 @@ export type IsoRefreshResult = {
   ok: boolean;
   changed?: boolean;
   iso?: string;
-  previous?: string;
   build?: string;
   severity?: string;
   release?: string;
@@ -559,11 +557,10 @@ export type IsoRefreshResult = {
 export async function refreshIso(
   node: string,
   storageIso: string,
-  currentIso: string | undefined,
   cfg: AgentConfig
 ): Promise<IsoRefreshResult> {
+  // Upstream arcane-mage (RunOnFlux 6.x) has no `--current-iso`: passing it fails the refresh.
   const args = ["refresh-iso", "--json", "--node", node, "--storage-iso", storageIso];
-  if (currentIso) args.push("--current-iso", currentIso);
   const r = await runArcaneMage(args, cfg, TIMEOUT.refreshIso);
   if (r.json && typeof r.json.ok === "boolean") {
     return { ...r.json, ok: r.json.ok };

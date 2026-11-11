@@ -17,8 +17,8 @@ Three components, each isolated by trust boundary:
 | **`protocol/`** | Shared library | — | The typed wire contracts (zod) both legs speak + the manifest signing CLI |
 
 The **agent** provisions your local Proxmox via the bundled
-[`arcane-mage`](https://github.com/w2vy/arcane-mage) fork (cluster support
-included) — submoduled here, so a standalone box *or* a full PVE cluster both
+[`arcane-mage`](https://github.com/RunOnFlux/arcane-mage) (RunOnFlux upstream,
+cluster support included) — submoduled here, so a standalone box *or* a full PVE cluster both
 work with one agent. Credentials never leave your machines.
 
 ## Quick start
