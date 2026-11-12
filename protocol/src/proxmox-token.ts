@@ -46,6 +46,9 @@ export const AGENT_ROLE_PRIVS = [
   "SDN.Audit",
   "SDN.Use",
   "Sys.Audit",
+  // Proxmox fetches the FluxLive ISO itself (`download-url`, arcane-mage 6.x) — see
+  // ISO_DOWNLOAD_PRIV in proxmox-probe.ts.
+  "Sys.AccessNetwork",
 ];
 
 /** The four lines an operator pastes as root on the Proxmox host. */
@@ -124,6 +127,41 @@ const exists = (r: PveResponse): boolean => /already exists/i.test(`${r.reason} 
 const failed = (what: string, r: PveResponse): Error =>
   new Error(`${what} failed: HTTP ${r.status} ${r.reason}`.trim());
 
+/** One root login for the calls below; the password is used for it and kept nowhere. */
+async function pveLogin(
+  url: string,
+  login: { username: string; password: string },
+  req: PveRequest
+): Promise<{ ticket: string; csrf: string }> {
+  const t = await req("POST", url, "/api2/json/access/ticket", { form: login });
+  if (t.status === 401) throw new Error(`login refused for ${login.username} — wrong password?`);
+  if (t.status >= 400) throw failed("login", t);
+  const data = (JSON.parse(t.body).data ?? {}) as { ticket?: string; CSRFPreventionToken?: string; NeedTFA?: number };
+  if (data.NeedTFA || !data.ticket || !data.CSRFPreventionToken) {
+    throw new Error(`${login.username} uses two-factor login, which this cannot complete — use the commands instead.`);
+  }
+  return { ticket: data.ticket, csrf: data.CSRFPreventionToken };
+}
+
+/**
+ * Add `privs` to the existing FluxHubAgent role (`append`), leaving every privilege it has.
+ * What `fh-toolkit doctor --check-proxmox` runs on a yes. On a cluster the role is
+ * cluster-wide, so one call covers every node; a standalone host needs its own.
+ */
+export async function addAgentRolePrivs(
+  url: string,
+  login: { username: string; password: string },
+  privs: string[],
+  req: PveRequest = pveRequest
+): Promise<void> {
+  const auth = await pveLogin(url, login, req);
+  const res = await req("PUT", url, `/api2/json/access/roles/${AGENT_ROLE}`, {
+    ...auth,
+    form: { privs: privs.join(","), append: "1" },
+  });
+  if (res.status >= 400) throw failed(`adding ${privs.join(", ")} to role ${AGENT_ROLE}`, res);
+}
+
 /**
  * Step 0.1 through the API. Re-runnable: an existing role is reset to the documented
  * privileges, and an existing user or ACL is fine. An existing TOKEN is not — Proxmox shows
@@ -134,14 +172,7 @@ export async function createAgentToken(
   login: { username: string; password: string },
   req: PveRequest = pveRequest
 ): Promise<{ tokenId: string; tokenSecret: string }> {
-  const t = await req("POST", url, "/api2/json/access/ticket", { form: login });
-  if (t.status === 401) throw new Error(`login refused for ${login.username} — wrong password?`);
-  if (t.status >= 400) throw failed("login", t);
-  const data = (JSON.parse(t.body).data ?? {}) as { ticket?: string; CSRFPreventionToken?: string; NeedTFA?: number };
-  if (data.NeedTFA || !data.ticket || !data.CSRFPreventionToken) {
-    throw new Error(`${login.username} uses two-factor login, which this cannot complete — use the commands instead.`);
-  }
-  const auth = { ticket: data.ticket, csrf: data.CSRFPreventionToken };
+  const auth = await pveLogin(url, login, req);
   const privs = AGENT_ROLE_PRIVS.join(",");
 
   const role = await req("POST", url, "/api2/json/access/roles", { ...auth, form: { roleid: AGENT_ROLE, privs } });

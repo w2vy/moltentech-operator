@@ -1007,6 +1007,25 @@ Reads `PROXMOX_URL` / `PROXMOX_TOKEN_ID` / `PROXMOX_TOKEN_SECRET` from `.env.ope
 and proves the token actually works. Read-only; nothing is created. Skipped with a
 message if any of the three is absent.
 
+**Missing role privileges — the one thing it offers to change.** When the token's role
+lacks a privilege the agent uses, doctor names it and, at a terminal, asks:
+
+```
+The FluxHubAgent role is missing: Sys.AccessNetwork.
+Add it now? Needs the Proxmox root password once, never saved (y/N) [N]:
+```
+
+On a yes it logs in as `root@pam` (or the admin you type) and **adds** the missing
+privileges to `FluxHubAgent` (`append`), leaving the rest of the role alone. On a no, or with
+no terminal, it prints the line to run yourself:
+`pveum role modify FluxHubAgent -privs "…" -append 1`. On a cluster the role is shared, so
+one fix covers every node; a standalone host needs its own. `diagnose` runs the same checks
+and never offers the fix.
+
+`Sys.AccessNetwork` is reported as a **warning**, not an error: without it nothing fails
+until the next FluxLive release, when Proxmox cannot download the new ISO (`HTTP 403:
+Permission check failed`) and the host keeps the one it has.
+
 The check that pays for the flag: it resolves `PROXMOX_STORAGE_IMAGES` through its LVM
 volume group to the real device and **fails if it is rotational**:
 

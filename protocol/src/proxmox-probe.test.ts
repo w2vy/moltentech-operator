@@ -9,6 +9,8 @@ import {
   isoStorages,
   describeStorage,
   REQUIRED_PRIVS,
+  formatProbe,
+  roleAppendCommand,
   type ProxmoxCreds,
 } from "./proxmox-probe";
 
@@ -42,6 +44,8 @@ const ALL_PRIVS = {
     // hypervisor" against a bridge that is up and correct.
     "SDN.Use": 1,
     "SDN.Audit": 1,
+    // Proxmox downloads the FluxLive ISO itself (`download-url`).
+    "Sys.AccessNetwork": 1,
   },
 };
 
@@ -111,7 +115,8 @@ test("⭐ a missing privilege is NAMED, with the pveum line that fixes it", asyn
   const check = probe.checks.find((c) => c.name.includes("privileges"))!;
   assert.equal(check.status, "fail");
   assert.match(check.detail, /missing at \/: Datastore\.AllocateSpace/);
-  assert.match(check.detail, /pveum role modify FluxHubAgent/);
+  assert.match(check.detail, /pveum role modify FluxHubAgent -privs "Datastore\.AllocateSpace" -append 1/);
+  assert.deepEqual(probe.missingPrivs, ["Datastore.AllocateSpace"]);
   assert.doesNotMatch(check.detail, /PVEAdmin["' ]*$/, "never suggest escalating as the fix");
 });
 
@@ -331,4 +336,34 @@ test("survey: a host whose status fails or has no cpuinfo is simply absent", asy
   assert.equal(hostCpu(undefined), null);
   assert.equal(hostCpu({ model: "Xeon", sockets: 2, cores: 0, cpus: 56 }), null);
   assert.equal(hostCpu({ model: " ", sockets: 2, cores: 14, cpus: 56 }), null);
+});
+
+test("⭐ the fix line APPENDS — `role modify -privs` without it replaces the whole role", () => {
+  assert.equal(
+    roleAppendCommand(["Sys.AccessNetwork"]),
+    'pveum role modify FluxHubAgent -privs "Sys.AccessNetwork" -append 1'
+  );
+});
+
+test("⭐ no Sys.AccessNetwork: a WARNING that names the fix, and the probe still passes", async () => {
+  // A role made before 2026-11-12 lacks it. Nothing fails until the next FluxLive release,
+  // so every flow that gates on `probe.ok` (init, `fh-toolkit proxmox`) must keep working.
+  const old = { "/": { ...ALL_PRIVS["/"], "Sys.AccessNetwork": 0 } };
+  const probe = await probeProxmox(CREDS, fakeGet({ "/api2/json/access/permissions": old }));
+  const check = probe.checks.find((c) => c.name.includes("download the FluxLive ISO"))!;
+  assert.equal(check.status, "fail");
+  assert.equal(check.advisory, true);
+  assert.match(check.detail, /Sys\.AccessNetwork/);
+  assert.match(check.detail, /-append 1/);
+  assert.equal(probe.ok, true, "advisory never flips ok");
+  assert.deepEqual(probe.missingPrivs, ["Sys.AccessNetwork"]);
+  assert.match(formatProbe(probe.checks), /! token can have Proxmox download/);
+});
+
+test("Sys.Modify at / also lets Proxmox download (the backwards-compatible privilege)", async () => {
+  const admin = { "/": { ...ALL_PRIVS["/"], "Sys.AccessNetwork": 0, "Sys.Modify": 1 } };
+  const probe = await probeProxmox(CREDS, fakeGet({ "/api2/json/access/permissions": admin }));
+  const check = probe.checks.find((c) => c.name.includes("download the FluxLive ISO"))!;
+  assert.equal(check.status, "pass");
+  assert.deepEqual(probe.missingPrivs, []);
 });

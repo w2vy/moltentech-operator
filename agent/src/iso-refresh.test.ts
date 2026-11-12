@@ -200,3 +200,23 @@ test("the error is trimmed to the protocol's 500 characters", () => {
   assert.equal(s.error?.length, 500);
   assert.ok(IsoRefreshStatus.safeParse(s).success);
 });
+
+test("⭐ a 403 on the ISO download names the missing role privilege and the fix, FIRST", async () => {
+  const { explainIsoRefreshError } = await import("./iso-refresh");
+  const raw = "Download of FluxLive-1775071308.iso failed: HTTP 403: Permission check failed";
+  const msg = explainIsoRefreshError(raw);
+  assert.match(msg, /^the Proxmox token's role lacks Sys\.AccessNetwork/);
+  assert.match(msg, /fh-toolkit doctor --check-proxmox/);
+  assert.match(msg, /pveum role modify FluxHubAgent -privs "Sys\.AccessNetwork" -append 1/);
+  assert.ok(msg.endsWith(raw), "the original error is kept");
+  resetIsoRefreshStatus();
+  const status = recordIsoRefresh("pve65", { ok: false, error: raw });
+  assert.equal(status.ok, false);
+  assert.match(status.ok ? "" : status.error ?? "", /Sys\.AccessNetwork/);
+  resetIsoRefreshStatus();
+});
+
+test("any other ISO refresh error is passed through untouched", async () => {
+  const { explainIsoRefreshError } = await import("./iso-refresh");
+  assert.equal(explainIsoRefreshError("Unable to fetch SHA256SUMS"), "Unable to fetch SHA256SUMS");
+});

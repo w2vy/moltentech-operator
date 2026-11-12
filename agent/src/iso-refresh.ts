@@ -3,6 +3,7 @@ import { reloadInventory, type AgentConfig } from "./config";
 import { refreshIso, type IsoRefreshResult } from "./executor";
 import { getNodeStatuses, getStorageIsoNames } from "./health";
 import { ensureDatedIso, type ListIsosFn } from "./iso-name";
+import { ISO_DOWNLOAD_PRIV, roleAppendCommand } from "@moltentech/protocol/proxmox-probe";
 
 export type IsoRefreshDeps = {
   /** Cluster node → status. Defaults to `GET /nodes`; null = could not tell (refresh as before).
@@ -19,6 +20,21 @@ export type IsoRefreshDeps = {
  */
 const isoStatus = new Map<string, IsoRefreshStatus>();
 
+/**
+ * A 403 on the ISO download is the token's role, not the network: Proxmox fetches the ISO
+ * itself (`download-url`) and wants `Sys.AccessNetwork`. Say so FIRST — the hub keeps 500
+ * characters and shows them to the operator — with the fix, instead of a bare
+ * "Permission check failed".
+ */
+export function explainIsoRefreshError(error: string): string {
+  if (!/\b403\b/.test(error) || !/permission check failed/i.test(error)) return error;
+  return (
+    `the Proxmox token's role lacks ${ISO_DOWNLOAD_PRIV} (Proxmox downloads the ISO itself). ` +
+    `Run \`fh-toolkit doctor --check-proxmox\`, or as root on any node: ` +
+    `${roleAppendCommand([ISO_DOWNLOAD_PRIV])} — ${error}`
+  );
+}
+
 /** Record one refresh outcome for `nodeName`, counting failures in a row. */
 export function recordIsoRefresh(nodeName: string, result: IsoRefreshResult, now: Date = new Date()): IsoRefreshStatus {
   const prev = isoStatus.get(nodeName);
@@ -28,7 +44,7 @@ export function recordIsoRefresh(nodeName: string, result: IsoRefreshResult, now
         ok: false,
         at: now.toISOString(),
         failures: (prev && !prev.ok ? prev.failures : 0) + 1,
-        error: (result.error || "unknown error").slice(0, 500),
+        error: explainIsoRefreshError(result.error || "unknown error").slice(0, 500),
       };
   isoStatus.set(nodeName, status);
   return status;
@@ -100,13 +116,13 @@ export async function refreshIsoOnce(
       continue;
     }
     firstOnline ??= { nodeName: host.nodeName, storageIso };
-    // Said BEFORE, because this can take many minutes (a first run downloads ~3 GB into the
-    // container, checksums it and uploads it) and nothing else is logged meanwhile. Found on the
+    // Said BEFORE, because this can take many minutes (a first run has Proxmox download ~3 GB
+    // and checksum it) and nothing else is logged meanwhile. Found on the
     // pve50 onboarding (2026-09-26): 9 silent minutes looked like a hung agent, and no job is
     // claimed until this loop finishes.
     console.log(
       `[agent] checking the FluxLive ISO on ${host.nodeName} (storage ${storageIso}) — a new one is ` +
-        `downloaded (~3 GB) and uploaded first; jobs start after this`
+        `downloaded (~3 GB) by Proxmox first; jobs start after this`
     );
     const started = Date.now();
     try {
@@ -114,7 +130,9 @@ export async function refreshIsoOnce(
       const took = `${Math.round((Date.now() - started) / 1000)}s`;
       recordIsoRefresh(host.nodeName, result);
       if (!result.ok) {
-        console.error(`[agent] ISO refresh failed on ${host.nodeName} after ${took}: ${result.error}`);
+        console.error(
+          `[agent] ISO refresh failed on ${host.nodeName} after ${took}: ${explainIsoRefreshError(result.error || "unknown error")}`
+        );
         continue;
       }
       latestIso = result.iso;
