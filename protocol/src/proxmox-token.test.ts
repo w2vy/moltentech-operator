@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import {
   AGENT_ROLE_PRIVS,
   AGENT_TOKEN_ID,
+  addAgentRolePrivs,
   createAgentToken,
   proxmoxAlive,
   tokenSetupCommands,
@@ -230,4 +231,28 @@ test("the COALITION_SIGNING_KEY paste accepts the bare value or the whole line",
   assert.equal(parseSigningKeyPaste('  COALITION_SIGNING_KEY = "abc123=="  '), "abc123==");
   assert.equal(parseSigningKeyPaste("export COALITION_SIGNING_KEY='k'"), "k");
   assert.equal(parseSigningKeyPaste(""), "");
+});
+
+test("the role carries Sys.AccessNetwork — Proxmox downloads the FluxLive ISO itself", () => {
+  assert.ok(AGENT_ROLE_PRIVS.includes("Sys.AccessNetwork"));
+});
+
+test("⭐ addAgentRolePrivs APPENDS to the role — it never resets the privileges it has", async () => {
+  const { req, calls } = fakePve({
+    "POST /api2/json/access/ticket": TICKET,
+    "PUT /api2/json/access/roles/FluxHubAgent": ok(null),
+  });
+  await addAgentRolePrivs("https://pve:8006", { username: "root@pam", password: "pw" }, ["Sys.AccessNetwork"], req);
+  const put = calls.find((c) => c.startsWith("PUT /api2/json/access/roles/FluxHubAgent"))!;
+  assert.match(put, /privs=Sys\.AccessNetwork/);
+  assert.match(put, /append=1/);
+  assert.equal(calls.length, 2, "login + one PUT: no user, ACL or token is touched");
+});
+
+test("addAgentRolePrivs: a wrong password says so", async () => {
+  const { req } = fakePve({ "POST /api2/json/access/ticket": err(401, "authentication failure") });
+  await assert.rejects(
+    addAgentRolePrivs("https://pve:8006", { username: "root@pam", password: "x" }, ["Sys.AccessNetwork"], req),
+    /wrong password/
+  );
 });

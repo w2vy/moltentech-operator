@@ -89,6 +89,7 @@ import { readBuildInfo, formatBuildInfo } from "./build-info";
 import { wrapperScript, wrapperStatus, WRAPPER_VERSION } from "./wrapper";
 import {
   probeProxmox,
+  roleAppendCommand,
   formatProbe,
   ssdImageStorages,
   isoStorages,
@@ -104,6 +105,7 @@ import {
 import {
   AGENT_ROLE,
   AGENT_TOKEN_ID,
+  addAgentRolePrivs,
   createAgentToken,
   proxmoxAlive,
   tokenSetupCommands,
@@ -1934,14 +1936,56 @@ function freshSecretsEnv(od: OperatorDir): string {
   });
 }
 
+/** What `doctor --check-proxmox` found missing from the token's role, and where. */
+interface RoleFix {
+  url: string;
+  privs: string[];
+}
+
+/**
+ * Offer to add what the FluxHubAgent role lacks — only to a person at a terminal, only on
+ * a yes, with the root password asked once and kept nowhere. `diagnose` never calls this:
+ * it stays read-only. A no (or no terminal) prints the one line to run instead.
+ */
+async function offerRoleFix(ctx: Ctx, fix: RoleFix): Promise<boolean> {
+  const line = roleAppendCommand(fix.privs);
+  if (!canOffer(ctx, undefined)) {
+    console.log(`\nTo fix the role, run on any node of the cluster (as root):\n  ${line}`);
+    return false;
+  }
+  return withPrompts(ctx, async (ask, _askUntil, askHidden) => {
+    console.log(`\nThe FluxHubAgent role is missing: ${fix.privs.join(", ")}.`);
+    const yes = (await ask("Add it now? Needs the Proxmox root password once, never saved (y/N)", "N")).toLowerCase();
+    if (!yes.startsWith("y")) {
+      console.log(`Not changed. To do it yourself, run on any node of the cluster (as root):\n  ${line}`);
+      return false;
+    }
+    const username = await ask("  Proxmox admin login", "root@pam");
+    const prompt = `  Password for ${username}`;
+    const password = (await askHidden(prompt)) ?? (await ask(prompt));
+    try {
+      await addAgentRolePrivs(fix.url, { username, password }, fix.privs);
+    } catch (e) {
+      console.log(`  ✗ ${(e as Error).message}\n  Run it yourself instead (as root, any node):\n  ${line}`);
+      return false;
+    }
+    console.log(
+      `  ✓ added ${fix.privs.join(", ")} to FluxHubAgent. On a cluster that covers every node; ` +
+        `a standalone host needs its own run. Run \`fh-toolkit doctor --check-proxmox\` again to confirm.`
+    );
+    return true;
+  });
+}
+
 /** Every `doctor` check, shared with `diagnose`. Probe chatter goes to `log`; the caller reports. */
 async function runDoctorChecks(
   ctx: Ctx,
   dir: string,
   checks: { stripe: boolean; proxmox: boolean; hub: boolean },
   log: (line: string) => void = console.log,
-): Promise<{ report: DoctorReport; survey?: ProxmoxSurvey }> {
+): Promise<{ report: DoctorReport; survey?: ProxmoxSurvey; roleFix?: RoleFix }> {
   let survey: ProxmoxSurvey | undefined;
+  let roleFix: RoleFix | undefined;
   // The runbook's "which value must match where" table, executed. File-level by
   // DEFAULT: no network, no secrets held. Two opt-in flags cross that line on
   // purpose — `--check-stripe` and `--check-proxmox` — because the two failures
@@ -2031,12 +2075,13 @@ async function runDoctorChecks(
       for (const check of probe.checks) {
         if (check.status !== "fail") continue;
         report.findings.push({
-          severity: "error",
-          rule: "PROXMOX_CHECK_FAILED",
+          severity: check.advisory ? "warning" : "error",
+          rule: check.advisory ? "PROXMOX_CHECK_ADVISORY" : "PROXMOX_CHECK_FAILED",
           file: ".env.operator",
           message: `${check.name}: ${check.detail}`,
         });
       }
+      if (probe.missingPrivs?.length) roleFix = { url, privs: probe.missingPrivs };
       // The storage the operator actually configured, judged. This is the check that
       // exists because a `local-lvm` default on a WD Red provisions fine and then
       // fails every benchmark with nothing in any log to say why.
@@ -2135,7 +2180,7 @@ async function runDoctorChecks(
       fix: wrapper.fix,
     });
   }
-  return { report, survey };
+  return { report, survey, roleFix };
 }
 
 export async function runCommand(cmd: string | undefined, args: string[], ctx: Ctx): Promise<number> {
@@ -3000,13 +3045,14 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
     }
     case "doctor": {
       rejectUnknownFlags("doctor", args, ["--dir"], ["--check-hub", "--check-proxmox", "--check-stripe"]);
-      const { report } = await runDoctorChecks(ctx, flag(args, "--dir") ?? ".", {
+      const { report, roleFix } = await runDoctorChecks(ctx, flag(args, "--dir") ?? ".", {
         stripe: args.includes("--check-stripe"),
         proxmox: args.includes("--check-proxmox"),
         hub: args.includes("--check-hub"),
       });
       const { text, ok } = formatReport(report);
       console.log(text);
+      if (roleFix) await offerRoleFix(ctx, roleFix);
       if (!ok) return 1;
       return 0;
     }

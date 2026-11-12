@@ -44,6 +44,10 @@ export interface ProbeResult {
   name: string;
   status: ProbeStatus;
   detail: string;
+  /** A `fail` that does not stop anything today: reported (doctor: a warning), but it never
+   *  makes `ProxmoxProbe.ok` false, so no flow that gates on the probe starts refusing a
+   *  token that worked yesterday. */
+  advisory?: boolean;
 }
 
 /**
@@ -387,6 +391,9 @@ export interface ProxmoxProbe {
   ok: boolean;
   checks: ProbeResult[];
   survey?: ProxmoxSurvey;
+  /** Privileges the token lacks at `/`, required and advisory alike — what
+   *  `fh-toolkit doctor` offers to add to the FluxHubAgent role. */
+  missingPrivs?: string[];
 }
 
 /** The privileges the agent uses on every provision. `Datastore.AllocateSpace` is the
@@ -419,6 +426,24 @@ export const REQUIRED_PRIVS = [
 ];
 
 /**
+ * The FluxLive ISO refresh has Proxmox fetch the ISO itself (`download-url`, arcane-mage
+ * 6.x). Proxmox checks `Sys.AccessNetwork` on the node, or `Sys.Modify` on `/` for backwards
+ * compatibility. Either one satisfies it; the role gets the narrow one.
+ *
+ * Advisory, not required: without it nothing breaks today — the host keeps the ISO it has —
+ * and the refresh fails with a 403 on the next FluxLive release. Found 2026-11-12: the old
+ * arcane-mage fork downloaded into the container and UPLOADED (needs only
+ * `Datastore.AllocateTemplate`), so no FluxHubAgent role ever had it.
+ */
+export const ISO_DOWNLOAD_PRIV = "Sys.AccessNetwork";
+
+/** The one line that ADDS privileges to the role. ⚠️ `-append 1` matters: without it
+ *  `pveum role modify -privs` REPLACES the role's list with the one given. */
+export function roleAppendCommand(privs: string[]): string {
+  return `pveum role modify FluxHubAgent -privs "${privs.join(",")}" -append 1`;
+}
+
+/**
  * Connect, prove the token, prove the privileges the agent actually needs, and list
  * what is there.
  *
@@ -435,6 +460,7 @@ export async function probeProxmox(
   get: typeof proxmoxGet = proxmoxGet
 ): Promise<ProxmoxProbe> {
   const checks: ProbeResult[] = [];
+  const missingPrivs: string[] = [];
 
   try {
     await get<unknown>(creds, "/api2/json/version");
@@ -468,10 +494,31 @@ export async function probeProxmox(
             status: "fail",
             detail:
               `missing at /: ${missing.join(", ")}. Add them with ` +
-              `\`pveum role modify FluxHubAgent -privs "${REQUIRED_PRIVS.join(",")}"\` ` +
+              `\`${roleAppendCommand(missing)}\` (or \`fh-toolkit doctor --check-proxmox\`) ` +
               `rather than escalating the token to PVEAdmin.`,
           }
     );
+    missingPrivs.push(...missing);
+    const canDownload = Boolean(atRoot[ISO_DOWNLOAD_PRIV] || atRoot["Sys.Modify"]);
+    checks.push(
+      canDownload
+        ? {
+            name: "token can have Proxmox download the FluxLive ISO",
+            status: "pass",
+            detail: `${atRoot[ISO_DOWNLOAD_PRIV] ? ISO_DOWNLOAD_PRIV : "Sys.Modify"} at /`,
+          }
+        : {
+            name: "token can have Proxmox download the FluxLive ISO",
+            status: "fail",
+            advisory: true,
+            detail:
+              `missing ${ISO_DOWNLOAD_PRIV} at /. Nothing fails today; the next FluxLive release ` +
+              `will not reach this host (ISO refresh: HTTP 403). Add it with ` +
+              `\`${roleAppendCommand([ISO_DOWNLOAD_PRIV])}\` on any node of the cluster, or ` +
+              `\`fh-toolkit doctor --check-proxmox\`, which offers to do it.`,
+          }
+    );
+    if (!canDownload) missingPrivs.push(ISO_DOWNLOAD_PRIV);
   } catch (e) {
     // A path-scoped token is the usual reason this read fails, and that is itself the
     // finding: VM.Allocate is checked on /vms or /pool, so a /nodes-scoped token cannot
@@ -499,7 +546,7 @@ export async function probeProxmox(
     });
   } catch (e) {
     checks.push({ name: "cluster nodes visible", status: "fail", detail: (e as Error).message });
-    return { ok: false, checks, survey };
+    return { ok: false, checks, survey, missingPrivs };
   }
 
   for (const node of survey.nodes) {
@@ -644,7 +691,7 @@ export async function probeProxmox(
     }
   }
 
-  return { ok: !checks.some((c) => c.status === "fail"), checks, survey };
+  return { ok: !checks.some((c) => c.status === "fail" && !c.advisory), checks, survey, missingPrivs };
 }
 
 /** Storages that can hold VM disks and are known NOT to spin — the safe answers to
@@ -741,5 +788,5 @@ export function describeStorage(o: StorageOption): string {
 
 export function formatProbe(checks: ProbeResult[]): string {
   const icon: Record<ProbeStatus, string> = { pass: "+", fail: "x", skip: "-" };
-  return checks.map((c) => `  ${icon[c.status]} ${c.name}: ${c.detail}`).join("\n");
+  return checks.map((c) => `  ${c.advisory && c.status === "fail" ? "!" : icon[c.status]} ${c.name}: ${c.detail}`).join("\n");
 }

@@ -137,7 +137,7 @@ VM.Config.HWType,VM.Config.Memory,VM.Config.Network,VM.Config.Options,\
 VM.Console,VM.PowerMgmt,\
 Datastore.Allocate,Datastore.AllocateSpace,Datastore.AllocateTemplate,Datastore.Audit,\
 SDN.Audit,SDN.Use,\
-Sys.Audit"
+Sys.Audit,Sys.AccessNetwork"
 pveum user add fh-agent@pve
 pveum acl modify / --users fh-agent@pve --roles FluxHubAgent
 pveum user token add fh-agent@pve agent --privsep 0     # prints the secret ONCE
@@ -163,7 +163,19 @@ that cannot allocate is caught here rather than five steps later — and it reus
 connection to read your storage and node list, which is what fills in Step 0.2 for you.
 
 If a provision later fails with a 403 naming a privilege, add it to the role
-(`pveum role modify FluxHubAgent -privs "…"`) rather than escalating to `PVEAdmin`.
+(`pveum role modify FluxHubAgent -privs "…" -append 1`) rather than escalating to `PVEAdmin`.
+⚠️ Keep `-append 1`: without it `role modify` **replaces** the role's privileges with the
+ones you named. `fh-toolkit doctor --check-proxmox` lists what is missing and offers to add it.
+
+**`Sys.AccessNetwork` (added 2026-11-12)** lets Proxmox download the FluxLive ISO itself
+(`download-url`), which is how the agent keeps the ISO current. A role made before then
+lacks it: nothing breaks until the next FluxLive release, when the ISO refresh fails with
+`HTTP 403: Permission check failed` and the host keeps its old ISO. Add it once, on any node
+of the cluster (a standalone host needs its own):
+
+```sh
+pveum role modify FluxHubAgent -privs Sys.AccessNetwork -append 1
+```
 
 ⚠️ **`SDN.Audit` + `SDN.Use` are not optional on PVE 8+, and their absence does not look
 like a permission problem.** Bridges are behind SDN permissions, so without them
@@ -1053,7 +1065,7 @@ Because the agent **re-reads the file every heartbeat**, edits apply without a r
 **ISO auto-refresh:** declaring inventory also turns on automatic ArcaneOS/FluxLive ISO
 staging — every `nodeName` above (with its `storageIso`, or `PROXMOX_STORAGE_ISO` if
 omitted) is checked against the RunOnFlux release feed every 6h
-(`AGENT_REFRESH_ISO_INTERVAL_MS` to change), downloaded + checksum-verified + uploaded
+(`AGENT_REFRESH_ISO_INTERVAL_MS` to change), downloaded by Proxmox + checksum-verified
 when a newer build ships, and `ARCANE_ISO` is adopted in-process for the next provision
 — no more hand-refreshing the ISO or hitting "Unable to find ISO image on hypervisor" on
 a stale build. Without declared inventory the agent has no record of your node names and
