@@ -9,6 +9,7 @@ import {
   Timestamp,
 } from "./common";
 import { SignedCoupon } from "./coupon";
+import { PriceChangeClaim, SignedPriceChange } from "./price-change";
 
 // ───────────────────────────────────────────────────────────────────────────
 // 1. checkout-init  —  MT → operator Coalition
@@ -571,16 +572,28 @@ export const PendingAuthItem = z.object({
 });
 export type PendingAuthItem = z.infer<typeof PendingAuthItem>;
 
-/** Agent → coalition: the current pending list to present for signing. */
-export const PendingAuthPush = z.object({ items: z.array(PendingAuthItem) });
+/**
+ * Agent → coalition: the current pending list to present for signing.
+ *
+ * `priceChanges` (protocol 0.6.41, Coalition 0.10.0): coupon after-period price changes
+ * awaiting the operator's signature (`price-change.ts`). Optional both ways: an older agent
+ * sends none, an older Coalition strips them.
+ */
+export const PendingAuthPush = z.object({
+  items: z.array(PendingAuthItem),
+  priceChanges: z.array(PriceChangeClaim).optional(),
+});
 export type PendingAuthPush = z.infer<typeof PendingAuthPush>;
 
 /** One operator-signed authorization, bound to the slot it authorizes. */
 export const SignedAuthorization = z.object({ slotId: z.string().min(1), ownerAuth: OwnerAuth });
 export type SignedAuthorization = z.infer<typeof SignedAuthorization>;
 
-/** Coalition → agent: the signed authorizations queued since the last poll. */
-export const AuthorizationList = z.object({ items: z.array(SignedAuthorization) });
+/** Coalition → agent: the signed authorizations (and price changes) queued since the last poll. */
+export const AuthorizationList = z.object({
+  items: z.array(SignedAuthorization),
+  priceChanges: z.array(SignedPriceChange).optional(),
+});
 export type AuthorizationList = z.infer<typeof AuthorizationList>;
 
 /**

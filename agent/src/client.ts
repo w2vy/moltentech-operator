@@ -8,6 +8,8 @@ import {
   InventoryAssert,
   type InventoryHost,
   PendingAuthItem,
+  PriceChangeClaim,
+  type SignedPriceChange,
   type OwnerAuth,
   NodeStateList,
   type NodeStateItem,
@@ -120,14 +122,31 @@ export class MtClient {
     if (!res.ok) throw await hubError("inventory", res);
   }
 
-  /** Fetch the provider's privileged actions awaiting the owner's signature. */
-  async getPendingAuth(): Promise<PendingAuthItem[]> {
+  /**
+   * Fetch the provider's privileged actions awaiting the owner's signature, and (hub 3c) the
+   * coupon price changes awaiting it. An older hub sends no `priceChanges`: empty list.
+   */
+  async getPendingAuth(): Promise<{ items: PendingAuthItem[]; priceChanges: PriceChangeClaim[] }> {
     const path = "/api/agent/pending-auth";
     const res = await fetch(`${this.baseUrl}${path}`, { headers: this.headers("GET", path, "") });
     if (!res.ok) throw await hubError("pending-auth fetch", res);
-    const parsed = z.object({ items: z.array(PendingAuthItem) }).safeParse(await res.json());
+    const parsed = z
+      .object({ items: z.array(PendingAuthItem), priceChanges: z.array(PriceChangeClaim).optional() })
+      .safeParse(await res.json());
     if (!parsed.success) throw new Error("invalid pending-auth payload");
-    return parsed.data.items;
+    return { items: parsed.data.items, priceChanges: parsed.data.priceChanges ?? [] };
+  }
+
+  /** Relay an operator-signed coupon price change to MT (the hub applies it via the Coalition). */
+  async submitPriceChange(change: SignedPriceChange): Promise<void> {
+    const path = "/api/agent/price-change";
+    const raw = JSON.stringify(change);
+    const res = await fetch(`${this.baseUrl}${path}`, {
+      method: "POST",
+      headers: this.headers("POST", path, raw),
+      body: raw,
+    });
+    if (!res.ok) throw await hubError("price-change", res);
   }
 
   /** Fetch the provider's full slot state (status + rental) for the console dashboard. */
