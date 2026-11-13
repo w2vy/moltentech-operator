@@ -56,6 +56,14 @@ export const CheckoutInitResponse = Envelope.extend({
   trialDays: z.number().int().min(1).max(30),
   /** The coupon code this session carries, once the Coalition accepted it. Absent = none. */
   couponApplied: z.string().optional(),
+  /**
+   * With `couponApplied` (Coalition 0.9.0+, option H): the monthly price the line charges,
+   * tier × (1 − pct) rounded down. A 100 % coupon = 0 and NO trial (the free months are the
+   * $0 line); `trialDays` then reports the operator's setting, not what this session got.
+   * The hub refuses a coupon checkout whose answer lacks it (an older Coalition would charge
+   * the price through a Stripe coupon or not at all).
+   */
+  chargedCents: z.number().int().nonnegative().optional(),
 });
 export type CheckoutInitResponse = z.infer<typeof CheckoutInitResponse>;
 
@@ -757,7 +765,12 @@ export type StatsSnapshot = z.infer<typeof StatsSnapshot>;
 // ───────────────────────────────────────────────────────────────────────────
 export const ManageRequest = Envelope.extend({
   providerSlug: ProviderSlug,
-  action: z.enum(["open_portal", "cancel"]),
+  /**
+   * `cancel_at_period_end` (Coalition 0.9.0+): stop at the end of the current period, no
+   * charge after it — how the hub ends a coupon that says "then: end the rental". An older
+   * Coalition rejects it as invalid; the hub checks the Coalition version first.
+   */
+  action: z.enum(["open_portal", "cancel", "cancel_at_period_end"]),
   stripeSubscriptionId: z.string().min(1),
   /** Where the billing portal returns the customer (for open_portal). */
   returnUrl: z.string().url().optional(),

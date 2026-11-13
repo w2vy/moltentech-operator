@@ -12,9 +12,9 @@ import { z } from "zod";
  */
 
 export const CouponTerms = z.object({
-  /** Upper-cased code; also the Stripe coupon id on the operator's account. */
+  /** Upper-cased code. (Coalition 0.8.0 also used it as a Stripe coupon id; 0.9.0 makes no Stripe coupons.) */
   name: z.string().regex(/^[A-Z0-9][A-Z0-9_-]{2,23}$/),
-  /** % off during the period. 100 = free (a Stripe trial on card). */
+  /** % off during the period. 100 = free (a $0 line on card, Coalition 0.9.0). */
   discountPct: z.number().int().min(1).max(100),
   /** Period in CALENDAR months, or null = the discount never ends. */
   termMonths: z.union([z.literal(1), z.literal(2), z.literal(3)]).nullable(),
@@ -68,7 +68,7 @@ export function couponMessage(claim: CouponClaim): string {
 
 /**
  * Calendar months, clamped to the month end (01-31 + 1 → 02-28). The SAME rule as the hub's
- * FLUX terms (`addMonths`) and Stripe's month phases, so a coupon period ends on the same
+ * FLUX terms (`addMonths`) and Stripe's monthly renewals, so a coupon period ends on the same
  * date whichever way the customer pays.
  */
 export function addCalendarMonths(from: Date, months: number): Date {
