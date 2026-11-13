@@ -5,9 +5,9 @@
  */
 import test from "node:test";
 import assert from "node:assert/strict";
-import { couponMessage, type CouponClaim, type SignedCoupon } from "@moltentech/protocol";
+import { couponMessage, PaymentEvent, type CouponClaim, type SignedCoupon } from "@moltentech/protocol";
 import { signFluxMessage } from "@moltentech/protocol/wallet";
-import { handleCheckout, handleManage } from "./payments.js";
+import { handleCheckout, handleManage, normalizeEvent } from "./payments.js";
 import { couponPriceCents, verifyCoupon, MD } from "./coupon.js";
 import type { StripeLike } from "./stripe.js";
 
@@ -165,4 +165,28 @@ test("manage cancel_at_period_end: stops at the period end, no immediate cancel 
   const out = await handleManage(stripe, { schemaVersion: 1, providerSlug: "moltentech", action: "cancel_at_period_end", stripeSubscriptionId: "sub_1" } as any);
   assert.equal(out.ok, true);
   assert.deepEqual(updates, [["sub_1", { cancel_at_period_end: true }]]);
+});
+
+test("a $0 coupon subscription (no trial) maps AND passes PaymentEvent — staging 11-13 TESTFREE90", () => {
+  const ev = normalizeEvent(
+    {
+      id: "evt_free",
+      type: "customer.subscription.created",
+      data: {
+        object: {
+          id: "sub_free",
+          customer: "cus_1",
+          status: "active",
+          trial_end: null,
+          metadata: { mtCustomerId: "cust_1", tier: "cumulus", email: "renter@example.com", [MD.name]: "TESTFREE90", [MD.pct]: "100" },
+          items: { data: [{ price: { unit_amount: 0 }, current_period_start: 1763035200, current_period_end: 1765627200 }] },
+        },
+      },
+    } as any,
+    "moltentech"
+  );
+  const parsed = PaymentEvent.safeParse(ev);
+  assert.equal(parsed.success, true, JSON.stringify(parsed.success ? null : parsed.error.flatten().fieldErrors));
+  assert.equal((ev as any).priceCents, 0);
+  assert.equal((ev as any).trialEndsAt, undefined);
 });
