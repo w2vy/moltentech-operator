@@ -119,7 +119,7 @@ test("actions table withholds the rental code when SESSION_SECRET is unset", () 
 
   // …but the action itself must remain signable: this list is the operator's only
   // route to authorize work, so withholding the row entirely would strand them.
-  assert.match(body, /Review &amp; sign/);
+  assert.match(body, />Sign</);
   assert.ok(body.includes("mt-action-vm@pve-action"), "vm@node identifies what is being signed");
 });
 
