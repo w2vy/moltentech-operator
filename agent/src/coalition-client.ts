@@ -2,8 +2,10 @@ import type { KeyObject } from "node:crypto";
 import {
   AuthorizationList,
   type PendingAuthItem,
+  type PriceChangeClaim,
   type NodeStateItem,
   type SignedAuthorization,
+  type SignedPriceChange,
 } from "@moltentech/protocol";
 import { signAgentRequest } from "./signing";
 
@@ -26,9 +28,9 @@ export class CoalitionClient {
   }
 
   /** Push the current pending-authorization list for the operator to sign. */
-  async pushPending(items: PendingAuthItem[]): Promise<void> {
+  async pushPending(items: PendingAuthItem[], priceChanges: PriceChangeClaim[] = []): Promise<void> {
     const path = "/agent/pending";
-    const raw = JSON.stringify({ items });
+    const raw = JSON.stringify({ items, priceChanges });
     const res = await fetch(`${this.baseUrl}${path}`, {
       method: "POST",
       headers: this.headers("POST", path, raw),
@@ -50,12 +52,13 @@ export class CoalitionClient {
   }
 
   /** Pull the operator-signed authorizations queued since the last poll. */
-  async pollAuthorizations(): Promise<SignedAuthorization[]> {
+  async pollAuthorizations(): Promise<{ items: SignedAuthorization[]; priceChanges: SignedPriceChange[] }> {
     const path = "/agent/authorizations";
     const res = await fetch(`${this.baseUrl}${path}`, { headers: this.headers("GET", path, "") });
     if (!res.ok) throw new Error(`coalition authorizations poll failed: ${res.status}`);
     const parsed = AuthorizationList.safeParse(await res.json());
     if (!parsed.success) throw new Error("invalid authorizations payload");
-    return parsed.data.items;
+    // An older Coalition sends no `priceChanges`.
+    return { items: parsed.data.items, priceChanges: parsed.data.priceChanges ?? [] };
   }
 }

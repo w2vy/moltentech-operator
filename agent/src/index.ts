@@ -1,5 +1,5 @@
-import { SCHEMA_VERSION } from "@moltentech/protocol";
-import { verifyOwnerAuth } from "@moltentech/protocol/wallet";
+import { SCHEMA_VERSION, priceChangeMessage } from "@moltentech/protocol";
+import { verifyFluxSignature, verifyOwnerAuth } from "@moltentech/protocol/wallet";
 import { loadConfig, reloadInventory, declaresAnySlot } from "./config";
 import { agentBuildLabel } from "./version";
 import { MtClient, type MtClientAuth } from "./client";
@@ -162,9 +162,26 @@ async function main() {
       console.error("[agent] state push error:", (err as Error).message);
     }
     try {
-      await coalition.pushPending(await client.getPendingAuth());
+      const pendingAuth = await client.getPendingAuth();
+      await coalition.pushPending(pendingAuth.items, pendingAuth.priceChanges);
       const signed = await coalition.pollAuthorizations();
-      for (const { slotId, ownerAuth } of signed) {
+      // Coupon price changes (3c): the same local check against OUR owner address before the
+      // relay. The Coalition re-checks at `POST /price`; this stops a forged one at the source.
+      for (const change of signed.priceChanges) {
+        const c = change.claim;
+        if (!verifyFluxSignature(cfg.ownerAddress, priceChangeMessage(c), change.signature)) {
+          console.error(`[agent] rejected price change ${c.changeId} (${c.rentalCode}): signature does not match OWNER_ADDRESS`);
+          continue;
+        }
+        try {
+          await client.submitPriceChange(change);
+          console.log(`[agent] relayed price change: ${c.rentalCode} ${c.fromCents} → ${c.toCents} cents from ${c.firstChargeOn}`);
+        } catch (err) {
+          // Lost from the Coalition's queue now; the hub keeps it pending and the console shows it again.
+          console.error(`[agent] price change ${c.changeId} relay failed:`, (err as Error).message);
+        }
+      }
+      for (const { slotId, ownerAuth } of signed.items) {
         const decision = verifyOwnerAuth(ownerAuth, cfg.ownerAddress);
         if (!decision.ok) {
           console.error(`[agent] rejected authorization for ${ownerAuth.vmName}: ${decision.reason}`);

@@ -27,14 +27,21 @@ export function verifyCoupon(
   cfg: Pick<CoalitionConfig, "providerSlug" | "ownerAddress">,
   tier: string,
   signed: SignedCoupon,
-  now: Date = new Date()
+  now: Date = new Date(),
+  /**
+   * Skip the "code valid until" check. Only for a coupon ALREADY redeemed: a price change at
+   * the end of its period (3c, `POST /price`) comes months after the code may have closed.
+   */
+  opts: { redeemed?: boolean } = {}
 ): CouponVerdict {
   if (!cfg.ownerAddress) return { ok: false, reason: "no OWNER_ADDRESS — this Coalition cannot verify a coupon" };
   const c = signed.claim;
   if (c.providerSlug !== cfg.providerSlug) return { ok: false, reason: `coupon is for ${c.providerSlug}, not ${cfg.providerSlug}` };
   if (c.tier !== tier) return { ok: false, reason: `coupon is for ${c.tier}, not ${tier}` };
   const expires = new Date(c.expiresAt);
-  if (Number.isNaN(expires.getTime()) || expires.getTime() <= now.getTime()) return { ok: false, reason: "coupon has expired" };
+  if (!opts.redeemed && (Number.isNaN(expires.getTime()) || expires.getTime() <= now.getTime())) {
+    return { ok: false, reason: "coupon has expired" };
+  }
   if (!verifyFluxSignature(cfg.ownerAddress, couponMessage(c), signed.signature)) {
     return { ok: false, reason: "coupon signature does not match OWNER_ADDRESS" };
   }
@@ -51,4 +58,4 @@ export function couponPriceCents(tierCents: number, pct: number): number {
 }
 
 /** Subscription metadata that records which coupon a rental started on (read by people, not code). */
-export const MD = { name: "mtCoupon", pct: "mtCouponPct" } as const;
+export const MD = { name: "mtCoupon", pct: "mtCouponPct", priceChange: "mtPriceChange" } as const;

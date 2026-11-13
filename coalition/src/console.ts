@@ -36,6 +36,10 @@ import {
   COLLATERAL_MIN_CONFIRMATIONS,
   unwrapManifest,
   FOUNDATION_VM_PREFIX,
+  formatUsd,
+  priceChangeMessage,
+  type PriceChangeClaim,
+  type SignedPriceChange,
 } from "@moltentech/protocol";
 import { getCollateralSnapshot } from "./collateral";
 import { bodyHash, checkFreshness, verifyRequest, type RequestEnvelope } from "@moltentech/protocol/signing";
@@ -63,6 +67,10 @@ const html = (status: number, body: string): ConsoleResult => ({ status, content
 const pending = new Map<string, PendingAuthItem>(); // slotId -> item awaiting signature
 const authorizations: SignedAuthorization[] = []; // signed, awaiting agent pickup
 let nodeState: NodeStateItem[] = []; // latest dashboard snapshot the agent pushed
+// Coupon after-period price changes (3c): changeId -> claim awaiting signature, and the signed
+// ones awaiting agent pickup. Same lifecycle as the slot actions above.
+const pendingPrices = new Map<string, PriceChangeClaim>();
+const signedPrices: SignedPriceChange[] = [];
 
 // Nonces of claims we've queued, so the sign page can poll for success even after
 // the item leaves `pending` (or the agent re-pushes the still-pending slot before
@@ -206,7 +214,17 @@ export function handleAgentPending(cfg: CoalitionConfig, rawBody: Buffer, header
     }
     pending.set(item.slotId, item);
   }
-  return json(200, { ok: true, pending: pending.size, ...(collapsed ? { collapsed } : {}) });
+  // An agent older than 0.11.83 sends no `priceChanges`: the list is then simply empty.
+  pendingPrices.clear();
+  for (const c of parsed.data.priceChanges ?? []) {
+    if (c.providerSlug === cfg.providerSlug) pendingPrices.set(c.changeId, c);
+  }
+  return json(200, {
+    ok: true,
+    pending: pending.size,
+    priceChanges: pendingPrices.size,
+    ...(collapsed ? { collapsed } : {}),
+  });
 }
 
 /**
@@ -237,7 +255,8 @@ export function handleAgentState(cfg: CoalitionConfig, rawBody: Buffer, headers:
 export function handleAgentAuthorizations(cfg: CoalitionConfig, rawBody: Buffer, headers: IncomingHttpHeaders): ConsoleResult {
   if (!verifyAgentRequest(cfg, "GET", "/agent/authorizations", rawBody, headers)) return json(401, { error: "Unauthorized" });
   const items = authorizations.splice(0, authorizations.length);
-  return json(200, { items });
+  const priceChanges = signedPrices.splice(0, signedPrices.length);
+  return json(200, { items, priceChanges });
 }
 
 // ── operator (browser) handlers ──
@@ -302,6 +321,40 @@ function maturingNodesSection(): string {
 <div class="card" style="padding:0;overflow:hidden">
 <table><thead><tr><th>Node</th><th>Benchmark</th><th>Collateral</th><th>Started</th></tr></thead><tbody>${rows}</tbody></table>
 </div>`;
+}
+
+/**
+ * Coupon after-period price changes awaiting the operator's signature (3c). Each one raises
+ * what a customer pays once their coupon period ends, so each is signed on its own.
+ *
+ * 🔒 Needs the login gate (`SESSION_SECRET`). A price change names the customer's rental and
+ * their Stripe subscription, and that text IS what the wallet signs, so it cannot be hidden
+ * on the sign page the way a slot action's rental code is. Without the gate the console is
+ * public, so the section says how to turn it on instead of listing anything.
+ */
+function priceChangesSection(stateGated: boolean): string {
+  const list = [...pendingPrices.values()];
+  if (list.length === 0) return "";
+  const count = ` <span class="badge badge-warn">${list.length}</span>`;
+  if (!stateGated) {
+    return `<h1 style="margin-top:26px">Price changes awaiting your signature${count}</h1>
+<div class="card"><p><span class="badge badge-warn">hidden</span> Coupon price changes name your customers' rentals, so they
+are shown only behind the wallet login. Set <code>SESSION_SECRET</code> in the Coalition's environment and redeploy to sign them.
+Until they are signed, each customer keeps their coupon price.</p></div>`;
+  }
+  const rows = list
+    .map(
+      (c) =>
+        `<tr><td><code>${escapeHtmlAttribute(c.rentalCode)}</code></td><td class="mono">${escapeHtmlAttribute(c.couponCode)}</td>` +
+        `<td>${formatUsd(c.fromCents)} → <b>${formatUsd(c.toCents)}</b>/month</td><td class="mono">${escapeHtmlAttribute(c.firstChargeOn)}</td>` +
+        `<td><a class="btn btn-primary" href="/console/sign-price?changeId=${encodeURIComponent(c.changeId)}">Review &amp; sign</a></td></tr>`
+    )
+    .join("");
+  return `<h1 style="margin-top:26px">Price changes awaiting your signature${count}</h1>
+<p class="muted">A coupon period is ending. Sign to charge the price the coupon says from the date shown. Not signed by then: that renewal keeps the coupon price, and the change waits for the next one.</p>
+<div class="card" style="padding:0;overflow:hidden"><div style="overflow-x:auto">
+<table><thead><tr><th>Rental</th><th>Coupon</th><th>Price</th><th>First charge</th><th></th></tr></thead><tbody>${rows}</tbody></table>
+</div></div>`;
 }
 
 /** GET /console — operator dashboard: node/rental state + actions awaiting signature. */
@@ -401,6 +454,7 @@ ${CONSOLE_HEAD_ICONS}
 <div class="card" style="padding:0;overflow:hidden"><div style="overflow-x:auto">
 <table><thead><tr><th>Action</th><th>Rental</th><th></th></tr></thead><tbody>${actionRows}</tbody></table>
 </div></div>
+${priceChangesSection(stateGated)}
 ${maturingNodesSection()}
 <div style="margin-top:26px">${nodesSection}</div>
 </div>
@@ -727,4 +781,128 @@ export function handleLoginStatus(cfg: CoalitionConfig, query: URLSearchParams):
     };
   }
   return json(200, { status: "pending" });
+}
+
+// ── Coupon price changes (3c): sign page, submit, Zelcore callback, status poll. ──
+
+const priceKey = (changeId: string) => `price:${changeId}`;
+
+/** Verify the wallet signature over the pending change and queue it for the agent. */
+function verifyAndQueuePrice(
+  cfg: CoalitionConfig,
+  changeId: string,
+  signature: string
+): { ok: true; claim: PriceChangeClaim } | { ok: false; status: number; msg: string } {
+  const owner = ownerZelid(cfg);
+  if (!owner) return { ok: false, status: 500, msg: "Console owner address not configured (set OWNER_ADDRESS)." };
+  if (!cfg.sessionSecret) return { ok: false, status: 403, msg: "Price changes need the console login (set SESSION_SECRET)." };
+  if (!signature) return { ok: false, status: 400, msg: "Missing signature." };
+  const claim = pendingPrices.get(changeId);
+  if (!claim) return { ok: false, status: 409, msg: "Price change no longer pending." };
+  if (!verifyFluxSignature(owner, priceChangeMessage(claim), signature)) {
+    return { ok: false, status: 401, msg: "Signature does not match the owner wallet for this operator." };
+  }
+  signedPrices.push({ claim, signature });
+  pendingPrices.delete(changeId);
+  markAuthorized(priceKey(changeId));
+  return { ok: true, claim };
+}
+
+/** GET /console/sign-price?changeId=… — the wallet launcher for one price change. */
+export function handleConsoleSignPrice(cfg: CoalitionConfig, query: URLSearchParams, origin?: string): ConsoleResult {
+  if (!cfg.sessionSecret) return html(403, "<p>Price changes need the console login (set SESSION_SECRET).</p>");
+  const changeId = query.get("changeId") ?? "";
+  const claim = pendingPrices.get(changeId);
+  if (!claim) return html(404, "<p>Unknown or already-signed price change.</p>");
+  const message = priceChangeMessage(claim);
+  const base = (origin ?? manifest(cfg).coalitionUrl)?.replace(/\/$/, "");
+  const callback = base ? `${base}/console/zelcore-price-callback?changeId=${encodeURIComponent(changeId)}` : undefined;
+  const zelcoreLink = buildZelcoreSignLink({ message, callback });
+  const launcher = buildSignLauncherHtml({
+    message,
+    zelcoreLink,
+    title: "Flux Hub — Price change",
+    intro:
+      `Coupon ${claim.couponCode} on rental ${claim.rentalCode} ends its period. Signing changes the price from ` +
+      `${formatUsd(claim.fromCents)} to ${formatUsd(claim.toCents)} a month, first charged on ${claim.firstChargeOn}.`,
+  });
+  const submit = `
+    <div class="wrap">
+      <div class="card done" id="done-panel">
+        <div class="big">✓</div>
+        <h2>Signed</h2>
+        <p class="muted">Flux Hub applies the new price before the renewal. You can close this tab.</p>
+        <p><a href="/console">&larr; Back to console</a></p>
+      </div>
+      <details class="card" id="manual-paste">
+        <summary>Signature didn't post back? Paste it manually</summary>
+        <form id="submit-form" style="margin-top:10px">
+          <textarea name="signature" id="submit-sig" class="sig-box" placeholder="Paste the signature from your wallet"></textarea>
+          <div><button type="submit" class="btn btn-primary" style="margin-top:8px">Submit signature</button></div>
+          <p class="muted" id="submit-err" style="color:#f87171;display:none;margin-top:8px"></p>
+        </form>
+      </details>
+      <p style="margin-top:4px"><a href="/console">&larr; Back to console</a></p>
+    </div>
+    <script>
+      var changeId = ${JSON.stringify(changeId)};
+      var done = false, pollT = null;
+      function showDone(){
+        if(done) return; done = true;
+        document.querySelectorAll('.wallet-section').forEach(function(el){ el.style.display='none'; });
+        var mp=document.getElementById('manual-paste'); if(mp) mp.style.display='none';
+        var dp=document.getElementById('done-panel'); if(dp) dp.style.display='block';
+        if(pollT){ clearInterval(pollT); pollT=null; }
+      }
+      async function submitSig(){
+        var box=document.getElementById('submit-sig'); var sig=(box.value||'').trim(); if(!sig) return;
+        var err=document.getElementById('submit-err'); if(err) err.style.display='none';
+        var body=new URLSearchParams({ changeId:changeId, signature:sig });
+        try{
+          var r=await fetch('/console/authorize-price',{ method:'POST',
+            headers:{'content-type':'application/x-www-form-urlencoded'}, body:body.toString() });
+          if(r.ok){ showDone(); }
+          else if(err){ var j=await r.json().catch(function(){return{};}); err.textContent=(j.error||'Submit failed'); err.style.display='block'; }
+        }catch(e){ if(err){ err.textContent=String(e); err.style.display='block'; } }
+      }
+      document.getElementById('submit-form').addEventListener('submit', function(e){ e.preventDefault(); submitSig(); });
+      (function(){ var src=document.getElementById('sig-output'), dst=document.getElementById('submit-sig');
+        if(!src||!dst) return;
+        new MutationObserver(function(){ var v=(src.textContent||'').trim();
+          if(v && !dst.value){ dst.value=v; submitSig(); } })
+          .observe(src,{childList:true,characterData:true,subtree:true}); })();
+      pollT=setInterval(async function(){
+        try{ var r=await fetch('/console/price-status?changeId='+encodeURIComponent(changeId));
+          if(r.ok){ var j=await r.json(); if(j.status==='signed') showDone(); } }catch(e){}
+      }, 3000);
+    </script>`;
+  return html(200, launcher.replace("</body>", `${submit}</body>`));
+}
+
+/** POST /console/authorize-price — browser submit (SSP auto-fill or pasted signature). */
+export function handleConsoleAuthorizePrice(cfg: CoalitionConfig, form: URLSearchParams): ConsoleResult {
+  const r = verifyAndQueuePrice(cfg, form.get("changeId") ?? "", (form.get("signature") ?? "").trim());
+  return r.ok ? json(200, { ok: true }) : json(r.status, { error: r.msg });
+}
+
+/** POST /console/zelcore-price-callback?changeId=… — Zelcore posts the signature here. */
+export function handleZelcorePriceCallback(
+  cfg: CoalitionConfig,
+  query: URLSearchParams,
+  rawBody: Buffer,
+  contentType: string
+): ConsoleResult {
+  const r = verifyAndQueuePrice(cfg, query.get("changeId") ?? "", readSignatureFromBody(rawBody, contentType));
+  return r.ok ? json(200, { status: "success" }) : json(r.status, { status: "error", error: r.msg });
+}
+
+/** GET /console/price-status?changeId=… — has this change been signed yet? */
+export function handlePriceStatus(query: URLSearchParams): ConsoleResult {
+  return json(200, { status: isAuthorized(priceKey(query.get("changeId") ?? "")) ? "signed" : "pending" });
+}
+
+/** Test hook: reset the price-change courier state. */
+export function _resetPriceChangesForTest(): void {
+  pendingPrices.clear();
+  signedPrices.splice(0, signedPrices.length);
 }

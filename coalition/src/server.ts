@@ -1,8 +1,9 @@
 import http from "node:http";
-import { CheckoutInitRequest, ManageRequest, HEADER_COALITION_VERSION, HEADER_CARD_PAYMENTS } from "@moltentech/protocol";
+import { CheckoutInitRequest, ManageRequest, PriceChangeRequest, HEADER_COALITION_VERSION, HEADER_CARD_PAYMENTS } from "@moltentech/protocol";
 import { readManifest, type CoalitionConfig } from "./config";
 import type { StripeLike } from "./stripe";
 import { handleCheckout, handleManage, handleWebhook } from "./payments";
+import { handlePriceChange, PriceChangeRefused } from "./price-change";
 import { getStatsSnapshot } from "./stats";
 import { verifyMtRequest } from "./auth";
 import {
@@ -14,6 +15,10 @@ import {
   handleConsoleAuthorize,
   handleSignStatus,
   handleZelcoreCallback,
+  handleConsoleSignPrice,
+  handleConsoleAuthorizePrice,
+  handleZelcorePriceCallback,
+  handlePriceStatus,
   handleLoginPage,
   handleLoginSubmit,
   handleLoginCallback,
@@ -141,7 +146,7 @@ export function createServer(stripe: StripeLike | null, cfg: CoalitionConfig): h
 
       // MT -> Coalition: signature-authenticated (dual-accept legacy bearer). Read the
       // raw body first — the signature covers its hash, and we reject before parsing.
-      if (method === "POST" && (url === "/checkout" || url === "/manage")) {
+      if (method === "POST" && (url === "/checkout" || url === "/manage" || url === "/price")) {
         const raw = await readBody(req);
         const authz = verifyMtRequest(cfg, "POST", url, raw, req.headers);
         if (!authz.ok) {
@@ -157,6 +162,21 @@ export function createServer(stripe: StripeLike | null, cfg: CoalitionConfig): h
           return send(400, { error: "Invalid JSON" });
         }
         try {
+          if (url === "/price") {
+            const p = PriceChangeRequest.safeParse(json);
+            if (!p.success) return send(400, { error: "Invalid price change request" });
+            if (!stripe) return send(503, { error: "payments disabled — this operator offers nothing for sale" });
+            try {
+              return send(200, await handlePriceChange(stripe, cfg, p.data));
+            } catch (err) {
+              // A refusal is a correct answer the hub must not retry; anything else is a 502.
+              if (err instanceof PriceChangeRefused) {
+                console.warn(`[coalition] POST /price refused: ${err.message}`);
+                return send(409, { error: err.message, refused: true });
+              }
+              throw err;
+            }
+          }
           if (url === "/checkout") {
             const p = CheckoutInitRequest.safeParse(json);
             if (!p.success) return send(400, { error: "Invalid checkout request" });
@@ -206,14 +226,23 @@ export function createServer(stripe: StripeLike | null, cfg: CoalitionConfig): h
         return sendResult(handleLoginStatus(cfg, query));
       }
 
+      // Zelcore posts a price-change signature back here (wallet-posted, no cookie; the
+      // signature over the pending change is the auth).
+      if (method === "POST" && url === "/console/zelcore-price-callback") {
+        const raw = await readBody(req);
+        return sendResult(handleZelcorePriceCallback(cfg, query, raw, String(req.headers["content-type"] ?? "")));
+      }
+
       // Read-gate: when SESSION_SECRET is set, require a valid session for the
       // browser read/submit routes. Unset = open console (LAN/dev).
       const gated =
-        (method === "GET" && (url === "/console" || url === "/console/sign" || url === "/console/sign-status")) ||
-        (method === "POST" && url === "/console/authorize");
+        (method === "GET" &&
+          (url === "/console" || url === "/console/sign" || url === "/console/sign-status" ||
+            url === "/console/sign-price" || url === "/console/price-status")) ||
+        (method === "POST" && (url === "/console/authorize" || url === "/console/authorize-price"));
       if (cfg.sessionSecret && gated && !verifySession(cfg.sessionSecret, req.headers)) {
         // HTML pages → bounce to the login page; JSON/submit → 401.
-        if (method === "GET" && (url === "/console" || url === "/console/sign")) {
+        if (method === "GET" && (url === "/console" || url === "/console/sign" || url === "/console/sign-price")) {
           res.writeHead(302, { location: "/console/login" });
           return res.end();
         }
@@ -234,6 +263,16 @@ export function createServer(stripe: StripeLike | null, cfg: CoalitionConfig): h
       if (method === "POST" && url === "/console/authorize") {
         const raw = await readBody(req);
         return sendResult(handleConsoleAuthorize(cfg, new URLSearchParams(raw.toString())));
+      }
+      if (method === "GET" && url === "/console/sign-price") {
+        return sendResult(handleConsoleSignPrice(cfg, query, reqOrigin));
+      }
+      if (method === "GET" && url === "/console/price-status") {
+        return sendResult(handlePriceStatus(query));
+      }
+      if (method === "POST" && url === "/console/authorize-price") {
+        const raw = await readBody(req);
+        return sendResult(handleConsoleAuthorizePrice(cfg, new URLSearchParams(raw.toString())));
       }
       // Zelcore posts the signature back here automatically (deep-link callback).
       if (method === "POST" && url === "/console/zelcore-callback") {

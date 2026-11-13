@@ -24,6 +24,7 @@ Stripe ────▶ POST /webhook ──relay(Bearer agentKey)──▶ MT /a
 | GET | `/stats` | none | StatsSnapshot |
 | POST | `/checkout` | Flux Hub signature (`x-mt-signature`) | mint Checkout Session (trial) |
 | POST | `/manage` | Flux Hub signature (`x-mt-signature`) | billing portal / cancel |
+| POST | `/price` | Flux Hub signature + the operator's wallet signature on the change and the coupon | coupon after-period price change (0.10.0) |
 | POST | `/webhook` | Stripe signature | verify + relay to MT |
 
 ## Run
