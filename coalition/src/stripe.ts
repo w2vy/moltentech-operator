@@ -22,18 +22,9 @@ export interface StripeLike {
     update(id: string, args: Record<string, unknown>): Promise<unknown>;
     cancel(id: string): Promise<unknown>;
   };
-  /** Operator coupons (coupon.ts). The wizard-preset restricted key has Coupons read+write (tested 2026-11-11). */
-  coupons: {
-    retrieve(id: string): Promise<Record<string, unknown>>;
-    create(args: Record<string, unknown>): Promise<{ id: string }>;
-  };
-  subscriptionSchedules: {
-    create(args: Record<string, unknown>): Promise<{ id: string; phases: { start_date: number }[] }>;
-    update(id: string, args: Record<string, unknown>): Promise<unknown>;
-  };
   prices: {
-    list(args: { lookup_keys: string[]; active?: boolean; limit?: number }): Promise<{ data: { id: string }[] }>;
-    create(args: Record<string, unknown>): Promise<{ id: string }>;
+    list(args: { lookup_keys: string[]; active?: boolean; limit?: number }): Promise<{ data: { id: string; product?: string | { id: string } }[] }>;
+    create(args: Record<string, unknown>): Promise<{ id: string; product?: string | { id: string } }>;
   };
   products: { create(args: Record<string, unknown>): Promise<{ id: string }> };
   webhooks: { constructEvent(payload: string | Buffer, sig: string, secret: string): StripeEvent };
@@ -62,8 +53,26 @@ export async function ensurePrice(
   tier: string,
   priceCents: number
 ): Promise<string> {
+  return (await ensureTierPrice(stripe, slug, tier, priceCents)).priceId;
+}
+
+/**
+ * `ensurePrice` plus the Product behind it. A coupon checkout charges an inline
+ * `price_data` on THAT product (option H, Coalition 0.9.0), so the invoice line and the tax
+ * code are the tier's, whatever the discounted amount.
+ */
+export async function ensureTierPrice(
+  stripe: StripeLike,
+  slug: string,
+  tier: string,
+  priceCents: number
+): Promise<{ priceId: string; productId: string }> {
+  const idOf = (p: string | { id: string } | undefined) => (typeof p === "string" ? p : p?.id ?? "");
   const lookupKey = `mt-${slug}-${tier}-${priceCents}`;
-  const lookup = async () => (await stripe.prices.list({ lookup_keys: [lookupKey], active: true, limit: 1 })).data[0]?.id;
+  const lookup = async () => {
+    const p = (await stripe.prices.list({ lookup_keys: [lookupKey], active: true, limit: 1 })).data[0];
+    return p ? { priceId: p.id, productId: idOf(p.product) } : null;
+  };
   const found = await lookup();
   if (found) return found;
 
@@ -82,7 +91,7 @@ export async function ensurePrice(
       recurring: { interval: "month" },
       lookup_key: lookupKey,
     });
-    return price.id;
+    return { priceId: price.id, productId: product.id };
   } catch (err) {
     // Another checkout created it between our read and our create.
     const winner = await lookup();

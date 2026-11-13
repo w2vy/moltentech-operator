@@ -9,8 +9,8 @@ import {
 } from "@moltentech/protocol";
 import type { CoalitionConfig } from "./config";
 import { mtAuthHeaders, type MtCallerConfig } from "./coalition-signing";
-import { ensurePrice, type StripeLike, type StripeEvent } from "./stripe";
-import { applyCouponAfterPeriod, couponSessionArgs, ensureCoupon, verifyCoupon } from "./coupon";
+import { ensureTierPrice, type StripeLike, type StripeEvent } from "./stripe";
+import { couponPriceCents, verifyCoupon, MD } from "./coupon";
 
 /** Mint a subscription Checkout Session (with trial) on the operator's Stripe account. */
 export async function handleCheckout(
@@ -21,17 +21,18 @@ export async function handleCheckout(
   const priceCents = cfg.tierPrices[req.tier];
   if (!priceCents) throw new Error(`No price configured for tier ${req.tier}`);
 
-  const priceId = await ensurePrice(stripe, cfg.providerSlug, req.tier, priceCents);
+  const { priceId, productId } = await ensureTierPrice(stripe, cfg.providerSlug, req.tier, priceCents);
 
   // An operator coupon: only one the OPERATOR signed (`verifyCoupon`). A refused coupon fails
   // the checkout rather than quietly charging full price — the customer was shown the offer.
-  let coupon: ReturnType<typeof couponSessionArgs> | null = null;
+  // Option H: the coupon is the line's price (`price_data` on the tier's product), never a
+  // Stripe coupon. 100 % = a $0 line with no trial; the card is still collected.
+  let coupon: { name: string; pct: number; chargedCents: number } | null = null;
   if (req.coupon) {
     const v = verifyCoupon(cfg, req.tier, req.coupon);
     if (!v.ok) throw new Error(`coupon refused: ${v.reason}`);
-    const t = v.terms;
-    const couponId = t.discountPct === 100 && t.termMonths !== null ? null : await ensureCoupon(stripe, t.name, t.discountPct, t.termMonths);
-    coupon = couponSessionArgs(t, couponId, new Date());
+    if (!productId) throw new Error("the tier price has no product");
+    coupon = { name: v.terms.name, pct: v.terms.discountPct, chargedCents: couponPriceCents(priceCents, v.terms.discountPct) };
   }
 
   const metadata = {
@@ -41,25 +42,31 @@ export async function handleCheckout(
     providerSlug: cfg.providerSlug,
     tier: req.tier,
     email: req.customer.email,
+    ...(coupon ? { [MD.name]: coupon.name, [MD.pct]: String(coupon.pct) } : {}),
   };
+  const lineItem = coupon
+    ? {
+        price_data: { currency: "usd", product: productId, unit_amount: coupon.chargedCents, recurring: { interval: "month" } },
+        quantity: 1,
+      }
+    : { price: priceId, quantity: 1 };
   const session = await stripe.checkout.sessions.create({
     mode: "subscription",
-    line_items: [{ price: priceId, quantity: 1 }],
+    line_items: [lineItem],
     customer_email: req.customer.email,
     payment_method_collection: "always",
     // A promotion code box on the Stripe page: the operator makes codes in their own
     // Stripe account (Product catalog, Coupons) to hand out, e.g. in promo posts. Off when a
-    // hub coupon is applied: Stripe refuses `discounts` together with the box, and a second
-    // code on top of the operator's coupon is not an offer anyone made.
+    // hub coupon is applied: a second code on top of the operator's coupon is not an offer
+    // anyone made.
     ...(coupon ? {} : { allow_promotion_codes: true }),
-    ...(coupon?.discounts ? { discounts: coupon.discounts } : {}),
     subscription_data: {
-      // A 100 % coupon period IS the trial (to the calendar-month date); otherwise the
-      // operator's usual trial, with the coupon's discount on the charges after it.
-      ...(coupon?.trialEnd ? { trial_end: coupon.trialEnd } : { trial_period_days: cfg.trialDays }),
-      metadata: { ...metadata, ...(coupon?.metadata ?? {}) },
+      // A 100 % coupon period is already free ($0 line): no trial on top. Any other checkout
+      // keeps the operator's usual trial, then charges the line's price.
+      ...(coupon?.pct === 100 ? {} : { trial_period_days: cfg.trialDays }),
+      metadata,
     },
-    metadata: { ...metadata, ...(coupon?.metadata ?? {}) },
+    metadata,
     success_url: req.successUrl,
     cancel_url: req.cancelUrl,
   });
@@ -71,7 +78,7 @@ export async function handleCheckout(
     priceCents,
     currency: "usd",
     trialDays: cfg.trialDays,
-    ...(req.coupon && coupon ? { couponApplied: req.coupon.claim.coupon.name } : {}),
+    ...(coupon ? { couponApplied: coupon.name, chargedCents: coupon.chargedCents } : {}),
   };
 }
 
@@ -82,6 +89,14 @@ export async function handleManage(
 ): Promise<ManageResponse> {
   if (req.action === "cancel") {
     await stripe.subscriptions.cancel(req.stripeSubscriptionId);
+    return { schemaVersion: SCHEMA_VERSION, ok: true };
+  }
+  if (req.action === "cancel_at_period_end") {
+    // A coupon that says "then: end the rental" (H-D1, tom 2026-11-13): the hub asks during the
+    // last coupon period, so the renewal at the boundary never charges. The operator already
+    // signed "then: end the rental" in the coupon; ending charges nobody. The relayed
+    // `subscription.updated` shows "cancels on <date>" on the hub.
+    await stripe.subscriptions.update(req.stripeSubscriptionId, { cancel_at_period_end: true });
     return { schemaVersion: SCHEMA_VERSION, ok: true };
   }
   const sub = await stripe.subscriptions.retrieve(req.stripeSubscriptionId);
@@ -403,9 +418,6 @@ export async function handleWebhook(
   if (!result.delivered) return 502; // transient — Stripe's retry is the durable queue
   if (result.accepted) {
     if (ev.type === "subscription.created" && result.rentalCode) await stampRentalCode(stripe, event, result.rentalCode);
-    // A coupon's after-period (end the rental / a smaller discount). Failing it is a 502: the
-    // hub's accept is idempotent, and without this step the customer pays the wrong price later.
-    if (ev.type === "subscription.created" && !(await applyCouponAfterPeriod(stripe, event))) return 502;
     return 200;
   }
 
