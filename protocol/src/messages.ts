@@ -92,7 +92,12 @@ export const PaymentEvent = z.discriminatedUnion("type", [
     mtIntentId: z.string().min(1).optional(),
     email: z.string().email(),
     tier: TierKey,
-    priceCents: PriceCents,
+    /**
+     * The monthly price on the subscription's line. 0 is valid since Coalition 0.9.0: a 100 %
+     * coupon is a $0 line (option H). Was `PriceCents` (positive), which made the Coalition
+     * refuse its own relay of every $0 subscription (staging 2026-11-13, TESTFREE90).
+     */
+    priceCents: z.number().int().nonnegative(),
     currency: Currency,
     /** Set while in the free trial; absent once converted. */
     trialEndsAt: Timestamp.optional(),
