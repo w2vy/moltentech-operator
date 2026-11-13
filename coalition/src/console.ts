@@ -347,7 +347,7 @@ Until they are signed, each customer keeps their coupon price.</p></div>`;
       (c) =>
         `<tr><td><code>${escapeHtmlAttribute(c.rentalCode)}</code></td><td class="mono">${escapeHtmlAttribute(c.couponCode)}</td>` +
         `<td>${formatUsd(c.fromCents)} → <b>${formatUsd(c.toCents)}</b>/month</td><td class="mono">${escapeHtmlAttribute(c.firstChargeOn)}</td>` +
-        `<td><a class="btn btn-primary" href="/console/sign-price?changeId=${encodeURIComponent(c.changeId)}">Review &amp; sign</a></td></tr>`
+        `<td><a class="btn btn-primary" href="/console/sign-price?changeId=${encodeURIComponent(c.changeId)}">Sign</a></td></tr>`
     )
     .join("");
   return `<h1 style="margin-top:26px">Price changes awaiting your signature${count}</h1>
@@ -418,7 +418,7 @@ export function handleConsoleIndex(cfg: CoalitionConfig): ConsoleResult {
             : it.rentalCode
               ? `<code>${escapeHtmlAttribute(it.rentalCode)}</code>`
               : `<span class="muted">—</span>`;
-          return `<tr><td>${actionBadge(it.action, it.kind)} <span class="mono">${vm}</span></td><td>${code}</td><td><a class="btn btn-primary" href="/console/sign?slotId=${encodeURIComponent(it.slotId)}">Review &amp; sign</a></td></tr>`;
+          return `<tr><td>${actionBadge(it.action, it.kind)} <span class="mono">${vm}</span></td><td>${code}</td><td><a class="btn btn-primary" href="/console/sign?slotId=${encodeURIComponent(it.slotId)}">Sign</a></td></tr>`;
         })
         .join("")
     : `<tr><td colspan="3" class="muted">No actions awaiting your signature.</td></tr>`;
