@@ -48,10 +48,11 @@ adds.
 
 fh-toolkit also has commands to test your configuration settings without exposing your keys.
 
-Either way you can still deploy your own nodes: **Grants** (`/operator/grants` on Flux Hub)
-put a slot from your fleet under a free rental, no payment involved. A Supporter can grant
-only to their own wallet; an Operator can grant to anyone. A payment method (Stripe or
-FLUX) is what lets strangers buy from you.
+Either way you can still deploy your own nodes: **Coupons** (`/operator/grants` on Flux Hub;
+a Supporter sees it as **Claim a node**) puts a slot from your fleet under a free rental, no
+payment involved. A Supporter can claim only for their own wallet; an Operator can issue
+free-node links and coupon codes to anyone. A payment method (Stripe or FLUX) is what lets
+strangers buy from you. See [Coupons and Loans](coupons-and-loans.md).
 
 ## What you run
 
