@@ -14,7 +14,7 @@ const insecureAgent = new https.Agent({ rejectUnauthorized: false });
  * protocol/src/messages.ts for what may not: a tag read back FROM the hypervisor is the VM's own
  * state and may gate; the same string arriving on a job never may.
  */
-export type Vm = { name?: string; status?: string; tags?: string; vmid?: number | string; netin?: number };
+export type Vm = { name?: string; status?: string; tags?: string; vmid?: number | string; netin?: number; uptime?: number };
 
 /** One owned VM as the agent sees it locally: its reported status, and its own tag chips. */
 export type OwnedVm = {
@@ -279,4 +279,54 @@ export function ownedVmsForNode(
         }
       : { vmName, nodeName, status: "missing", tags: [], vmid: null, netIn: null };
   });
+}
+
+/**
+ * Hard-stop a VM (`POST /nodes/{node}/qemu/{vmid}/status/stop`, `VM.PowerMgmt`) and return the
+ * task's UPID. Used only by the teardown of a FRESH VM (`fresh-vm-stop.ts`).
+ */
+export function stopVmNow(cfg: AgentConfig, nodeName: string, vmid: number): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const url = new URL(
+      `${cfg.proxmox.url}/api2/json/nodes/${encodeURIComponent(nodeName)}/qemu/${vmid}/status/stop`
+    );
+    const r = https.request(
+      url,
+      {
+        method: "POST",
+        agent: insecureAgent,
+        headers: {
+          Authorization: `PVEAPIToken=${cfg.proxmox.tokenId}=${cfg.proxmox.tokenSecret}`,
+          "Content-Length": 0,
+        },
+      },
+      (res) => {
+        let data = "";
+        res.on("data", (c) => (data += c));
+        res.on("end", () => {
+          if (res.statusCode && res.statusCode >= 400) {
+            return reject(new Error(`proxmox ${res.statusCode}: ${data.trim().slice(0, 300)}`));
+          }
+          try {
+            const upid = JSON.parse(data).data;
+            if (typeof upid !== "string") return reject(new Error("proxmox stop: no task id"));
+            resolve(upid);
+          } catch (e) {
+            reject(e as Error);
+          }
+        });
+      }
+    );
+    r.on("error", reject);
+    r.end();
+  });
+}
+
+/** A Proxmox task's state (`GET /nodes/{node}/tasks/{upid}/status`): running, or stopped with its exit status. */
+export async function getTaskStatus(
+  cfg: AgentConfig,
+  nodeName: string,
+  upid: string
+): Promise<{ status?: string; exitstatus?: string }> {
+  return getJson(cfg, `/api2/json/nodes/${encodeURIComponent(nodeName)}/tasks/${encodeURIComponent(upid)}/status`);
 }

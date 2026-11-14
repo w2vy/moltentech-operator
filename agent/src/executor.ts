@@ -10,6 +10,7 @@ import { reloadInventory } from "./config";
 import { checkOwnerAuth } from "./owner-auth";
 import { allocateVmId, VMID_MIN, VMID_MAX } from "./vmid";
 import { getClusterVmIds, getQemuList, setVmName } from "./health";
+import { freshStopDeps, hardStopIfFresh, type FreshStopDeps } from "./fresh-vm-stop";
 import { existingVmFence, existingVmFor, planRename, toListing } from "./existing-vm";
 import { ensureDatedIso } from "./iso-name";
 import type { VmListing } from "./existing-vm";
@@ -445,12 +446,17 @@ export function amFailure(r: AmResult, context?: string): string {
  * routing it through `withOwnerAuthGate` would make it look like one.
  *
  * `not found` counts as success, so a repeat is harmless and the caller needs no state.
+ *
+ * A VM only minutes old is hard-stopped first (`fresh-vm-stop.ts`): it has no FluxOS to give
+ * a graceful shutdown to, so arcane-mage's graceful step would only fail or wait.
  */
 export async function deprovisionVm(
   vmName: string,
   nodeName: string,
-  cfg: AgentConfig
+  cfg: AgentConfig,
+  fresh: FreshStopDeps = freshStopDeps(cfg)
 ): Promise<ExecResult> {
+  const note = await hardStopIfFresh(vmName, nodeName, fresh);
   const r = await runArcaneMage(
     ["deprovision", "--json", "--force", "--vm-name", vmName, "--node", nodeName],
     cfg,
@@ -459,7 +465,7 @@ export async function deprovisionVm(
   const ok = r.json?.ok === true || !!r.json?.error?.includes("not found");
   return {
     ok,
-    message: ok ? clipMessage((r.stdout + "\n" + r.stderr).trim()) : amFailure(r),
+    message: (note ? note + "\n" : "") + (ok ? clipMessage((r.stdout + "\n" + r.stderr).trim()) : amFailure(r)),
     failureClass: ok ? undefined : classifyAmFailure(r),
   };
 }
