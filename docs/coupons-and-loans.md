@@ -72,8 +72,8 @@ when it ends unpaid. **Withdraw** stops new uses; rentals already made keep thei
 ### What you need
 
 - Card coupons: Coalition **0.9.0** or later; the after-period price change needs **0.10.0** and
-  agent **0.11.83**. With an older Coalition the code box is hidden on card checkout (FLUX still
-  works).
+  agent **0.11.83**. With an older Coalition, a card checkout with a code is refused with a
+  message (the use is given back), never charged full price. FLUX coupons need no Coalition.
 - A Stripe promotion code created in your Stripe dashboard is a different thing: those are not
   coupons in Flux Hub, and a Flux Hub coupon creates nothing in your Stripe account.
 
