@@ -240,7 +240,10 @@ export function createServer(stripe: StripeLike | null, cfg: CoalitionConfig): h
           (url === "/console" || url === "/console/sign" || url === "/console/sign-status" ||
             url === "/console/sign-price" || url === "/console/price-status")) ||
         (method === "POST" && (url === "/console/authorize" || url === "/console/authorize-price"));
-      if (cfg.sessionSecret && gated && !verifySession(cfg.sessionSecret, req.headers)) {
+      // The session (when login is on) also carries the login wallet, which the sign
+      // pages use to show only that wallet's button.
+      const consoleSession = cfg.sessionSecret ? verifySession(cfg.sessionSecret, req.headers) : null;
+      if (cfg.sessionSecret && gated && !consoleSession) {
         // HTML pages → bounce to the login page; JSON/submit → 401.
         if (method === "GET" && (url === "/console" || url === "/console/sign" || url === "/console/sign-price")) {
           res.writeHead(302, { location: "/console/login" });
@@ -254,7 +257,7 @@ export function createServer(stripe: StripeLike | null, cfg: CoalitionConfig): h
         return sendResult(handleConsoleIndex(cfg));
       }
       if (method === "GET" && url === "/console/sign") {
-        return sendResult(handleConsoleSign(cfg, query, reqOrigin));
+        return sendResult(handleConsoleSign(cfg, query, reqOrigin, consoleSession?.wallet));
       }
       // Sign page polls this to detect the Zelcore-callback (server-side) success.
       if (method === "GET" && url === "/console/sign-status") {
@@ -265,7 +268,7 @@ export function createServer(stripe: StripeLike | null, cfg: CoalitionConfig): h
         return sendResult(handleConsoleAuthorize(cfg, new URLSearchParams(raw.toString())));
       }
       if (method === "GET" && url === "/console/sign-price") {
-        return sendResult(handleConsoleSignPrice(cfg, query, reqOrigin));
+        return sendResult(handleConsoleSignPrice(cfg, query, reqOrigin, consoleSession?.wallet));
       }
       if (method === "GET" && url === "/console/price-status") {
         return sendResult(handlePriceStatus(query));

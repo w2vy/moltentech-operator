@@ -52,7 +52,7 @@ import {
   CONSOLE_THEME_CSS,
   CONSOLE_HEAD_ICONS,
 } from "@moltentech/protocol/sign-launcher";
-import { mintSessionCookie, newNonce } from "./session";
+import { mintSessionCookie, newNonce, parseLoginWallet, type LoginWallet } from "./session";
 import { readManifest, type CoalitionConfig } from "./config";
 
 export type ConsoleResult = { status: number; contentType: string; body: string; headers?: Record<string, string> };
@@ -462,8 +462,43 @@ ${maturingNodesSection()}
   );
 }
 
+/**
+ * Show only the wallet the console login was signed with. Every console signature comes
+ * from the same owner address, so offering the other app is noise. It hides the other
+ * wallet's card in the shared sign launcher and adds a "Use … instead" link to bring it
+ * back. SSP not detected → Zelcore is revealed. No login wallet → nothing (both show).
+ * Display-only: verification is unchanged.
+ */
+export function loginWalletFilter(wallet: LoginWallet | undefined): string {
+  if (!wallet) return "";
+  const other = wallet === "ssp" ? "Use Zelcore instead" : "Use SSP Wallet instead";
+  return `<script>
+      (function(){
+        var keep=${JSON.stringify(wallet)};
+        var sspBtn=document.getElementById('ssp-btn'), zelBtn=document.querySelector('.btn-zelcore');
+        var sspCard=sspBtn&&sspBtn.closest('.wallet-section'), zelCard=zelBtn&&zelBtn.closest('.wallet-section');
+        var hide=keep==='ssp'?zelCard:sspCard, shown=keep==='ssp'?sspCard:zelCard;
+        if(!hide||!shown) return;
+        hide.style.display='none';
+        var a=document.createElement('a'); a.href='#'; a.className='muted'; a.id='other-wallet';
+        a.style.cssText='display:block;margin-top:10px;font-size:12px';
+        a.textContent=${JSON.stringify(other)};
+        function reveal(){ hide.style.display=''; a.style.display='none'; }
+        a.addEventListener('click', function(e){ e.preventDefault(); reveal(); });
+        shown.appendChild(a);
+        // SSP login but no extension on this browser: put the Zelcore fallback on screen.
+        if(keep==='ssp') window.addEventListener('load', function(){ if(typeof window.ssp==='undefined') reveal(); });
+      })();
+    </script>`;
+}
+
 /** GET /console/sign?slotId=… — build the claim + render the WS1 launcher + a submit form. */
-export function handleConsoleSign(cfg: CoalitionConfig, query: URLSearchParams, origin?: string): ConsoleResult {
+export function handleConsoleSign(
+  cfg: CoalitionConfig,
+  query: URLSearchParams,
+  origin?: string,
+  wallet?: LoginWallet
+): ConsoleResult {
   const slotId = query.get("slotId") ?? "";
   const item = pending.get(slotId);
   if (!item) return html(404, "<p>Unknown or already-processed action.</p>");
@@ -511,6 +546,7 @@ export function handleConsoleSign(cfg: CoalitionConfig, query: URLSearchParams, 
       </details>
       <p style="margin-top:4px"><a href="/console">&larr; Back to console</a></p>
     </div>
+    ${loginWalletFilter(wallet)}
     <script>
       var claimToken = ${JSON.stringify(claimToken)};
       var expiresAt = ${JSON.stringify(claim.expiresAt)};
@@ -708,10 +744,11 @@ export function handleLoginPage(cfg: CoalitionConfig, origin?: string): ConsoleR
       var challengeId = ${JSON.stringify(id)};
       var done = false, pollT = null;
       function goConsole(){ if(done) return; done=true; if(pollT){clearInterval(pollT);pollT=null;} location.href='/console'; }
-      async function loginSig(){
+      async function loginSig(wallet){
         var box=document.getElementById('submit-sig'); var sig=(box.value||'').trim(); if(!sig) return;
         var err=document.getElementById('login-err'); if(err) err.style.display='none';
         var body=new URLSearchParams({ challenge:challengeId, signature:sig });
+        if(wallet) body.set('wallet', wallet);
         try{
           var r=await fetch('/console/login',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:body.toString()});
           if(r.ok){ goConsole(); } else if(err){ var t=await r.json().catch(function(){return{};}); err.textContent=(t.error||'Sign-in failed'); err.style.display='block'; }
@@ -721,7 +758,7 @@ export function handleLoginPage(cfg: CoalitionConfig, origin?: string): ConsoleR
       // SSP writes its sig into #sig-output → auto-submit.
       (function(){ var src=document.getElementById('sig-output'), dst=document.getElementById('submit-sig');
         if(!src||!dst) return;
-        new MutationObserver(function(){ var v=(src.textContent||'').trim(); if(v && !dst.value){ dst.value=v; loginSig(); } })
+        new MutationObserver(function(){ var v=(src.textContent||'').trim(); if(v && !dst.value){ dst.value=v; loginSig('ssp'); } })
           .observe(src,{childList:true,characterData:true,subtree:true}); })();
       // Poll for the Zelcore-callback path (the poll response mints the cookie once authenticated).
       pollT=setInterval(async function(){
@@ -748,7 +785,8 @@ export function handleLoginSubmit(cfg: CoalitionConfig, params: URLSearchParams)
     status: 200,
     contentType: "application/json",
     body: JSON.stringify({ ok: true }),
-    headers: { "Set-Cookie": mintSessionCookie(secret, owner, cfg.sessionTtlMs) },
+    // `wallet` is "ssp" from the SSP auto-submit, absent for a paste. Display-only.
+    headers: { "Set-Cookie": mintSessionCookie(secret, owner, cfg.sessionTtlMs, parseLoginWallet(params.get("wallet"))) },
   };
 }
 
@@ -777,7 +815,8 @@ export function handleLoginStatus(cfg: CoalitionConfig, query: URLSearchParams):
       status: 200,
       contentType: "application/json",
       body: JSON.stringify({ status: "authenticated" }),
-      headers: { "Set-Cookie": mintSessionCookie(secret, c.authedAddr, cfg.sessionTtlMs) },
+      // Only the Zelcore callback sets `authedAddr`, so this login was a Zelcore one.
+      headers: { "Set-Cookie": mintSessionCookie(secret, c.authedAddr, cfg.sessionTtlMs, "zelcore") },
     };
   }
   return json(200, { status: "pending" });
@@ -809,7 +848,12 @@ function verifyAndQueuePrice(
 }
 
 /** GET /console/sign-price?changeId=… — the wallet launcher for one price change. */
-export function handleConsoleSignPrice(cfg: CoalitionConfig, query: URLSearchParams, origin?: string): ConsoleResult {
+export function handleConsoleSignPrice(
+  cfg: CoalitionConfig,
+  query: URLSearchParams,
+  origin?: string,
+  wallet?: LoginWallet
+): ConsoleResult {
   if (!cfg.sessionSecret) return html(403, "<p>Price changes need the console login (set SESSION_SECRET).</p>");
   const changeId = query.get("changeId") ?? "";
   const claim = pendingPrices.get(changeId);
@@ -844,6 +888,7 @@ export function handleConsoleSignPrice(cfg: CoalitionConfig, query: URLSearchPar
       </details>
       <p style="margin-top:4px"><a href="/console">&larr; Back to console</a></p>
     </div>
+    ${loginWalletFilter(wallet)}
     <script>
       var changeId = ${JSON.stringify(changeId)};
       var done = false, pollT = null;
