@@ -16,9 +16,24 @@ export function newNonce(): string {
   return randomBytes(16).toString("hex");
 }
 
+/**
+ * The wallet app the login was signed with. Display-only: the sign pages show only that
+ * wallet's button (every console signature comes from the same owner address). Unset for
+ * a pasted-signature login or a cookie minted before this existed — those show both.
+ */
+export type LoginWallet = "ssp" | "zelcore";
+
+/** Narrow an untrusted value to a `LoginWallet`, or undefined. */
+export function parseLoginWallet(value: unknown): LoginWallet | undefined {
+  return value === "ssp" || value === "zelcore" ? value : undefined;
+}
+
 /** Mint a `Set-Cookie` value binding `addr` for `ttlMs`, HMAC-signed with `secret`. */
-export function mintSessionCookie(secret: string, addr: string, ttlMs: number): string {
-  const payload = Buffer.from(JSON.stringify({ addr, exp: Date.now() + ttlMs }), "utf8").toString("base64url");
+export function mintSessionCookie(secret: string, addr: string, ttlMs: number, wallet?: LoginWallet): string {
+  const payload = Buffer.from(
+    JSON.stringify({ addr, exp: Date.now() + ttlMs, ...(wallet ? { wallet } : {}) }),
+    "utf8"
+  ).toString("base64url");
   const mac = createHmac("sha256", secret).update(payload).digest("hex");
   const maxAge = Math.floor(ttlMs / 1000);
   // Path=/console so it only rides console requests; Secure requires HTTPS (Flux
@@ -26,8 +41,11 @@ export function mintSessionCookie(secret: string, addr: string, ttlMs: number): 
   return `${SESSION_COOKIE}=${payload}.${mac}; HttpOnly; Secure; SameSite=Strict; Path=/console; Max-Age=${maxAge}`;
 }
 
-/** Verify the session cookie from request headers; returns the bound addr or null. */
-export function verifySession(secret: string, headers: IncomingHttpHeaders): { addr: string } | null {
+/** Verify the session cookie from request headers; returns the bound addr (+ login wallet) or null. */
+export function verifySession(
+  secret: string,
+  headers: IncomingHttpHeaders
+): { addr: string; wallet?: LoginWallet } | null {
   const raw = readCookie(headers, SESSION_COOKIE);
   if (!raw) return null;
   const dot = raw.lastIndexOf(".");
@@ -39,9 +57,14 @@ export function verifySession(secret: string, headers: IncomingHttpHeaders): { a
   const b = Buffer.from(expected);
   if (a.length !== b.length || !timingSafeEqual(a, b)) return null;
   try {
-    const { addr, exp } = JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as { addr: string; exp: number };
+    const { addr, exp, wallet } = JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as {
+      addr: string;
+      exp: number;
+      wallet?: unknown;
+    };
     if (typeof exp !== "number" || exp <= Date.now() || typeof addr !== "string") return null;
-    return { addr };
+    const w = parseLoginWallet(wallet);
+    return w ? { addr, wallet: w } : { addr };
   } catch {
     return null;
   }
