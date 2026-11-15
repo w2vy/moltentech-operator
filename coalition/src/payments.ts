@@ -117,6 +117,7 @@ export async function handleManage(
     await stripe.subscriptions.cancel(req.stripeSubscriptionId);
     return { schemaVersion: SCHEMA_VERSION, ok: true };
   }
+  if (req.action === "cancel_item") return cancelItem(stripe, req.stripeSubscriptionId, req.stripeSubscriptionItemId!);
   if (req.action === "cancel_at_period_end") {
     // A coupon that says "then: end the rental" (H-D1, tom 2026-11-13): the hub asks during the
     // last coupon period, so the renewal at the boundary never charges. The operator already
@@ -127,11 +128,94 @@ export async function handleManage(
   }
   const sub = await stripe.subscriptions.retrieve(req.stripeSubscriptionId);
   const customer = typeof sub.customer === "string" ? sub.customer : sub.customer.id;
+  const configuration = await portalConfiguration(stripe);
   const portal = await stripe.billingPortal.sessions.create({
     customer,
     return_url: req.returnUrl,
+    ...(configuration ? { configuration } : {}),
   });
   return { schemaVersion: SCHEMA_VERSION, ok: true, portalUrl: portal.url };
+}
+
+const stripeCode = (e: unknown) => (e as { code?: string; raw?: { code?: string } })?.code ?? (e as any)?.raw?.code;
+
+/**
+ * End ONE node on a bill (customer_subscription_plan.md phase 3b, D3): remove its subscription
+ * item with no proration — no credit, the same as a cancel today. Stripe refuses to remove a
+ * subscription's last item (tested 11-15), so the bill's only node cancels the subscription.
+ *
+ * Idempotent: an item already gone (a retry, or the operator removed it in the Dashboard first)
+ * answers ok. The item must belong to the subscription named — the hub's two ids must agree.
+ */
+async function cancelItem(stripe: StripeLike, subId: string, itemId: string): Promise<ManageResponse> {
+  const ok = (subscriptionCancelled: boolean): ManageResponse => ({ schemaVersion: SCHEMA_VERSION, ok: true, subscriptionCancelled });
+  const sub = (await stripe.subscriptions.retrieve(subId)) as Record<string, any>;
+  if (sub.status === "canceled") return ok(true);
+  const items = await stripe.subscriptionItems.list({ subscription: subId, limit: 100 });
+  const ids = items.data.map((i) => String(i.id));
+  if (!ids.includes(itemId)) {
+    // Not on this subscription. Gone already is fine; on ANOTHER subscription is a hub bug.
+    let elsewhere: string | undefined;
+    try {
+      const it = (await stripe.subscriptionItems.retrieve(itemId)) as Record<string, any>;
+      elsewhere = typeof it.subscription === "string" ? it.subscription : it.subscription?.id;
+    } catch (e) {
+      if (stripeCode(e) !== "resource_missing") throw e;
+    }
+    if (elsewhere && elsewhere !== subId) throw new Error(`${itemId} is on ${elsewhere}, not ${subId}`);
+    return ok(false);
+  }
+  if (ids.length === 1) {
+    await stripe.subscriptions.cancel(subId);
+    console.log(`[manage] ${subId}: last node ${itemId} ended — subscription cancelled`);
+    return ok(true);
+  }
+  await stripe.subscriptionItems.del(itemId, { proration_behavior: "none" });
+  console.log(`[manage] ${subId}: node ${itemId} removed (${ids.length - 1} left)`);
+  return ok(false);
+}
+
+/** Marks the portal configuration this Coalition made, so it is found again rather than re-made. */
+export const PORTAL_TAG = "card-invoices-v1";
+let portalConfigId: string | null | undefined; // undefined = not looked up yet; null = could not
+
+/**
+ * The billing portal the customer gets: update the card and see invoices — nothing else
+ * (customer_subscription_plan.md D4, gap G2). Stripe's default portal can cancel, and a cancel
+ * there ends EVERY node on a shared bill; the hub is where a customer ends one node.
+ *
+ * Found by its `mtPortal` metadata among the account's configurations, else created (the
+ * "Recurring subscriptions" restricted key may do both — tested 11-15). Cached for the process.
+ * Never fatal: on a Stripe error the portal opens with the account default, as before 0.13.0,
+ * and the next request tries again.
+ */
+export async function portalConfiguration(stripe: StripeLike): Promise<string | undefined> {
+  if (portalConfigId) return portalConfigId;
+  try {
+    const list = await stripe.billingPortal.configurations.list({ active: true, limit: 100 });
+    const found = list.data.find((c) => (c.metadata as Record<string, string> | undefined)?.mtPortal === PORTAL_TAG);
+    if (found) return (portalConfigId = found.id);
+    const made = await stripe.billingPortal.configurations.create({
+      business_profile: { headline: "Card and invoices. End a node on Flux Hub." }, // ≤ 60 chars
+      features: {
+        payment_method_update: { enabled: true },
+        invoice_history: { enabled: true },
+        subscription_cancel: { enabled: false },
+        subscription_update: { enabled: false },
+        customer_update: { enabled: false },
+      },
+      metadata: { mtPortal: PORTAL_TAG },
+    });
+    console.log(`[manage] billing portal configuration ${made.id} created (card + invoices only)`);
+    return (portalConfigId = made.id);
+  } catch (e) {
+    console.error(`[manage] could not set up the card + invoices portal (${(e as Error).message}) — using the account default, which can cancel the whole bill`);
+    return undefined;
+  }
+}
+/** Tests only. */
+export function resetPortalConfigCache(): void {
+  portalConfigId = undefined;
 }
 
 /**
@@ -208,6 +292,45 @@ export function invoiceItemLines(
 export function onlyProrations(o: Record<string, any>): boolean {
   const lines = (o.lines?.data ?? []) as Record<string, any>[];
   return lines.length > 0 && lines.every((l) => l.parent?.subscription_item_details?.proration === true || l.proration === true);
+}
+
+/**
+ * Nodes' lines added to or removed from a subscription, from `customer.subscription.updated`
+ * (customer_subscription_plan.md phase 3b). Stripe puts the full OLD item list in
+ * `previous_attributes.items` whenever any item field changes — including every renewal, which
+ * only moves the periods — so the ids are compared, not the presence of the key (tested 11-15).
+ *
+ * Lines carrying `mtIntentId` were made by `/add-item`; `subscription.item_added` already told
+ * MT, so they are not reported as added. Removed lines carry their old period end: the rental
+ * runs to it. Null when no line came or went.
+ */
+export function itemsChangedEvent(event: StripeEvent, providerSlug: string): PaymentEvent | null {
+  if (event.type !== "customer.subscription.updated") return null;
+  const prev = ((event as { data: { previous_attributes?: Record<string, any> } }).data.previous_attributes ?? {}) as Record<string, any>;
+  if (!prev.items || !Array.isArray(prev.items.data)) return null;
+  const o = event.data.object as Record<string, any>;
+  const before = prev.items.data as Record<string, any>[];
+  const now = (o.items?.data ?? []) as Record<string, any>[];
+  const nowIds = new Set(now.map((i) => String(i.id)));
+  const beforeIds = new Set(before.map((i) => String(i.id)));
+  const iso = (s?: number) => (s ? new Date(s * 1000).toISOString() : undefined);
+  const removed = before
+    .filter((i) => !nowIds.has(String(i.id)))
+    .map((i) => ({ stripeSubscriptionItemId: String(i.id), ...(i.current_period_end ? { periodEnd: iso(i.current_period_end) } : {}) }));
+  const added = now
+    .filter((i) => !beforeIds.has(String(i.id)) && !(i.metadata as Record<string, string> | undefined)?.mtIntentId)
+    .map((i) => ({ stripeSubscriptionItemId: String(i.id), ...(typeof i.price?.unit_amount === "number" ? { amountCents: i.price.unit_amount } : {}) }));
+  if (removed.length === 0 && added.length === 0) return null;
+  return {
+    schemaVersion: SCHEMA_VERSION,
+    providerSlug,
+    stripeEventId: `${event.id}:items`,
+    occurredAt: new Date().toISOString(),
+    type: "subscription.items_changed",
+    stripeSubscriptionId: String(o.id),
+    removed,
+    added,
+  } as PaymentEvent;
 }
 
 /** Map a Stripe event to a normalized PaymentEvent, or null to ignore. */
@@ -463,6 +586,8 @@ const BENIGN_ON_ANY_EVENT: ReadonlySet<string> = new Set(["no_subscription_ref"]
 const BENIGN_BY_EVENT: Record<string, ReadonlySet<string>> = {
   "subscription.cancelled": new Set(["unknown_subscription"]),
   "subscription.updated": new Set(["unknown_subscription"]),
+  // A bill the hub never knew (made in the Dashboard): nothing on it is a node.
+  "subscription.items_changed": new Set(["unknown_subscription"]),
 };
 export function isBenignRefusal(eventType: string, reason: string | undefined): boolean {
   if (reason === undefined) return false;
@@ -493,8 +618,25 @@ export async function handleWebhook(
   } catch {
     return 400;
   }
+  // A line added or removed rides on the same `updated` event as a cancel being scheduled, so it
+  // goes first and on its own; either failing makes Stripe re-deliver both (MT dedupes).
+  const items = itemsChangedEvent(event, cfg.providerSlug);
+  if (items) {
+    const status = await relayChecked(stripe, event, items, cfg, fetchImpl);
+    if (status !== 200) return status;
+  }
   const ev = normalizeEvent(event, cfg.providerSlug);
   if (!ev) return 200; // nothing to relay
+  return relayChecked(stripe, event, ev, cfg, fetchImpl);
+}
+
+async function relayChecked(
+  stripe: StripeLike,
+  event: StripeEvent,
+  ev: PaymentEvent,
+  cfg: CoalitionConfig,
+  fetchImpl: typeof fetch
+): Promise<number> {
 
   // A mapping that fails its own schema is a bug in THIS file, and the last one cost a paid
   // renewal. It used to ack (200) on the reasoning that re-delivery cannot fix a code defect —

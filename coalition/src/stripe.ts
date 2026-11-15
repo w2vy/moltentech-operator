@@ -13,7 +13,13 @@ export type StripeEvent = {
 
 export interface StripeLike {
   checkout: { sessions: { create(args: Record<string, unknown>): Promise<{ url: string | null }> } };
-  billingPortal: { sessions: { create(args: Record<string, unknown>): Promise<{ url: string }> } };
+  billingPortal: {
+    sessions: { create(args: Record<string, unknown>): Promise<{ url: string }> };
+    configurations: {
+      list(args: Record<string, unknown>): Promise<{ data: { id: string; metadata?: unknown }[] }>;
+      create(args: Record<string, unknown>): Promise<{ id: string }>;
+    };
+  };
   subscriptions: {
     retrieve(
       id: string,
@@ -28,6 +34,7 @@ export interface StripeLike {
     create(args: Record<string, unknown>, opts?: { idempotencyKey?: string }): Promise<Record<string, any>>;
     list(args: Record<string, unknown>): Promise<{ data: Record<string, any>[]; has_more?: boolean }>;
     del(id: string, args?: Record<string, unknown>): Promise<unknown>;
+    retrieve(id: string): Promise<Record<string, any>>;
   };
   prices: {
     list(args: { lookup_keys: string[]; active?: boolean; limit?: number }): Promise<{ data: { id: string; product?: string | { id: string } }[] }>;
