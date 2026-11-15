@@ -204,6 +204,12 @@ export function invoiceItemLines(
   };
 }
 
+/** True when every line on the invoice is a proration (and there is at least one). */
+export function onlyProrations(o: Record<string, any>): boolean {
+  const lines = (o.lines?.data ?? []) as Record<string, any>[];
+  return lines.length > 0 && lines.every((l) => l.parent?.subscription_item_details?.proration === true || l.proration === true);
+}
+
 /** Map a Stripe event to a normalized PaymentEvent, or null to ignore. */
 export function normalizeEvent(event: StripeEvent, providerSlug: string): PaymentEvent | null {
   const o = event.data.object as Record<string, any>;
@@ -236,6 +242,11 @@ export function normalizeEvent(event: StripeEvent, providerSlug: string): Paymen
     }
     case "invoice.payment_succeeded": {
       if (o.billing_reason === "subscription_create") return null; // first/$0 trial invoice — created handles it
+      // A node added to the bill (`/add-item`) is charged on an invoice of PRORATION lines only.
+      // `subscription.item_added` already told MT; relaying it as a renewal would move the other
+      // nodes' periods and record the part-month as their charge (customer_subscription_plan.md G4).
+      // An ended trial (also `subscription_update`) carries a normal line and still relays.
+      if (o.billing_reason === "subscription_update" && onlyProrations(o)) return null;
       const line = o.lines?.data?.[0]?.period;
       return {
         ...base,

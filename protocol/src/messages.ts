@@ -78,6 +78,59 @@ export const CheckoutInitResponse = Envelope.extend({
 export type CheckoutInitResponse = z.infer<typeof CheckoutInitResponse>;
 
 // ───────────────────────────────────────────────────────────────────────────
+// 1b. add-item  —  MT → operator Coalition (customer_subscription_plan.md phase 3)
+//     Add one more node to a bill the customer already has with this operator: a new
+//     subscription item, the rest of this period charged now on the saved card. No Stripe
+//     page, no trial (D1). The Coalition then relays `subscription.item_added` so MT mints
+//     the rental exactly as for `subscription.created` (D11), and answers with its code.
+// ───────────────────────────────────────────────────────────────────────────
+export const AddItemRequest = Envelope.extend({
+  providerSlug: ProviderSlug,
+  tier: TierKey,
+  /** The bill the customer picked (D10). The Coalition checks it is theirs and open. */
+  stripeSubscriptionId: z.string().regex(/^sub_[A-Za-z0-9]+$/),
+  customer: z.object({
+    mtCustomerId: z.string().min(1),
+    email: z.string().email(),
+    /** The hub's CheckoutIntent for this node; echoed on `subscription.item_added`. */
+    mtIntentId: z.string().min(1),
+    /** Must own `stripeSubscriptionId`. */
+    stripeCustomerId: z.string().regex(/^cus_[A-Za-z0-9]+$/),
+  }),
+  idempotencyKey: z.string().min(1),
+  /** An operator coupon, re-verified by the Coalition exactly as on checkout (option H). */
+  coupon: SignedCoupon.optional(),
+});
+export type AddItemRequest = z.infer<typeof AddItemRequest>;
+
+/**
+ * Why a node was NOT added. `not_eligible`: the bill is not this customer's, not active, full
+ * (100 items) or carries a bill-wide discount. `card_failed` / `action_required`: the saved card
+ * was declined or needs 3-D Secure — nothing was charged, the customer can use a separate bill.
+ * `refused`: the card WAS charged but MT would not take the node (D12) — the item is removed and
+ * the charge must be refunded by hand.
+ */
+export const AddItemRefusal = z.enum(["not_eligible", "card_failed", "action_required", "refused"]);
+export type AddItemRefusal = z.infer<typeof AddItemRefusal>;
+
+export const AddItemResponse = Envelope.extend({
+  added: z.boolean(),
+  reason: AddItemRefusal.optional(),
+  /** Plain words for the customer when not added. */
+  message: z.string().optional(),
+  stripeSubscriptionItemId: z.string().min(1).optional(),
+  /** The rental MT minted (when added). */
+  rentalCode: z.string().min(1).optional(),
+  /** Charged now: the rest of this period. Also set on `refused` (what to refund). */
+  chargedCents: z.number().int().nonnegative().optional(),
+  /** The node's monthly price from the next renewal. */
+  priceCents: z.number().int().nonnegative().optional(),
+  /** The bill's renewal date. */
+  currentPeriodEnd: Timestamp.optional(),
+});
+export type AddItemResponse = z.infer<typeof AddItemResponse>;
+
+// ───────────────────────────────────────────────────────────────────────────
 // 2. payment-event  —  operator Coalition → MT
 //    Normalized Stripe webhook relayed outbound. The Coalition does NOT 200-ack
 //    Stripe until MT accepts this, so Stripe's retry is the durable queue.
@@ -117,6 +170,24 @@ export const PaymentEvent = z.discriminatedUnion("type", [
     currency: Currency,
     /** Set while in the free trial; absent once converted. */
     trialEndsAt: Timestamp.optional(),
+    currentPeriodStart: Timestamp,
+    currentPeriodEnd: Timestamp,
+  }),
+  // One more node added to an existing subscription (`/add-item`, phase 3). Same fields as
+  // `subscription.created` so MT mints the rental the same way (D11); the item id is required.
+  // No trial: `amountPaidCents` is what was charged now for the rest of the period.
+  PaymentEventBase.extend({
+    type: z.literal("subscription.item_added"),
+    stripeSubscriptionId: z.string().min(1),
+    stripeSubscriptionItemId: z.string().min(1),
+    stripeCustomerId: z.string().min(1),
+    mtCustomerId: z.string().min(1),
+    mtIntentId: z.string().min(1),
+    email: z.string().email(),
+    tier: TierKey,
+    priceCents: z.number().int().nonnegative(),
+    amountPaidCents: z.number().int().nonnegative(),
+    currency: Currency,
     currentPeriodStart: Timestamp,
     currentPeriodEnd: Timestamp,
   }),
