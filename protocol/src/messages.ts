@@ -240,6 +240,18 @@ export const PaymentEvent = z.discriminatedUnion("type", [
     /** When the cancel takes effect. Absent when `cancelAtPeriodEnd` is false. */
     cancelsAt: Timestamp.optional(),
   }),
+  // Nodes' lines added to or removed from a subscription OUTSIDE the hub's own calls — the
+  // operator editing the bill in their Stripe Dashboard, or the echo of the hub's `cancel_item`
+  // (customer_subscription_plan.md phase 3b). Coalition 0.13.0+.
+  //   removed: that rental stops renewing; it runs to `periodEnd` (what was paid for), then ends.
+  //   added:   a line the hub did not create (no `mtIntentId` on it) — not a node; MT alerts the
+  //            operator. Lines `/add-item` creates are left out: `subscription.item_added` covers them.
+  PaymentEventBase.extend({
+    type: z.literal("subscription.items_changed"),
+    stripeSubscriptionId: z.string().min(1),
+    removed: z.array(z.object({ stripeSubscriptionItemId: z.string().min(1), periodEnd: Timestamp.optional() })),
+    added: z.array(z.object({ stripeSubscriptionItemId: z.string().min(1), amountCents: z.number().int().optional() })),
+  }),
   // Operator-initiated refund/dispute reflected into MT's ledger (informational).
   PaymentEventBase.extend({
     type: z.literal("charge.refunded"),
@@ -891,10 +903,21 @@ export const ManageRequest = Envelope.extend({
    * charge after it — how the hub ends a coupon that says "then: end the rental". An older
    * Coalition rejects it as invalid; the hub checks the Coalition version first.
    */
-  action: z.enum(["open_portal", "cancel", "cancel_at_period_end"]),
+  /**
+   * `cancel_item` (Coalition 0.13.0+, customer_subscription_plan.md phase 3b): end ONE node on a
+   * shared bill — its subscription item is removed, no proration (D3). When it is the bill's only
+   * node the whole subscription is cancelled instead (Stripe refuses to remove the last item);
+   * `ManageResponse.subscriptionCancelled` says which happened.
+   */
+  action: z.enum(["open_portal", "cancel", "cancel_at_period_end", "cancel_item"]),
   stripeSubscriptionId: z.string().min(1),
+  /** The node's line (`si_…`). Required for `cancel_item`. */
+  stripeSubscriptionItemId: z.string().regex(/^si_[A-Za-z0-9]+$/).optional(),
   /** Where the billing portal returns the customer (for open_portal). */
   returnUrl: z.string().url().optional(),
+}).refine((r) => r.action !== "cancel_item" || !!r.stripeSubscriptionItemId, {
+  message: "cancel_item needs stripeSubscriptionItemId",
+  path: ["stripeSubscriptionItemId"],
 });
 export type ManageRequest = z.infer<typeof ManageRequest>;
 
@@ -902,6 +925,8 @@ export const ManageResponse = Envelope.extend({
   /** Present for open_portal; absent for a completed cancel. */
   portalUrl: z.string().url().optional(),
   ok: z.boolean(),
+  /** `cancel_item` only: true when the node was the bill's last, so the subscription was cancelled. */
+  subscriptionCancelled: z.boolean().optional(),
 });
 export type ManageResponse = z.infer<typeof ManageResponse>;
 

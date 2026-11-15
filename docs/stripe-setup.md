@@ -81,7 +81,9 @@ Select **Your account**. You will add **six** events. In the search box type
 - `customer.subscription.deleted`
 - `customer.subscription.updated` — this is how a customer's *cancel at period end* (the
   billing portal's default) reaches the hub as "cancels on <date>"; without it the rental
-  reads un-cancelled until the period actually ends.
+  reads un-cancelled until the period actually ends. Since Coalition 0.13.0 it also tells the
+  hub when you add or remove a node's line on a subscription in your Stripe Dashboard: a
+  removed line ends that rental at the end of its paid period.
 
 ![invoice.payment events](images/stripe/8_WH_InvoicePayment.png)
 
@@ -122,3 +124,13 @@ and endpoint mode agree (test with test, live with live). See
 [`fh-toolkit.md`](fh-toolkit.md) for what each `STRIPE_*` finding means. Then continue
 with **Step 4 — Deploy the Coalition** in
 [`operator-onboarding.md`](operator-onboarding.md).
+
+## Billing portal (Coalition 0.13.0+)
+
+Customers who open "Manage billing" on Flux Hub get a Stripe portal that can update their card
+and show invoices — nothing else. The Coalition creates this portal setting in your account the
+first time it is needed (it shows under **Settings → Billing → Customer portal** with
+`mtPortal: card-invoices-v1`). Cancelling is left out on purpose: one bill can carry several of
+a customer's nodes, and the customer ends a single node on Flux Hub. You keep full control in
+your Stripe Dashboard.
+
