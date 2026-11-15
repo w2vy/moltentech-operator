@@ -17,8 +17,9 @@ import { ensureTierPrice, type StripeLike } from "./stripe";
  * The hub calls this with TWO operator signatures: the price change the operator signed in
  * this console, and the coupon the rental started on. Both are checked against our own
  * `OWNER_ADDRESS`, and the new amount is re-derived from the signed coupon, so the hub alone
- * can neither raise a customer's price nor pick the number. Then the subscription's one item
- * gets the new price with no proration: the next invoice carries it (tested 2026-11-12).
+ * can neither raise a customer's price nor pick the number. Then the node's line gets the new
+ * price with no proration: the next invoice carries it (tested 2026-11-12). On a bill with several
+ * nodes the claim names the line (`stripeSubscriptionItemId`, Coalition 0.14.0+).
  */
 
 /** A correct "no" (bad signature, wrong amount, stale change): the hub must not retry it. */
@@ -28,7 +29,7 @@ const refuse = (reason: string): never => {
   throw new PriceChangeRefused(reason);
 };
 
-type SubItem = { id: string; price?: { unit_amount?: number | null; product?: string | { id: string } } };
+type SubItem = { id: string; metadata?: unknown; price?: { unit_amount?: number | null; product?: string | { id: string } } };
 
 export async function handlePriceChange(
   stripe: StripeLike,
@@ -60,16 +61,34 @@ export async function handlePriceChange(
 
   const sub = (await stripe.subscriptions.retrieve(c.stripeSubscriptionId)) as Record<string, any>;
   if (sub.status === "canceled" || sub.status === "incomplete_expired") refuse(`subscription is ${sub.status}`);
-  const md = (sub.metadata ?? {}) as Record<string, string>;
-  if (md[MD.name] !== c.couponCode) refuse(`subscription did not start on coupon ${c.couponCode}`);
+
+  // Which line, and whose facts. With an item id (Coalition 0.14.0+, customer_subscription_plan.md
+  // G1/G3) the node's own line is found by id and its coupon, tier and rental code are read off
+  // the LINE: on a shared bill the subscription's metadata describes only the first node. A line
+  // stamped before items carried them (Coalition < 0.11.0) is only trusted when it is the bill's
+  // only line, where the subscription's metadata is its own. Without an item id: the bill's one
+  // line, as before.
+  let item: SubItem;
+  let md: Record<string, string>;
+  if (c.stripeSubscriptionItemId) {
+    const lines = (await stripe.subscriptionItems.list({ subscription: c.stripeSubscriptionId, limit: 100 })).data as SubItem[];
+    const found = lines.find((i) => i.id === c.stripeSubscriptionItemId);
+    if (!found) return refuse(`${c.stripeSubscriptionItemId} is not on ${c.stripeSubscriptionId}`);
+    item = found;
+    const own = (found.metadata ?? {}) as Record<string, string>;
+    if (own[MD.name]) md = own;
+    else if (lines.length === 1) md = (sub.metadata ?? {}) as Record<string, string>;
+    else return refuse(`${found.id} carries no coupon`);
+  } else {
+    const items = (sub.items?.data ?? []) as SubItem[];
+    if (items.length !== 1) return refuse(`subscription has ${items.length} items, expected 1`);
+    item = items[0]!;
+    md = (sub.metadata ?? {}) as Record<string, string>;
+  }
+  if (md[MD.name] !== c.couponCode) refuse(`${c.stripeSubscriptionItemId ? "that line" : "subscription"} did not start on coupon ${c.couponCode}`);
   if (md.tier && md.tier !== c.tier) refuse(`subscription is for ${md.tier}, not ${c.tier}`);
   if (md.rentalCode && md.rentalCode !== c.rentalCode) refuse(`subscription is rental ${md.rentalCode}, not ${c.rentalCode}`);
 
-  // One item per subscription today. The per-customer subscription plan (one item per node)
-  // will pick the item by its rental code; until then, refuse rather than guess.
-  const items = (sub.items?.data ?? []) as SubItem[];
-  if (items.length !== 1) return refuse(`subscription has ${items.length} items, expected 1`);
-  const item = items[0]!;
   const current = item.price?.unit_amount ?? null;
   const base = { schemaVersion: SCHEMA_VERSION, ok: true as const, chargedCents: c.toCents };
   if (current === c.toCents) return { ...base, alreadyApplied: true };
@@ -88,11 +107,16 @@ export async function handlePriceChange(
     if (!product) return refuse("the subscription item has no product");
     priceArg = { price_data: { currency: "usd", product, unit_amount: c.toCents, recurring: { interval: "month" } } };
   }
-  await stripe.subscriptions.update(c.stripeSubscriptionId, {
-    items: [{ id: item.id, ...priceArg }],
-    proration_behavior: "none",
-    metadata: { [MD.priceChange]: c.changeId },
-  });
+  if (c.stripeSubscriptionItemId) {
+    // Only this node's line; the change id goes on the line, not the shared bill.
+    await stripe.subscriptionItems.update(item.id, { ...priceArg, proration_behavior: "none", metadata: { [MD.priceChange]: c.changeId } });
+  } else {
+    await stripe.subscriptions.update(c.stripeSubscriptionId, {
+      items: [{ id: item.id, ...priceArg }],
+      proration_behavior: "none",
+      metadata: { [MD.priceChange]: c.changeId },
+    });
+  }
   console.log(
     `[price] ${c.rentalCode} ${c.stripeSubscriptionId}: ${formatUsd(c.fromCents)} → ${formatUsd(c.toCents)}/month (coupon ${c.couponCode}, change ${c.changeId})`
   );

@@ -30,6 +30,13 @@ export const PriceChangeClaim = z.object({
   providerSlug: ProviderSlug,
   rentalCode: z.string().min(1),
   stripeSubscriptionId: z.string().min(1),
+  /**
+   * The node's line (`si_…`) on a bill that carries several nodes (customer_subscription_plan.md
+   * G1, Coalition 0.14.0+ / agent 0.11.88+). Absent = the subscription's only line, as before.
+   * The hub sends it only to an agent and Coalition new enough to keep it: an older parser
+   * drops it, and the wallet would then sign different bytes than the hub queued.
+   */
+  stripeSubscriptionItemId: z.string().regex(/^si_[A-Za-z0-9]+$/).optional(),
   couponCode: CouponTerms.shape.name,
   tier: TierKey,
   /** What the item charges now (the coupon price). */
@@ -48,6 +55,8 @@ export function priceChangeMessage(c: PriceChangeClaim): string {
     `provider: ${c.providerSlug}`,
     `rental: ${c.rentalCode}`,
     `subscription: ${c.stripeSubscriptionId}`,
+    // Only when present, so a claim without it signs the exact bytes it always did.
+    ...(c.stripeSubscriptionItemId ? [`item: ${c.stripeSubscriptionItemId}`] : []),
     `coupon: ${c.couponCode}`,
     `tier: ${c.tier}`,
     `from: ${formatUsd(c.fromCents)}/month`,
