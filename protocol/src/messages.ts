@@ -31,6 +31,15 @@ export const CheckoutInitRequest = Envelope.extend({
      * echoes none, and the hub then falls back to its newest-intent match.
      */
     mtIntentId: z.string().min(1).optional(),
+    /**
+     * The customer's existing Stripe customer on THIS operator's account (hub 2026-11-15,
+     * customer_subscription_plan.md phase 2), from an earlier card rental with the same
+     * operator. The Coalition reuses it instead of letting Checkout mint a new customer per
+     * rental, so one customer's nodes can share a subscription later. If Stripe no longer
+     * knows it (deleted, or minted in the other Stripe mode), the Coalition falls back to
+     * `email`. Optional both ways: an older hub sends none, an older Coalition strips it.
+     */
+    stripeCustomerId: z.string().regex(/^cus_[A-Za-z0-9]+$/).optional(),
   }),
   /** Dedupe a double-click / retry so only one session is created. */
   idempotencyKey: z.string().min(1),
@@ -87,6 +96,12 @@ export const PaymentEvent = z.discriminatedUnion("type", [
   PaymentEventBase.extend({
     type: z.literal("subscription.created"),
     stripeSubscriptionId: z.string().min(1),
+    /**
+     * The subscription item (`si_…`) that bills this rental — the per-rental key once one
+     * subscription carries several nodes (customer_subscription_plan.md). Absent from older
+     * Coalitions; the hub then keys the rental on the subscription alone.
+     */
+    stripeSubscriptionItemId: z.string().min(1).optional(),
     stripeCustomerId: z.string().min(1),
     mtCustomerId: z.string().min(1),
     /** Echo of `CheckoutInitRequest.customer.mtIntentId` from the subscription metadata; absent from older Coalitions. */
@@ -109,10 +124,27 @@ export const PaymentEvent = z.discriminatedUnion("type", [
   PaymentEventBase.extend({
     type: z.literal("invoice.payment_succeeded"),
     stripeSubscriptionId: z.string().min(1),
+    /** The invoice TOTAL — every node on the subscription together. */
     amountPaidCents: z.number().int().nonnegative(),
     currency: Currency,
     currentPeriodStart: Timestamp,
     currentPeriodEnd: Timestamp,
+    /**
+     * One entry per subscription-item line on the invoice: what each node was charged and
+     * for which period (customer_subscription_plan.md phase 2). The hub credits each rental
+     * by its item. Absent from older Coalitions; the hub then treats a one-rental
+     * subscription's total as that rental's charge, as before.
+     */
+    lines: z
+      .array(
+        z.object({
+          stripeSubscriptionItemId: z.string().min(1),
+          amountCents: z.number().int(),
+          periodStart: Timestamp,
+          periodEnd: Timestamp,
+        })
+      )
+      .optional(),
   }),
   PaymentEventBase.extend({
     type: z.literal("invoice.payment_failed"),

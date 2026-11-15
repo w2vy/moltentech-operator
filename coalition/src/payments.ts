@@ -50,10 +50,10 @@ export async function handleCheckout(
         quantity: 1,
       }
     : { price: priceId, quantity: 1 };
-  const session = await stripe.checkout.sessions.create({
+  const sessionArgs = (who: Record<string, unknown>) => ({
     mode: "subscription",
     line_items: [lineItem],
-    customer_email: req.customer.email,
+    ...who,
     payment_method_collection: "always",
     // A promotion code box on the Stripe page: the operator makes codes in their own
     // Stripe account (Product catalog, Coupons) to hand out, e.g. in promo posts. Off when a
@@ -70,6 +70,23 @@ export async function handleCheckout(
     success_url: req.successUrl,
     cancel_url: req.cancelUrl,
   });
+  // Reuse the customer's Stripe customer from an earlier rental with this operator
+  // (customer_subscription_plan.md phase 2), so their nodes can later share one subscription.
+  // Without one — or when Stripe no longer knows it (deleted in the dashboard, or minted in the
+  // other Stripe mode) — Checkout makes a new customer from the email, as before.
+  let session: { url: string | null };
+  const known = req.customer.stripeCustomerId;
+  if (known) {
+    try {
+      session = await stripe.checkout.sessions.create(sessionArgs({ customer: known }));
+    } catch (err) {
+      if (!isMissingCustomer(err)) throw err;
+      console.warn(`[checkout] Stripe customer ${known} not found on this account — new customer from the email`);
+      session = await stripe.checkout.sessions.create(sessionArgs({ customer_email: req.customer.email }));
+    }
+  } else {
+    session = await stripe.checkout.sessions.create(sessionArgs({ customer_email: req.customer.email }));
+  }
   if (!session.url) throw new Error("Stripe returned no checkout URL");
 
   return {
@@ -80,6 +97,15 @@ export async function handleCheckout(
     trialDays: cfg.trialDays,
     ...(coupon ? { couponApplied: coupon.name, chargedCents: coupon.chargedCents } : {}),
   };
+}
+
+/** Stripe's answer for a `customer` id this account does not hold. */
+export function isMissingCustomer(err: unknown): boolean {
+  const e = err as { code?: string; param?: string; message?: string; raw?: { code?: string; param?: string } };
+  const code = e?.code ?? e?.raw?.code;
+  const param = e?.param ?? e?.raw?.param;
+  return (code === "resource_missing" && (param === "customer" || /customer/i.test(e?.message ?? ""))) ||
+    /No such customer/i.test(e?.message ?? "");
 }
 
 /** Open the operator-account billing portal, or cancel a subscription. */
@@ -139,6 +165,45 @@ function invoiceSubscriptionId(o: Record<string, any>): string | undefined {
   );
 }
 
+/**
+ * What each node was charged on an invoice: one entry per subscription item, so the hub can
+ * credit each rental on a shared subscription (customer_subscription_plan.md phase 2).
+ *
+ * The item id lives at `parent.subscription_item_details.subscription_item` in the API version
+ * these webhooks arrive in (the same 2026 move as `invoiceSubscriptionId`), and at the root
+ * `subscription_item` before it. An item can have several lines on one invoice (a proration
+ * beside the renewal), so lines are summed per item and the period spans them all. Lines with
+ * no item (a one-off invoice item) are not a node's charge and are left out. Returns `{}` when
+ * nothing resolves, so the event keeps its old shape and the hub its old behaviour.
+ */
+export function invoiceItemLines(
+  o: Record<string, any>,
+  iso: (s?: number) => string | undefined
+): { lines?: { stripeSubscriptionItemId: string; amountCents: number; periodStart: string; periodEnd: string }[] } {
+  const idOf = (v: unknown): string | undefined =>
+    typeof v === "string" ? v : typeof v === "object" && v !== null ? (v as any).id : undefined;
+  const byItem = new Map<string, { amountCents: number; start: number; end: number }>();
+  for (const l of (o.lines?.data ?? []) as Record<string, any>[]) {
+    const si = idOf(l.parent?.subscription_item_details?.subscription_item) ?? idOf(l.subscription_item);
+    if (!si || typeof l.amount !== "number" || !l.period?.start || !l.period?.end) continue;
+    const prev = byItem.get(si);
+    byItem.set(si, {
+      amountCents: (prev?.amountCents ?? 0) + l.amount,
+      start: Math.min(prev?.start ?? l.period.start, l.period.start),
+      end: Math.max(prev?.end ?? l.period.end, l.period.end),
+    });
+  }
+  if (byItem.size === 0) return {};
+  return {
+    lines: [...byItem].map(([si, v]) => ({
+      stripeSubscriptionItemId: si,
+      amountCents: v.amountCents,
+      periodStart: iso(v.start)!,
+      periodEnd: iso(v.end)!,
+    })),
+  };
+}
+
 /** Map a Stripe event to a normalized PaymentEvent, or null to ignore. */
 export function normalizeEvent(event: StripeEvent, providerSlug: string): PaymentEvent | null {
   const o = event.data.object as Record<string, any>;
@@ -155,6 +220,8 @@ export function normalizeEvent(event: StripeEvent, providerSlug: string): Paymen
         ...base,
         type: "subscription.created",
         stripeSubscriptionId: o.id,
+        // The node's own line: the per-rental key once a subscription carries several nodes.
+        ...(typeof item0.id === "string" ? { stripeSubscriptionItemId: item0.id } : {}),
         stripeCustomerId: String(o.customer),
         mtCustomerId: md.mtCustomerId ?? "",
         ...(md.mtIntentId ? { mtIntentId: md.mtIntentId } : {}),
@@ -178,6 +245,7 @@ export function normalizeEvent(event: StripeEvent, providerSlug: string): Paymen
         currency: "usd",
         currentPeriodStart: iso(line?.start)!,
         currentPeriodEnd: iso(line?.end)!,
+        ...invoiceItemLines(o, iso),
       } as PaymentEvent;
     }
     case "invoice.payment_failed":
@@ -309,11 +377,27 @@ export async function stampRentalCode(
 ): Promise<void> {
   const o = event.data.object as Record<string, any>;
   const md = (o.metadata ?? {}) as Record<string, string>;
-  if (md.rentalCode === rentalCode) return;
-  try {
-    await stripe.subscriptions.update(String(o.id), { metadata: { rentalCode } });
-  } catch (err) {
-    console.error(`[payments] ${event.id}: could not stamp rentalCode ${rentalCode} on ${o.id} —`, err);
+  if (md.rentalCode !== rentalCode) {
+    try {
+      await stripe.subscriptions.update(String(o.id), { metadata: { rentalCode } });
+    } catch (err) {
+      console.error(`[payments] ${event.id}: could not stamp rentalCode ${rentalCode} on ${o.id} —`, err);
+    }
+  }
+  // The same facts on the node's own LINE (customer_subscription_plan.md gap G3): once a
+  // subscription carries several nodes, the subscription's metadata describes only the first,
+  // and the price change has to find its node by the item. Checkout cannot set item metadata,
+  // so it is copied here, once the hub has named the rental.
+  const item0 = (o.items?.data?.[0] ?? {}) as Record<string, any>;
+  const itemMd = (item0.metadata ?? {}) as Record<string, string>;
+  if (typeof item0.id === "string" && itemMd.rentalCode !== rentalCode) {
+    const copy: Record<string, string> = { rentalCode };
+    for (const k of ["tier", "mtIntentId", MD.name, MD.pct]) if (md[k]) copy[k] = md[k];
+    try {
+      await stripe.subscriptionItems.update(item0.id, { metadata: copy });
+    } catch (err) {
+      console.error(`[payments] ${event.id}: could not stamp rentalCode ${rentalCode} on item ${item0.id} —`, err);
+    }
   }
 }
 
