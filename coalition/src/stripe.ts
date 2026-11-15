@@ -23,7 +23,12 @@ export interface StripeLike {
     cancel(id: string): Promise<unknown>;
   };
   /** One node's line on a subscription (customer_subscription_plan.md). */
-  subscriptionItems: { update(id: string, args: Record<string, unknown>): Promise<unknown> };
+  subscriptionItems: {
+    update(id: string, args: Record<string, unknown>): Promise<unknown>;
+    create(args: Record<string, unknown>, opts?: { idempotencyKey?: string }): Promise<Record<string, any>>;
+    list(args: Record<string, unknown>): Promise<{ data: Record<string, any>[]; has_more?: boolean }>;
+    del(id: string, args?: Record<string, unknown>): Promise<unknown>;
+  };
   prices: {
     list(args: { lookup_keys: string[]; active?: boolean; limit?: number }): Promise<{ data: { id: string; product?: string | { id: string } }[] }>;
     create(args: Record<string, unknown>): Promise<{ id: string; product?: string | { id: string } }>;

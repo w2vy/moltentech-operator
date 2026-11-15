@@ -1,8 +1,9 @@
 import http from "node:http";
-import { CheckoutInitRequest, ManageRequest, PriceChangeRequest, HEADER_COALITION_VERSION, HEADER_CARD_PAYMENTS } from "@moltentech/protocol";
+import { AddItemRequest, CheckoutInitRequest, ManageRequest, PriceChangeRequest, HEADER_COALITION_VERSION, HEADER_CARD_PAYMENTS } from "@moltentech/protocol";
 import { readManifest, type CoalitionConfig } from "./config";
 import type { StripeLike } from "./stripe";
 import { handleCheckout, handleManage, handleWebhook } from "./payments";
+import { handleAddItem } from "./add-item";
 import { handlePriceChange, PriceChangeRefused } from "./price-change";
 import { getStatsSnapshot } from "./stats";
 import { verifyMtRequest } from "./auth";
@@ -146,7 +147,7 @@ export function createServer(stripe: StripeLike | null, cfg: CoalitionConfig): h
 
       // MT -> Coalition: signature-authenticated (dual-accept legacy bearer). Read the
       // raw body first — the signature covers its hash, and we reject before parsing.
-      if (method === "POST" && (url === "/checkout" || url === "/manage" || url === "/price")) {
+      if (method === "POST" && (url === "/checkout" || url === "/manage" || url === "/price" || url === "/add-item")) {
         const raw = await readBody(req);
         const authz = verifyMtRequest(cfg, "POST", url, raw, req.headers);
         if (!authz.ok) {
@@ -176,6 +177,12 @@ export function createServer(stripe: StripeLike | null, cfg: CoalitionConfig): h
               }
               throw err;
             }
+          }
+          if (url === "/add-item") {
+            const p = AddItemRequest.safeParse(json);
+            if (!p.success) return send(400, { error: "Invalid add-item request" });
+            if (!stripe) return send(503, { error: "payments disabled — this operator offers nothing for sale" });
+            return send(200, await handleAddItem(stripe, cfg, p.data));
           }
           if (url === "/checkout") {
             const p = CheckoutInitRequest.safeParse(json);
