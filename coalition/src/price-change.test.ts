@@ -262,3 +262,78 @@ test("console: an older agent (no priceChanges) clears the list; no login gate =
   assert.equal(handleConsoleSignPrice(open, new URLSearchParams({ changeId: "pc_1" })).status, 403);
   assert.equal(handleConsoleAuthorizePrice(open, new URLSearchParams({ changeId: "pc_1", signature: signChange(change()).signature })).status, 403);
 });
+
+// ── customer_subscription_plan.md 3c (G1/G3): one node's line on a shared bill ──
+
+/** A bill with two nodes: si_a (first node, MT2-0012 on HALFOFF90) and si_b (added, MT2-0030 on HALFOFF90). */
+function sharedStripe(lines?: Record<string, any>[]) {
+  const itemUpdates: [string, Record<string, any>][] = [];
+  const subUpdates: unknown[] = [];
+  const data = lines ?? [
+    { id: "si_a", metadata: { mtCoupon: "HALFOFF90", tier: "cumulus", rentalCode: "MT2-0012" }, price: { unit_amount: 1000, product: "prod_1" } },
+    { id: "si_b", metadata: { mtCoupon: "HALFOFF90", tier: "cumulus", rentalCode: "MT2-0030" }, price: { unit_amount: 500, product: "prod_1" } },
+  ];
+  const stripe = {
+    prices: { list: async () => ({ data: [{ id: "price_tier", product: "prod_1" }] }) },
+    subscriptions: {
+      retrieve: async () => ({ id: "sub_1", status: "active", metadata: { mtCoupon: "HALFOFF90", tier: "cumulus", rentalCode: "MT2-0012" }, items: { data } }),
+      update: async (...a: unknown[]) => void subUpdates.push(a),
+    },
+    subscriptionItems: {
+      list: async () => ({ data }),
+      update: async (id: string, a: Record<string, any>) => (itemUpdates.push([id, a]), {}),
+    },
+  } as unknown as StripeLike;
+  return { stripe, itemUpdates, subUpdates };
+}
+const lineChange = (over: Partial<PriceChangeClaim> = {}) => change({ rentalCode: "MT2-0030", stripeSubscriptionItemId: "si_b", ...over });
+
+test("🔒 priceChangeMessage with a line: one `item:` line after the subscription; without one, the old bytes", () => {
+  const lines = priceChangeMessage(lineChange()).split("\n");
+  assert.equal(lines[3], "subscription: sub_1");
+  assert.equal(lines[4], "item: si_b");
+  assert.equal(lines[5], "coupon: HALFOFF90");
+  assert.ok(!priceChangeMessage(change()).includes("item:"), "an old claim signs what it always did");
+});
+
+test("shared bill: the named line changes, alone, no proration; the bill's metadata is left alone", async () => {
+  const { stripe, itemUpdates, subUpdates } = sharedStripe();
+  const out = await handlePriceChange(stripe, CFG, req(lineChange()));
+  assert.equal(out.alreadyApplied, false);
+  assert.deepEqual(itemUpdates, [["si_b", { price: "price_tier", proration_behavior: "none", metadata: { mtPriceChange: "pc_1" } }]]);
+  assert.deepEqual(subUpdates, []);
+});
+
+test("shared bill: the coupon and rental are checked on the LINE, not the bill", async () => {
+  const { stripe } = sharedStripe([
+    { id: "si_a", metadata: { mtCoupon: "HALFOFF90", tier: "cumulus", rentalCode: "MT2-0012" }, price: { unit_amount: 500, product: "prod_1" } },
+    { id: "si_b", metadata: { mtCoupon: "OTHER", tier: "cumulus", rentalCode: "MT2-0030" }, price: { unit_amount: 500, product: "prod_1" } },
+  ]);
+  assert.match(await refused(handlePriceChange(stripe, CFG, req(lineChange()))), /that line did not start on coupon HALFOFF90/);
+  assert.match(await refused(handlePriceChange(sharedStripe().stripe, CFG, req(lineChange({ rentalCode: "MT2-0099" })))), /rental MT2-0030, not MT2-0099/);
+});
+
+test("shared bill: a line that is not on the bill, or carries no coupon, is refused", async () => {
+  assert.match(await refused(handlePriceChange(sharedStripe().stripe, CFG, req(lineChange({ stripeSubscriptionItemId: "si_zzz" })))), /si_zzz is not on sub_1/);
+  const bare = sharedStripe([
+    { id: "si_a", metadata: {}, price: { unit_amount: 1000, product: "prod_1" } },
+    { id: "si_b", metadata: {}, price: { unit_amount: 500, product: "prod_1" } },
+  ]);
+  assert.match(await refused(handlePriceChange(bare.stripe, CFG, req(lineChange()))), /si_b carries no coupon/);
+});
+
+test("a bill's only line stamped before lines carried the coupon → the bill's metadata is its own", async () => {
+  const { stripe, itemUpdates } = sharedStripe([{ id: "si_a", metadata: {}, price: { unit_amount: 500, product: "prod_1" } }]);
+  await handlePriceChange(stripe, CFG, req(change({ stripeSubscriptionItemId: "si_a" })));
+  assert.equal(itemUpdates[0]![0], "si_a");
+});
+
+test("shared bill: a line already at the new price is a retry, nothing changes", async () => {
+  const { stripe, itemUpdates } = sharedStripe([
+    { id: "si_b", metadata: { mtCoupon: "HALFOFF90", tier: "cumulus", rentalCode: "MT2-0030" }, price: { unit_amount: 1000, product: "prod_1" } },
+    { id: "si_a", metadata: {}, price: { unit_amount: 1000, product: "prod_1" } },
+  ]);
+  const out = await handlePriceChange(stripe, CFG, req(lineChange()));
+  assert.equal(out.alreadyApplied, true);
+  assert.deepEqual(itemUpdates, []);
+});
