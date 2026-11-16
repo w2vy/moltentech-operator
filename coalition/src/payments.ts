@@ -11,6 +11,7 @@ import type { CoalitionConfig } from "./config";
 import { mtAuthHeaders, type MtCallerConfig } from "./coalition-signing";
 import { ensureTierPrice, type StripeLike, type StripeEvent } from "./stripe";
 import { couponPriceCents, verifyCoupon, MD } from "./coupon";
+import { dedupeSavedCards } from "./saved-cards";
 
 /** Mint a subscription Checkout Session (with trial) on the operator's Stripe account. */
 export async function handleCheckout(
@@ -655,6 +656,7 @@ async function relayChecked(
   if (!result.delivered) return 502; // transient — Stripe's retry is the durable queue
   if (result.accepted) {
     if (ev.type === "subscription.created" && result.rentalCode) await stampRentalCode(stripe, event, result.rentalCode);
+    if (ev.type === "subscription.created") await dedupeSavedCards(stripe, event);
     return 200;
   }
 
