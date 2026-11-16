@@ -15,9 +15,10 @@ import type { Finding } from "./config-lint";
  * that same account), relayed as `moltentech-test2`, and provisioned on test2's
  * hardware. Nothing in the operator's own files was wrong.
  *
- * Everything here is READ-ONLY against Stripe (`GET /v1/account`,
- * `GET /v1/webhook_endpoints`) and is opt-in behind `doctor --check-stripe`, because
- * it is the only check that needs the operator's secret in memory.
+ * Everything here CHANGES NOTHING in Stripe (`GET /v1/account`, `GET /v1/webhook_endpoints`,
+ * and the permission probes below, which write to IDs that do not exist) and is opt-in behind
+ * `doctor --check-stripe`, because it is the only check that needs the operator's secret in
+ * memory.
  */
 
 /** A webhook endpoint as this probe cares about it. */
@@ -141,6 +142,70 @@ export function classifyEndpoints(
   }
 
   return findings;
+}
+
+/**
+ * The key permissions the Coalition uses, one probe each.
+ *
+ * A key built from the runbook's "Recurring subscriptions" preset has them all. A key built by
+ * hand may not, and nothing else notices until a customer hits the missing one: prod 2026-11-16
+ * had Subscriptions write but neither Customers nor Payment Methods, which Coalition 0.14.1
+ * needs to keep one saved copy of each card.
+ *
+ * Each probe is a WRITE to an ID that cannot exist (`…_fhprobe…`). A key holding the permission
+ * gets 404 `resource_missing`; a key without it gets 403 before Stripe looks the ID up. Nothing
+ * is created or changed either way. Measured on the staging test key (preset): all 404.
+ */
+export interface KeyPermission {
+  /** As the Stripe dashboard names it. */
+  name: string;
+  path: (mode: "test" | "live") => string;
+  /** What breaks without it, for the finding. */
+  uses: string;
+  severity: "error" | "warning";
+}
+
+export const KEY_PERMISSIONS: KeyPermission[] = [
+  { name: "Checkout Sessions", path: (m) => `/v1/checkout/sessions/cs_${m}_fhprobe0/expire`, uses: "card checkout", severity: "error" },
+  { name: "Subscriptions", path: () => "/v1/subscriptions/sub_fhprobe0", uses: "subscriptions and each node's line on a bill (add a node, end a node, coupon price changes)", severity: "error" },
+  { name: "Prices", path: () => "/v1/prices/price_fhprobe0", uses: "tier and coupon prices", severity: "error" },
+  { name: "Products", path: () => "/v1/products/prod_fhprobe0", uses: "the product behind a coupon price", severity: "error" },
+  { name: "Customer portal", path: () => "/v1/billing_portal/configurations/bpc_fhprobe0", uses: "the customer's card + invoices page", severity: "error" },
+  { name: "Customers", path: () => "/v1/customers/cus_fhprobe0", uses: "keeping one saved copy of each card (moves the customer's default card)", severity: "warning" },
+  { name: "Payment Methods", path: () => "/v1/payment_methods/pm_fhprobe0/detach", uses: "keeping one saved copy of each card (removes the copies)", severity: "warning" },
+];
+
+/** The pure half of the permission check: one probe's answer → a finding, or none. */
+export function classifyPermission(perm: KeyPermission, status: number, detail?: string): Finding | null {
+  if ((status >= 200 && status < 300) || status === 404) return null;
+  if (status === 403) {
+    return {
+      rule: "STRIPE_KEY_PERMISSION_MISSING",
+      severity: perm.severity,
+      file: "secrets.env",
+      summary: `Stripe key lacks ${perm.name}: Write — set it on the key in the Stripe dashboard`,
+      message:
+        `STRIPE_SECRET_KEY does not have "${perm.name}" set to Write. The Coalition uses it for ${perm.uses}. ` +
+        "In the Stripe dashboard → Developers → API keys, edit this restricted key and set it to Write " +
+        "(the \"Recurring subscriptions\" preset sets every permission the Coalition needs).",
+    };
+  }
+  return {
+    rule: "STRIPE_KEY_PERMISSION_UNVERIFIED",
+    severity: "warning",
+    file: "secrets.env",
+    message: `could not check "${perm.name}" on STRIPE_SECRET_KEY (${status}: ${detail ?? "no detail"}) — NOT verified.`,
+  };
+}
+
+/** Stripe POST with no body — only ever aimed at IDs that do not exist (see KEY_PERMISSIONS). */
+async function stripePost(key: string, path: string): Promise<{ status: number; json: any }> {
+  const res = await fetch(`https://api.stripe.com${path}`, {
+    method: "POST",
+    headers: { Authorization: `Basic ${Buffer.from(`${key}:`).toString("base64")}` },
+    signal: AbortSignal.timeout(15_000),
+  });
+  return { status: res.status, json: await res.json().catch(() => ({})) };
 }
 
 /** Read-only Stripe GET with the operator's key. */
@@ -286,6 +351,17 @@ export async function probeStripeWiring(args: {
         "the key was not rejected, so the webhook checks below still ran. This call is only a " +
         "liveness probe; nothing depends on its result.",
     });
+  }
+
+  for (const perm of KEY_PERMISSIONS) {
+    try {
+      const r = await stripePost(stripeSecretKey, perm.path(isTestKey ? "test" : "live"));
+      const f = classifyPermission(perm, r.status, r.json?.error?.message);
+      if (f) findings.push(f);
+    } catch (err) {
+      const f = classifyPermission(perm, 0, (err as Error).message);
+      if (f) findings.push(f);
+    }
   }
 
   const eps = await stripeGet(stripeSecretKey, "/v1/webhook_endpoints?limit=100");

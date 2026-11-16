@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { classifyEndpoints, isProdHub, probeStripeWiring } from "./stripe-wiring";
+import { classifyEndpoints, classifyPermission, isProdHub, KEY_PERMISSIONS, probeStripeWiring } from "./stripe-wiring";
 
 const MINE = "https://coalition-test1.app.runonflux.io";
 const rules = (fs: ReturnType<typeof classifyEndpoints>) => fs.map((f) => f.rule).sort();
@@ -432,4 +432,46 @@ test("⭐ 'not registered' names the MODE — the other half of the dashboard is
 test("without a known mode the finding stays mode-neutral rather than guessing", () => {
   const f = classifyEndpoints([], MINE).find((x) => x.rule === "STRIPE_WEBHOOK_NOT_REGISTERED")!;
   assert.doesNotMatch(f.message, /mode/i);
+});
+
+/** Key permissions (prod 2026-11-16: a hand-built key had Subscriptions write but neither
+ * Customers nor Payment Methods, which Coalition 0.14.1 needs). Each probe writes to an ID that
+ * cannot exist: 404 = permission held, 403 = missing. */
+test("permission probe: 404 or 2xx = held, 403 = missing, anything else = unverified", () => {
+  const subs = KEY_PERMISSIONS.find((p) => p.name === "Subscriptions")!;
+  const pms = KEY_PERMISSIONS.find((p) => p.name === "Payment Methods")!;
+  assert.equal(classifyPermission(subs, 404), null);
+  assert.equal(classifyPermission(subs, 200), null);
+  const missing = classifyPermission(subs, 403)!;
+  assert.equal(missing.rule, "STRIPE_KEY_PERMISSION_MISSING");
+  assert.equal(missing.severity, "error");
+  assert.match(missing.message, /"Subscriptions" set to Write/);
+  // Card dedupe only: a warning, the Coalition still sells without it.
+  assert.equal(classifyPermission(pms, 403)!.severity, "warning");
+  assert.equal(classifyPermission(pms, 500, "boom")!.rule, "STRIPE_KEY_PERMISSION_UNVERIFIED");
+});
+
+test("every probe aims at an ID that cannot exist, and checkout uses the key's mode", () => {
+  for (const p of KEY_PERMISSIONS) assert.match(p.path("live"), /_fhprobe0/);
+  assert.match(KEY_PERMISSIONS[0]!.path("test"), /cs_test_fhprobe0/);
+  assert.match(KEY_PERMISSIONS[0]!.path("live"), /cs_live_fhprobe0/);
+});
+
+test("the probe reports a missing permission and still runs the webhook checks", async () => {
+  await withStubbedFetch(
+    (url) =>
+      url.includes("/v1/payment_methods/") || url.includes("/v1/customers/")
+        ? { status: 403, body: { error: { message: "does not have the required permissions" } } }
+        : url.includes("_fhprobe0")
+          ? { status: 404, body: { error: { code: "resource_missing" } } }
+          : { status: 200, body: { data: [{ url: `${MY_URL}/webhook`, status: "enabled" }] } },
+    async () => {
+      const findings = await probeStripeWiring({ stripeSecretKey: FAKE_RESTRICTED_KEY, coalitionUrl: MY_URL });
+      const missing = findings.filter((f) => f.rule === "STRIPE_KEY_PERMISSION_MISSING").map((f) => f.summary);
+      assert.equal(missing.length, 2);
+      assert.ok(missing.some((s) => s?.includes("Customers")));
+      assert.ok(missing.some((s) => s?.includes("Payment Methods")));
+      assert.ok(!findings.some((f) => f.rule === "STRIPE_WEBHOOK_NOT_REGISTERED"));
+    }
+  );
 });

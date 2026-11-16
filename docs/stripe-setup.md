@@ -57,6 +57,21 @@ Choose **Recurring subscriptions**, then **Continue**. This preset grants everyt
 Coalition and `fh-toolkit doctor --check-stripe` need and nothing that can refund or pay
 out — no manual permission editing required.
 
+**Built a key by hand, or made it before this guide?** It needs every permission below.
+`fh-toolkit doctor --check-stripe` checks them and names any that is missing. Nothing on the
+key should touch Refunds, Balance or Payouts.
+
+| Permission | Level | The Coalition uses it for |
+|---|---|---|
+| Checkout Sessions | Write | card checkout |
+| Subscriptions | Write | subscriptions and each node's line on a bill (add a node, end a node, coupon price changes) |
+| Prices | Write | tier and coupon prices |
+| Products | Write | the product behind a coupon price |
+| Customer portal | Write | the customer's card + invoices page |
+| Customers | Write | keeping one saved copy of each card |
+| Payment Methods | Write | keeping one saved copy of each card |
+| Webhook Endpoints | Read | `fh-toolkit doctor --check-stripe` only |
+
 ![Copy the restricted key](images/stripe/5_CopyRKSecret.png)
 
 Mouse over the `rk_test_…` value and click the copy button that appears. Save it in
