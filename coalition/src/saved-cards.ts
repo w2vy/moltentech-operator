@@ -3,6 +3,18 @@ import type { StripeEvent, StripeLike } from "./stripe";
 const idOf = (v: unknown): string | undefined =>
   typeof v === "string" ? v : v && typeof v === "object" && typeof (v as { id?: unknown }).id === "string" ? (v as { id: string }).id : undefined;
 
+/**
+ * What makes two saved payment methods the same thing: a card's fingerprint (same card number),
+ * or a Stripe Link wallet's email (same Link account). A Link method has no card fingerprint, so
+ * matching cards only left every Link checkout's copy in the portal. Any other type: no key, never
+ * touched.
+ */
+export function sameAs(pm: Record<string, any>): string | undefined {
+  if (pm.type === "card" && pm.card?.fingerprint) return `card:${pm.card.fingerprint}`;
+  if (pm.type === "link" && pm.link?.email) return `link:${String(pm.link.email).toLowerCase()}`;
+  return undefined;
+}
+
 /** Subscriptions that can still charge a card. */
 const LIVE = new Set(["active", "trialing", "past_due", "unpaid", "incomplete", "paused"]);
 
@@ -15,7 +27,8 @@ const LIVE = new Set(["active", "trialing", "past_due", "unpaid", "incomplete", 
  * one 4242 on one customer).
  *
  * Run once a new subscription's relay is accepted. The card that subscription pays with is kept;
- * every other saved card with the same fingerprint is a copy. Before a copy is removed, any live
+ * every other saved card with the same fingerprint is a copy, and the same for a Stripe Link
+ * wallet with the same email (Coalition 0.14.2). Before a copy is removed, any live
  * subscription that pays with it, and the customer's invoice default, are moved to the kept card
  * so no renewal loses its card. A different card (a new number) has a different fingerprint and
  * is never touched.
@@ -29,11 +42,12 @@ export async function dedupeSavedCards(stripe: StripeLike, event: StripeEvent): 
   const keep = idOf(o.default_payment_method);
   if (!customer || !keep) return;
   try {
-    const cards = (await stripe.paymentMethods.list({ customer, type: "card", limit: 100 })).data;
-    const kept = cards.find((c) => c.id === keep);
-    const fp = kept?.card?.fingerprint;
-    if (!fp) return;
-    const copies = cards.filter((c) => c.id !== keep && c.card?.fingerprint === fp).map((c) => c.id as string);
+    // No `type`: one list holds cards AND Link wallets.
+    const saved = (await stripe.paymentMethods.list({ customer, limit: 100 })).data;
+    const kept = saved.find((c) => c.id === keep);
+    const key = kept ? sameAs(kept) : undefined;
+    if (!key) return;
+    const copies = saved.filter((c) => c.id !== keep && sameAs(c) === key).map((c) => c.id as string);
     if (copies.length === 0) return;
 
     const stuck = new Set<string>();

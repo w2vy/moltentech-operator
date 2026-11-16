@@ -4,10 +4,10 @@
  */
 import test from "node:test";
 import assert from "node:assert/strict";
-import { dedupeSavedCards } from "./saved-cards.js";
+import { dedupeSavedCards, sameAs } from "./saved-cards.js";
 import type { StripeEvent, StripeLike } from "./stripe.js";
 
-type Card = { id: string; fp: string };
+type Card = { id: string; fp?: string; link?: string };
 function fake(opts: {
   cards: Card[];
   subs?: { id: string; status: string; pm: string }[];
@@ -20,7 +20,11 @@ function fake(opts: {
     paymentMethods: {
       list: async () => {
         if (opts.failList) throw new Error("permission denied");
-        return { data: opts.cards.map((c) => ({ id: c.id, card: { fingerprint: c.fp } })) };
+        return {
+          data: opts.cards.map((c) =>
+            c.link ? { id: c.id, type: "link", link: { email: c.link } } : { id: c.id, type: "card", card: { fingerprint: c.fp } }
+          ),
+        };
       },
       detach: async (id: string) => void calls.detached.push(id),
     },
@@ -90,4 +94,26 @@ test("no card on the subscription, or Stripe refuses: nothing happens, nothing t
   const b = fake({ cards: [], failList: true });
   await dedupeSavedCards(b.stripe, created());
   assert.deepEqual(b.calls.detached, []);
+});
+
+test("Stripe Link: same Link email = a copy; a card is never matched to a Link wallet", async () => {
+  const { stripe, calls } = fake({
+    cards: [
+      { id: "pm_new", link: "Tom@Example.com" },
+      { id: "pm_oldlink", link: "tom@example.com" },
+      { id: "pm_otherlink", link: "someone@example.com" },
+      { id: "pm_card", fp: "A" },
+    ],
+    subs: [{ id: "sub_live", status: "active", pm: "pm_oldlink" }],
+  });
+  await dedupeSavedCards(stripe, created());
+  assert.deepEqual(calls.subUpdates, [["sub_live", { default_payment_method: "pm_new" }]]);
+  assert.deepEqual(calls.detached, ["pm_oldlink"]);
+});
+
+test("sameAs: card by fingerprint, Link by email, anything else none", () => {
+  assert.equal(sameAs({ type: "card", card: { fingerprint: "F" } }), "card:F");
+  assert.equal(sameAs({ type: "link", link: { email: "A@B.c" } }), "link:a@b.c");
+  assert.equal(sameAs({ type: "us_bank_account" }), undefined);
+  assert.equal(sameAs({ type: "card", card: {} }), undefined);
 });
