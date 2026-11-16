@@ -37,10 +37,21 @@ TIER_PRICES_JSON='{"nimbus":2200,"cumulus":700}' TRIAL_DAYS=1 \
 MANIFEST_PATH=./manifest.json npm start
 ```
 
-The **restricted** Stripe key needs only: Checkout Sessions (write), Prices
-(read+write for materialization), Subscriptions (write), Billing Portal (write).
-**No Refunds / Balance / Payouts** — the trial model means every failure is a
-cancel, not a refund.
+The **restricted** Stripe key needs exactly these (the "Recurring subscriptions" preset sets
+them all; `fh-toolkit doctor --check-stripe` checks them).
+**No Refunds / Balance / Payouts**: the trial model means every failure is a cancel, not a
+refund.
+
+| Permission | Level | The Coalition uses it for |
+|---|---|---|
+| Checkout Sessions | Write | card checkout |
+| Subscriptions | Write | subscriptions and each node's line on a bill (add a node, end a node, coupon price changes) |
+| Prices | Write | tier and coupon prices |
+| Products | Write | the product behind a coupon price |
+| Customer portal | Write | the customer's card + invoices page |
+| Customers | Write | keeping one saved copy of each card |
+| Payment Methods | Write | keeping one saved copy of each card |
+| Webhook Endpoints | Read | `fh-toolkit doctor --check-stripe` only |
 
 ## Status
 `v0.2.6` — adds the Console v2 P3 dashboard (`/agent/state` ingest + a Nodes table),

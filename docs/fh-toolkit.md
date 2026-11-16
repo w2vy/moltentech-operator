@@ -1051,7 +1051,8 @@ A miss on any of the three fails the provision inside arcane-mage with
 ### `--check-stripe`
 
 The only check that puts a secret in memory and the only one that talks to a third party.
-All read-only GETs. Needs `STRIPE_SECRET_KEY` (from `secrets.env` or `.env.operator`) and
+Changes nothing in Stripe: read-only GETs, plus one write per key permission aimed at an ID
+that cannot exist (404 = the key has it, 403 = it does not). Needs `STRIPE_SECRET_KEY` (from `secrets.env` or `.env.operator`) and
 `COALITION_URL`.
 
 | Finding | Meaning |
@@ -1060,6 +1061,8 @@ All read-only GETs. Needs `STRIPE_SECRET_KEY` (from `secrets.env` or `.env.opera
 | `STRIPE_WEBHOOK_FOREIGN_COALITION` | the endpoint points at **someone else's** Coalition — sales fan out to them |
 | `STRIPE_WEBHOOK_NOT_REGISTERED` | no endpoint for your Coalition — checkout never completes |
 | `STRIPE_KEY_MODE_MISMATCH` | test key against a live endpoint, or the reverse |
+| `STRIPE_KEY_PERMISSION_MISSING` | the key lacks a permission the Coalition uses ([list](stripe-setup.md#2-create-a-restricted-api-key)); an error, or a warning for Customers / Payment Methods (only duplicate saved cards depend on them) |
+| `STRIPE_KEY_PERMISSION_UNVERIFIED` | a permission probe got an unexpected answer — not verified |
 | `STRIPE_KEY_INVALID` / `STRIPE_UNREACHABLE` / `STRIPE_ACCOUNT_UNREADABLE` / `STRIPE_ENDPOINTS_UNREADABLE` | could not complete the check |
 
 ⚠️ A well-formed config wired to the **wrong Stripe account** is invisible to any amount
