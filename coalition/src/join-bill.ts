@@ -89,7 +89,7 @@ export async function handleJoinBill(stripe: StripeLike, _cfg: CoalitionConfig, 
           proration_date: renewal,
           payment_behavior: "error_if_incomplete",
         },
-        { idempotencyKey: `join-bill:${req.rentalCode}:${req.fromSubscriptionId}` }
+        { idempotencyKey: `join-bill:${req.idempotencyKey ?? `${req.rentalCode}:${req.fromSubscriptionId}`}` }
       );
     } catch (err) {
       const why = cardRefusal(err);

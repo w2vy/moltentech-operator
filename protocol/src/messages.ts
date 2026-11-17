@@ -152,6 +152,13 @@ export const JoinBillRequest = Envelope.extend({
     /** Must own both bills. */
     stripeCustomerId: z.string().regex(/^cus_[A-Za-z0-9]+$/),
   }),
+  /**
+   * One per scheduled join (hub: the Payment + when the customer picked the bill). Stripe answers
+   * a key it has seen with the same reply for 24 h, so a join tried again after a declined card
+   * needs a new key, while a retry of the same try must reuse it. Absent = rental + old bill
+   * (Coalition 0.15.0 always used that, which replayed the decline — staging 11-17).
+   */
+  idempotencyKey: z.string().min(1).optional(),
 });
 export type JoinBillRequest = z.infer<typeof JoinBillRequest>;
 
