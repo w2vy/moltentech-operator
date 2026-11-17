@@ -302,7 +302,8 @@ export function onlyProrations(o: Record<string, any>): boolean {
  * only moves the periods — so the ids are compared, not the presence of the key (tested 11-15).
  *
  * Lines carrying `mtIntentId` were made by `/add-item`; `subscription.item_added` already told
- * MT, so they are not reported as added. Removed lines carry their old period end: the rental
+ * MT, so they are not reported as added. Nor are lines carrying `mtJoinedFrom` (`/join-bill`):
+ * MT moves that rental from the answer. Removed lines carry their old period end: the rental
  * runs to it. Null when no line came or went.
  */
 export function itemsChangedEvent(event: StripeEvent, providerSlug: string): PaymentEvent | null {
@@ -319,7 +320,7 @@ export function itemsChangedEvent(event: StripeEvent, providerSlug: string): Pay
     .filter((i) => !nowIds.has(String(i.id)))
     .map((i) => ({ stripeSubscriptionItemId: String(i.id), ...(i.current_period_end ? { periodEnd: iso(i.current_period_end) } : {}) }));
   const added = now
-    .filter((i) => !beforeIds.has(String(i.id)) && !(i.metadata as Record<string, string> | undefined)?.mtIntentId)
+    .filter((i) => !beforeIds.has(String(i.id)) && !(i.metadata as Record<string, string> | undefined)?.mtIntentId && !(i.metadata as Record<string, string> | undefined)?.[JOINED_FROM])
     .map((i) => ({ stripeSubscriptionItemId: String(i.id), ...(typeof i.price?.unit_amount === "number" ? { amountCents: i.price.unit_amount } : {}) }));
   if (removed.length === 0 && added.length === 0) return null;
   return {
@@ -333,6 +334,11 @@ export function itemsChangedEvent(event: StripeEvent, providerSlug: string): Pay
     added,
   } as PaymentEvent;
 }
+
+/** Old-bill metadata (`/join-bill`, phase 4): cancelled because its node moved to this bill — not an end. */
+export const MOVED_TO = "mtMovedTo";
+/** Item metadata on a line moved by `/join-bill`: the bill it came from. Not a line added by hand. */
+export const JOINED_FROM = "mtJoinedFrom";
 
 /** Map a Stripe event to a normalized PaymentEvent, or null to ignore. */
 export function normalizeEvent(event: StripeEvent, providerSlug: string): PaymentEvent | null {
@@ -387,6 +393,12 @@ export function normalizeEvent(event: StripeEvent, providerSlug: string): Paymen
       // Same removed field, and this is the branch that costs money when it is dropped.
       return { ...base, type: "invoice.payment_failed", stripeSubscriptionId: invoiceSubscriptionId(o)! } as PaymentEvent;
     case "customer.subscription.deleted":
+      // A node that joined another bill (`/join-bill`): its old bill closes, the rental runs on
+      // its new line. Relaying it would end the rental (customer_subscription_plan.md phase 4).
+      if ((o.metadata ?? {})[MOVED_TO]) {
+        console.log(`[payments] ${event.id}: ${o.id} closed — its node moved to ${(o.metadata ?? {})[MOVED_TO]}, not relayed`);
+        return null;
+      }
       return { ...base, type: "subscription.cancelled", stripeSubscriptionId: o.id } as PaymentEvent;
     case "customer.subscription.updated": {
       // `updated` fires for every attribute change (renewals roll the period, plan edits,

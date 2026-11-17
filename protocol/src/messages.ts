@@ -131,6 +131,58 @@ export const AddItemResponse = Envelope.extend({
 export type AddItemResponse = z.infer<typeof AddItemResponse>;
 
 // ───────────────────────────────────────────────────────────────────────────
+// 1c. join-bill  —  MT → operator Coalition (customer_subscription_plan.md phase 4)
+//     Move a node that is alone on its own bill onto another of the customer's bills with
+//     this operator, so they renew in one charge. MT calls it in the last hours before the
+//     OLD bill renews: the node's line is added to the target at its current price, charged
+//     only from the old bill's renewal to the target's (`proration_date`), then the old bill is
+//     cancelled at once with no credit. The customer pays for each day once. The old bill's
+//     cancel is a move, not an end, and is not relayed.
+// ───────────────────────────────────────────────────────────────────────────
+export const JoinBillRequest = Envelope.extend({
+  providerSlug: ProviderSlug,
+  /** The node being moved; must be the old bill's only line. */
+  rentalCode: z.string().min(1),
+  /** The node's own bill today. */
+  fromSubscriptionId: z.string().regex(/^sub_[A-Za-z0-9]+$/),
+  /** The bill the customer picked (D10). The Coalition checks it is theirs and open. */
+  toSubscriptionId: z.string().regex(/^sub_[A-Za-z0-9]+$/),
+  customer: z.object({
+    mtCustomerId: z.string().min(1),
+    /** Must own both bills. */
+    stripeCustomerId: z.string().regex(/^cus_[A-Za-z0-9]+$/),
+  }),
+});
+export type JoinBillRequest = z.infer<typeof JoinBillRequest>;
+
+/**
+ * Why a node did NOT join. `not_eligible`: a bill is not this customer's, the target is not
+ * active / full / carries a bill-wide discount, or the old bill is not this one node alone or is
+ * cancelling. `card_failed` / `action_required`: the saved card was declined or needs 3-D Secure.
+ * In every case nothing changed: the old bill renews as normal.
+ */
+export const JoinBillRefusal = z.enum(["not_eligible", "card_failed", "action_required"]);
+export type JoinBillRefusal = z.infer<typeof JoinBillRefusal>;
+
+export const JoinBillResponse = Envelope.extend({
+  joined: z.boolean(),
+  reason: JoinBillRefusal.optional(),
+  /** Plain words for the customer when not joined. */
+  message: z.string().optional(),
+  /** The node's new line on the target bill. */
+  stripeSubscriptionItemId: z.string().min(1).optional(),
+  /** Charged now: from the old bill's renewal to the target's. */
+  chargedCents: z.number().int().nonnegative().optional(),
+  /** The node's monthly price (unchanged by the move). */
+  priceCents: z.number().int().nonnegative().optional(),
+  /** The target bill's renewal: the node is paid up to here. */
+  currentPeriodEnd: Timestamp.optional(),
+  /** False when the line was added but the old bill would not cancel: cancel it by hand or it charges twice. */
+  oldBillCancelled: z.boolean().optional(),
+});
+export type JoinBillResponse = z.infer<typeof JoinBillResponse>;
+
+// ───────────────────────────────────────────────────────────────────────────
 // 2. payment-event  —  operator Coalition → MT
 //    Normalized Stripe webhook relayed outbound. The Coalition does NOT 200-ack
 //    Stripe until MT accepts this, so Stripe's retry is the durable queue.
