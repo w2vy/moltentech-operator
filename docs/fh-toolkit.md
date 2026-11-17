@@ -1051,7 +1051,7 @@ A miss on any of the three fails the provision inside arcane-mage with
 ### `--check-stripe`
 
 The only check that puts a secret in memory and the only one that talks to a third party.
-Changes nothing in Stripe: read-only GETs, plus one write per key permission aimed at an ID
+Changes nothing in Stripe: read-only GETs, plus one probe per key permission (a write, or a GET for a Read one) aimed at an ID
 that cannot exist (404 = the key has it, 403 = it does not). Needs `STRIPE_SECRET_KEY` (from `secrets.env` or `.env.operator`) and
 `COALITION_URL`.
 

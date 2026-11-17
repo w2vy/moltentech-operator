@@ -51,6 +51,7 @@ refund.
 | Customer portal | Write | the customer's card + invoices page |
 | Customers | Write | keeping one saved copy of each card |
 | Payment Methods | Write | keeping one saved copy of each card |
+| Invoices | Read | "join my monthly bill": reads back what moving a node onto another bill charged |
 | Webhook Endpoints | Read | `fh-toolkit doctor --check-stripe` only |
 
 ## Status

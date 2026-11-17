@@ -42,6 +42,8 @@ export interface StripeLike {
     create(args: Record<string, unknown>): Promise<{ id: string; product?: string | { id: string } }>;
   };
   products: { create(args: Record<string, unknown>): Promise<{ id: string }> };
+  /** Read only (key: Invoices Read): what a join's proration charged. */
+  invoices: { list(args: Record<string, unknown>): Promise<{ data: Record<string, any>[] }> };
   webhooks: { constructEvent(payload: string | Buffer, sig: string, secret: string): StripeEvent };
   /** Saved cards: one copy per card per customer (saved-cards.ts). */
   paymentMethods: {

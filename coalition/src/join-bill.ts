@@ -17,6 +17,20 @@ const productOf = (price: Record<string, any> | undefined) =>
   typeof price?.product === "string" ? price.product : price?.product?.id;
 
 /**
+ * What the move charged: the paid proration invoice on the target bill whose line is this node's
+ * new item. Read the same way on the first try and on a retry, so a retry after the line was
+ * already added reports the real charge, not 0 (prod 2026-11-17: MT-0198, $4.45 charged, the
+ * mail said $0.00). Needs the key's Invoices Read. A line field moved under `parent` in newer
+ * Stripe API versions; both are read.
+ */
+async function joinChargeCents(stripe: StripeLike, subscriptionId: string, itemId: string): Promise<number> {
+  const invoices = (await stripe.invoices.list({ subscription: subscriptionId, limit: 10 })).data;
+  const lineItem = (l: Record<string, any>) => l.subscription_item ?? l.parent?.subscription_item_details?.subscription_item;
+  const inv = invoices.find((i) => ((i.lines?.data ?? []) as Record<string, any>[]).some((l) => lineItem(l) === itemId && (l.proration ?? l.parent?.subscription_item_details?.proration)));
+  return typeof inv?.amount_paid === "number" ? inv.amount_paid : 0;
+}
+
+/**
  * `POST /join-bill` — move a node that is alone on its own bill onto another of the customer's
  * bills (customer_subscription_plan.md phase 4, tom 11-17: join AT the old bill's renewal).
  *
@@ -30,7 +44,7 @@ const productOf = (price: Record<string, any> | undefined) =>
  *    `subscription.deleted` is not relayed (`normalizeEvent`): the rental did not end.
  *
  * Idempotent: a line for this rental already on the target (a retry after a lost answer) skips
- * step 2 and finishes step 3.
+ * step 2 and finishes step 3; the charge is read back from the target's invoices either way.
  */
 export async function handleJoinBill(stripe: StripeLike, _cfg: CoalitionConfig, req: JoinBillRequest): Promise<JoinBillResponse> {
   if (req.fromSubscriptionId === req.toSubscriptionId) return no("not_eligible", "That node is already on that bill.");
@@ -98,10 +112,8 @@ export async function handleJoinBill(stripe: StripeLike, _cfg: CoalitionConfig, 
       throw err;
     }
     itemId = String(item.id);
-    const after = (await stripe.subscriptions.retrieve(req.toSubscriptionId, { expand: ["latest_invoice"] })) as Record<string, any>;
-    const inv = after.latest_invoice as Record<string, any> | null;
-    chargedCents = typeof inv?.amount_paid === "number" ? inv.amount_paid : 0;
   }
+  chargedCents = await joinChargeCents(stripe, req.toSubscriptionId, itemId);
 
   // 3. Close the old bill: a move, not an end.
   let oldBillCancelled = from.status === "canceled";
