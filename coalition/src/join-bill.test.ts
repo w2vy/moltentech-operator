@@ -90,6 +90,16 @@ test("joins: line copied at its price, charged from the old renewal, old bill st
   assert.deepEqual(calls.cancelled[0], ["sub_old", { prorate: false, invoice_now: false }]);
 });
 
+test("a new try after a declined card uses the hub's new key (Stripe replays a seen key's answer for 24 h)", async () => {
+  const keys: string[] = [];
+  for (const k of ["pay_1:1000", "pay_1:2000"]) {
+    const { stripe, calls } = fake();
+    await handleJoinBill(stripe, cfg, req({ idempotencyKey: k }));
+    keys.push(calls.created[0]![1].idempotencyKey);
+  }
+  assert.deepEqual(keys, ["join-bill:pay_1:1000", "join-bill:pay_1:2000"]);
+});
+
 test("a coupon price carries over with its coupon facts", async () => {
   const { stripe, calls } = fake({
     fromItems: [{ id: "si_old", price: { unit_amount: 350, product: "prod_c" }, metadata: { rentalCode: "MT-0197", tier: "cumulus", mtCoupon: "HALF", mtCouponPct: "50" }, current_period_end: RENEWAL }],
