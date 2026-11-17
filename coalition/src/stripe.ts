@@ -26,7 +26,7 @@ export interface StripeLike {
       args?: Record<string, unknown>
     ): Promise<{ customer: string | { id: string }; status?: string } & Record<string, unknown>>;
     update(id: string, args: Record<string, unknown>): Promise<unknown>;
-    cancel(id: string): Promise<unknown>;
+    cancel(id: string, args?: Record<string, unknown>): Promise<unknown>;
     list(args: Record<string, unknown>): Promise<{ data: Record<string, any>[] }>;
   };
   /** One node's line on a subscription (customer_subscription_plan.md). */
