@@ -475,3 +475,36 @@ test("the probe reports a missing permission and still runs the webhook checks",
     }
   );
 });
+
+/** prod 2026-11-17: the live key lacked Invoices Read, and the first live "join my bill" failed
+ * after its line was added (the join reads back what the move charged). A Read permission is
+ * probed with a GET: 403 `more_permissions_required` before the ID is looked up (measured). */
+test("Invoices Read: probed with a GET, a 403 says Read (not Write) and is an error", async () => {
+  const inv = KEY_PERMISSIONS.find((p) => p.name === "Invoices")!;
+  assert.equal(inv.level, "Read");
+  const missing = classifyPermission(inv, 403)!;
+  assert.equal(missing.severity, "error");
+  assert.match(missing.summary!, /Invoices: Read/);
+  assert.match(missing.message, /"Invoices" set to Read/);
+
+  const real = globalThis.fetch;
+  const seen: [string, string][] = [];
+  globalThis.fetch = (async (input: any, init?: { method?: string }) => {
+    const url = String(input);
+    seen.push([url, init?.method ?? "GET"]);
+    const status = url.includes("/v1/invoices/") ? 403 : url.includes("_fhprobe0") ? 404 : 200;
+    const body = status === 200 ? { data: [{ url: `${MY_URL}/webhook`, status: "enabled" }] } : { error: { code: "x" } };
+    return { ok: status === 200, status, json: async () => body } as any;
+  }) as typeof fetch;
+  try {
+    const findings = await probeStripeWiring({ stripeSecretKey: FAKE_RESTRICTED_KEY, coalitionUrl: MY_URL });
+    assert.deepEqual(
+      findings.filter((f) => f.rule === "STRIPE_KEY_PERMISSION_MISSING").map((f) => f.summary),
+      ["Stripe key lacks Invoices: Read — set it on the key in the Stripe dashboard"]
+    );
+  } finally {
+    globalThis.fetch = real;
+  }
+  assert.deepEqual(seen.filter(([u]) => u.includes("/v1/invoices/")).map(([, m]) => m), ["GET"]);
+  assert.ok(seen.filter(([u]) => u.includes("/v1/subscriptions/sub_fhprobe0")).every(([, m]) => m === "POST"));
+});

@@ -152,9 +152,14 @@ export function classifyEndpoints(
  * had Subscriptions write but neither Customers nor Payment Methods, which Coalition 0.14.1
  * needs to keep one saved copy of each card.
  *
- * Each probe is a WRITE to an ID that cannot exist (`…_fhprobe…`). A key holding the permission
- * gets 404 `resource_missing`; a key without it gets 403 before Stripe looks the ID up. Nothing
- * is created or changed either way. Measured on the staging test key (preset): all 404.
+ * Each probe is a WRITE (or, for a Read permission, a GET) to an ID that cannot exist
+ * (`…_fhprobe…`). A key holding the permission gets 404 `resource_missing`; a key without it gets
+ * 403 `more_permissions_required` before Stripe looks the ID up. Nothing is created or changed
+ * either way. Measured on the staging test key (preset): all 404; a GET the prod key lacked
+ * (Refunds) 403, 2026-11-17.
+ *
+ * Invoices Read: prod 2026-11-17 lacked it, and the first live "join my bill" failed after the
+ * line was already added (the join reads back what the move charged).
  */
 export interface KeyPermission {
   /** As the Stripe dashboard names it. */
@@ -163,6 +168,8 @@ export interface KeyPermission {
   /** What breaks without it, for the finding. */
   uses: string;
   severity: "error" | "warning";
+  /** The level the Coalition needs; a Read permission is probed with a GET. Absent = Write. */
+  level?: "Read" | "Write";
 }
 
 export const KEY_PERMISSIONS: KeyPermission[] = [
@@ -173,20 +180,22 @@ export const KEY_PERMISSIONS: KeyPermission[] = [
   { name: "Customer portal", path: () => "/v1/billing_portal/configurations/bpc_fhprobe0", uses: "the customer's card + invoices page", severity: "error" },
   { name: "Customers", path: () => "/v1/customers/cus_fhprobe0", uses: "keeping one saved copy of each card (moves the customer's default card)", severity: "warning" },
   { name: "Payment Methods", path: () => "/v1/payment_methods/pm_fhprobe0/detach", uses: "keeping one saved copy of each card (removes the copies)", severity: "warning" },
+  { name: "Invoices", level: "Read", path: () => "/v1/invoices/in_fhprobe0", uses: "\"join my monthly bill\" (reads what the move charged)", severity: "error" },
 ];
 
 /** The pure half of the permission check: one probe's answer → a finding, or none. */
 export function classifyPermission(perm: KeyPermission, status: number, detail?: string): Finding | null {
   if ((status >= 200 && status < 300) || status === 404) return null;
   if (status === 403) {
+    const level = perm.level ?? "Write";
     return {
       rule: "STRIPE_KEY_PERMISSION_MISSING",
       severity: perm.severity,
       file: "secrets.env",
-      summary: `Stripe key lacks ${perm.name}: Write — set it on the key in the Stripe dashboard`,
+      summary: `Stripe key lacks ${perm.name}: ${level} — set it on the key in the Stripe dashboard`,
       message:
-        `STRIPE_SECRET_KEY does not have "${perm.name}" set to Write. The Coalition uses it for ${perm.uses}. ` +
-        "In the Stripe dashboard → Developers → API keys, edit this restricted key and set it to Write " +
+        `STRIPE_SECRET_KEY does not have "${perm.name}" set to ${level}. The Coalition uses it for ${perm.uses}. ` +
+        `In the Stripe dashboard → Developers → API keys, edit this restricted key and set it to ${level} ` +
         "(the \"Recurring subscriptions\" preset sets every permission the Coalition needs).",
     };
   }
@@ -355,7 +364,8 @@ export async function probeStripeWiring(args: {
 
   for (const perm of KEY_PERMISSIONS) {
     try {
-      const r = await stripePost(stripeSecretKey, perm.path(isTestKey ? "test" : "live"));
+      const path = perm.path(isTestKey ? "test" : "live");
+      const r = perm.level === "Read" ? await stripeGet(stripeSecretKey, path) : await stripePost(stripeSecretKey, path);
       const f = classifyPermission(perm, r.status, r.json?.error?.message);
       if (f) findings.push(f);
     } catch (err) {

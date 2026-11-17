@@ -32,6 +32,7 @@ function fake(opts: {
   toItems?: Record<string, any>[];
   createError?: unknown;
   cancelError?: unknown;
+  invoices?: Record<string, any>[];
 } = {}) {
   const calls = { created: [] as [Record<string, any>, any][], updated: [] as [string, any][], cancelled: [] as [string, any][] };
   const subs: Record<string, Record<string, any>> = {
@@ -44,8 +45,7 @@ function fake(opts: {
   };
   const stripe = {
     subscriptions: {
-      retrieve: async (id: string, args?: Record<string, unknown>) =>
-        args?.expand ? { ...subs[id], latest_invoice: { amount_paid: 420 } } : subs[id],
+      retrieve: async (id: string) => subs[id],
       update: async (id: string, args: unknown) => void calls.updated.push([id, args]),
       cancel: async (id: string, args: unknown) => {
         if (opts.cancelError) throw opts.cancelError;
@@ -60,6 +60,18 @@ function fake(opts: {
         return { id: "si_new" };
       },
       retrieve: async (id: string) => ({ id, current_period_end: RENEWAL + 86400 * 9 }),
+    },
+    invoices: {
+      // The target's invoices, newest first: a later renewal, then the move's proration.
+      list: async (a: { subscription: string }) => ({
+        data:
+          a.subscription !== "sub_main"
+            ? []
+            : (opts.invoices ?? [
+                { id: "in_cycle", amount_paid: 2100, lines: { data: [{ subscription_item: "si_a", proration: false }] } },
+                { id: "in_move", amount_paid: 420, lines: { data: [{ subscription_item: "si_new", proration: true }] } },
+              ]),
+      }),
     },
   } as unknown as StripeLike;
   return { stripe, calls };
@@ -160,7 +172,9 @@ test("retry after a lost answer: the line is already on the target → no second
   const res = await handleJoinBill(stripe, cfg, req());
   assert.equal(res.joined, true);
   assert.equal(res.stripeSubscriptionItemId, "si_new");
-  assert.equal(res.chargedCents, 0);
+  // prod 2026-11-17 (MT-0198): the first try added the line, then failed; the retry must still
+  // report what that try charged, not 0.
+  assert.equal(res.chargedCents, 420);
   assert.equal(calls.created.length, 0);
   assert.equal(calls.cancelled.length, 1);
 });
@@ -198,4 +212,19 @@ test("the moved line is not reported as a line added by hand", () => {
     { items: { data: [{ id: "si_a" }] } }
   );
   assert.equal(itemsChangedEvent(moved, SLUG), null);
+});
+
+test("the charge is read by the node's own line, whichever Stripe API shape the line has", async () => {
+  const { stripe } = fake({
+    invoices: [
+      { id: "in_other", amount_paid: 999, lines: { data: [{ parent: { subscription_item_details: { subscription_item: "si_x", proration: true } } }] } },
+      { id: "in_move", amount_paid: 445, lines: { data: [{ parent: { subscription_item_details: { subscription_item: "si_new", proration: true } } }] } },
+    ],
+  });
+  assert.equal((await handleJoinBill(stripe, cfg, req())).chargedCents, 445);
+});
+
+test("no proration invoice for the line (nothing charged): 0", async () => {
+  const { stripe } = fake({ invoices: [] });
+  assert.equal((await handleJoinBill(stripe, cfg, req())).chargedCents, 0);
 });
