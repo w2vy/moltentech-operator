@@ -41,11 +41,11 @@ export function escapeHtmlAttribute(value: string): string {
  */
 export const CONSOLE_THEME_CSS = `
 :root{--bg:#0a0a0a;--card:#111111;--line:#262626;--fg:#e8e8e8;--muted:#9ca3af;
---accent:#ff4500;--accent2:#ff8c00;--glow:rgba(255,69,0,.3);--ok:#16a34a}
+--accent:#e6a700;--accent2:#ffd23f;--glow:rgba(230,167,0,.3);--ok:#16a34a}
 *{box-sizing:border-box}
 body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,sans-serif;
 margin:0;padding:24px;line-height:1.5;color:var(--fg);background:var(--bg);
-background-image:radial-gradient(1100px 380px at 50% -12%,rgba(255,69,0,.09),transparent)}
+background-image:radial-gradient(1100px 380px at 50% -12%,rgba(230,167,0,.09),transparent)}
 .wrap{max-width:860px;margin:0 auto}
 header.mt{display:flex;align-items:baseline;gap:10px;margin-bottom:16px}
 .mark{font-weight:800;letter-spacing:.3px;font-size:18px;
@@ -60,7 +60,7 @@ th{color:var(--muted);font-weight:600;font-size:11px;text-transform:uppercase;le
 .btn{display:inline-block;padding:11px 18px;border:none;border-radius:10px;cursor:pointer;
 font-size:15px;font-weight:600;text-decoration:none;color:#fff;margin:4px 6px 4px 0}
 .btn:hover{text-decoration:none}
-.btn-primary{background:linear-gradient(135deg,var(--accent),var(--accent2));box-shadow:0 0 18px var(--glow)}
+.btn-primary{background:linear-gradient(135deg,var(--accent),var(--accent2));color:#0a0a0a;box-shadow:0 0 18px var(--glow)}
 /* Wallet buttons wear their own wallet's brand colour, not ours, so the operator
    recognises the button from inside SSP / Zelcore itself (SSP amber #fbbf24 on
    black text; Zelcore blue #1b63ef on white). Keep these in sync with the web
