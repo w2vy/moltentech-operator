@@ -74,6 +74,29 @@ test("verifyCoupon: only the owner's signature, for this provider and tier, befo
   assert.match(no(tampered), /signature/);
 });
 
+test("🔒 a multi-tier coupon signs one `tiers:` line in place of `tier:`", () => {
+  const lines = couponMessage(claim({}, { tiers: ["cumulus", "nimbus", "stratus"] })).split("\n");
+  assert.equal(lines[3], "tiers: cumulus, nimbus, stratus");
+  assert.equal(lines.some((l) => l.startsWith("tier: ")), false);
+  // A one-tier coupon is untouched: every coupon already issued still verifies.
+  assert.equal(couponMessage(claim()).split("\n")[3], "tier: cumulus");
+});
+
+test("verifyCoupon: a multi-tier coupon is good on each of its tiers and no other", () => {
+  const s = sign(claim({}, { tiers: ["cumulus", "nimbus"] }));
+  assert.equal(verifyCoupon(CFG, "cumulus", s).ok, true);
+  assert.equal(verifyCoupon(CFG, "nimbus", s).ok, true);
+  const v = verifyCoupon(CFG, "stratus", s);
+  assert.equal(v.ok, false);
+  assert.match(v.ok ? "" : v.reason, /for cumulus\/nimbus, not stratus/);
+  // Anyone adding a tier after signing breaks the bytes.
+  const widened: SignedCoupon = { ...s, claim: { ...s.claim, tiers: ["cumulus", "nimbus", "stratus"] } };
+  assert.match((verifyCoupon(CFG, "stratus", widened) as { reason: string }).reason, /signature/);
+  // Dropping `tiers` (what an older Coalition's parser does) falls back to `tier:` and fails.
+  const dropped: SignedCoupon = { ...s, claim: { ...s.claim, tiers: undefined } };
+  assert.match((verifyCoupon(CFG, "cumulus", dropped) as { reason: string }).reason, /signature/);
+});
+
 test("couponPriceCents: tier × (1 − pct), rounded DOWN — never a cent over the offer", () => {
   assert.equal(couponPriceCents(1000, 50), 500);
   assert.equal(couponPriceCents(700, 100), 0);

@@ -22,7 +22,9 @@ can never discount your sales.
 
 ### The form
 
-- **Tier**: the tier the offer is for.
+- **Tier**: the tier the offer is for. A coupon can be for several tiers: check each one, or
+  **All tiers**. The discount comes off the price of the tier the customer rents. Several tiers
+  need Coalition 0.17.0 or newer; a free-node link is always one tier.
 - **Recipient** (optional): a customer's sign-in ID or email. Blank means anyone with the code or link.
 - **Code valid for (days)**: how long new customers can start a rental with it. Rentals already
   started keep their terms.
