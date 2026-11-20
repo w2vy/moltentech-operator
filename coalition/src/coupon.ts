@@ -1,4 +1,4 @@
-import { couponMessage, type CouponTerms, type SignedCoupon } from "@moltentech/protocol";
+import { couponMessage, couponTiers, type CouponTerms, type SignedCoupon } from "@moltentech/protocol";
 import { verifyFluxSignature } from "@moltentech/protocol/wallet";
 import type { CoalitionConfig } from "./config";
 
@@ -22,7 +22,7 @@ import type { CoalitionConfig } from "./config";
 
 export type CouponVerdict = { ok: true; terms: CouponTerms } | { ok: false; reason: string };
 
-/** Is this the operator's own coupon, for this tier, still valid? Pure apart from the clock. */
+/** Is this the operator's own coupon, for this tier (one of its tiers), still valid? Pure apart from the clock. */
 export function verifyCoupon(
   cfg: Pick<CoalitionConfig, "providerSlug" | "ownerAddress">,
   tier: string,
@@ -37,7 +37,8 @@ export function verifyCoupon(
   if (!cfg.ownerAddress) return { ok: false, reason: "no OWNER_ADDRESS — this Coalition cannot verify a coupon" };
   const c = signed.claim;
   if (c.providerSlug !== cfg.providerSlug) return { ok: false, reason: `coupon is for ${c.providerSlug}, not ${cfg.providerSlug}` };
-  if (c.tier !== tier) return { ok: false, reason: `coupon is for ${c.tier}, not ${tier}` };
+  const tiers = couponTiers(c);
+  if (!tiers.includes(tier)) return { ok: false, reason: `coupon is for ${tiers.join("/")}, not ${tier}` };
   const expires = new Date(c.expiresAt);
   if (!opts.redeemed && (Number.isNaN(expires.getTime()) || expires.getTime() <= now.getTime())) {
     return { ok: false, reason: "coupon has expired" };
