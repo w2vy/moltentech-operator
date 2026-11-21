@@ -1274,8 +1274,8 @@ place this is visible.
 ### The alternative: signing at Flux Hub's `/operator`
 
 If you sign in at `{MT_BASE_URL}` with your `OWNER_ADDRESS` wallet, Flux Hub shows the
-same pending teardowns at **`/operator`** and lets you sign them there. "Sign with SSP"
-in-page, or "Sign with Zelcore" — the deep link posts the signature back on its own and the
+same pending teardowns at **`/operator`** and lets you sign them there: click "Sign with SSP"
+(in-page) or "Sign with Zelcore" — the Zelcore deep link posts the signature back on its own and the
 page continues without you pasting anything. A paste box is there as a fallback for
 signing on a different machine.
 
