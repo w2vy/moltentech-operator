@@ -23,6 +23,7 @@
 import type { BuildInfo } from "./build-info";
 import type { DoctorReport, Finding } from "./config-lint";
 import { normalizeInventory } from "./config-lint";
+import { hostEnvField } from "./proxmox-hosts";
 import type { ProxmoxSurvey } from "./proxmox-probe";
 
 export const BUNDLE_FORMAT = "fh-diagnose/1";
@@ -66,6 +67,16 @@ const APPROVED_KEYS = new Set([
   "TIER_PRICES_JSON",
   "TRIAL_DAYS",
 ]);
+
+/**
+ * A standalone host's URL and token id leave like the plain ones. The id has to: it is usually the
+ * same `fh-agent@pve!agent` on every host, so holding it back as a credential would find it in the
+ * approved PROXMOX_TOKEN_ID and stop every bundle. The secret never does.
+ */
+function isApproved(key: string): boolean {
+  const host = hostEnvField(key);
+  return APPROVED_KEYS.has(key) || host?.field === "url" || host?.field === "tokenId";
+}
 
 /** A key name that says its value is a credential, so finding that value anywhere stops the bundle. */
 const CREDENTIAL_KEY = /KEY|SECRET|TOKEN|PASSWORD|HASH/;
@@ -147,7 +158,7 @@ export function summarizeEnv(files: EnvFiles): EnvSummary {
     const section: Record<string, ConfigEntry> = {};
     for (const [key, value] of envEntries(text)) {
       const entry: ConfigEntry = { state: value ? "set" : "empty" };
-      if (APPROVED_KEYS.has(key)) {
+      if (isApproved(key)) {
         if (!namesOnly && value) entry.value = value;
       } else if (value.length >= MIN_SECRET_CHARS) {
         secrets.add(value);

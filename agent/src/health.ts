@@ -1,9 +1,23 @@
 import https from "node:https";
-import type { AgentConfig } from "./config";
+import { forNode, type AgentConfig } from "./config";
 import type { NodeHealth } from "@moltentech/protocol";
 
 // Operator Proxmox uses a self-signed cert; tolerate it for this LOCAL call only.
 const insecureAgent = new https.Agent({ rejectUnauthorized: false });
+
+/**
+ * How long a Proxmox connection may say nothing. A powered-off STANDALONE host answers nobody
+ * (a cluster member would have answered 595 for it), and without this the health pass waited out
+ * the kernel's own ~2 minutes, every minute.
+ */
+export const PROXMOX_TIMEOUT_MS = 30_000;
+const onSilent = (r: ReturnType<typeof https.request>) => () =>
+  r.destroy(new Error(`no answer from Proxmox in ${PROXMOX_TIMEOUT_MS / 1000} s`));
+
+/** An HTTP status from Proxmox, as opposed to no answer at all (`unreachable`). */
+export function isUnreachable(err: Error): boolean {
+  return !/^proxmox \d{3}/.test(err.message) && !(err instanceof SyntaxError);
+}
 
 /**
  * One VM as the Proxmox node listing returns it.
@@ -72,6 +86,7 @@ function getJson<T>(cfg: AgentConfig, path: string): Promise<T> {
       {
         method: "GET",
         agent: insecureAgent,
+        timeout: PROXMOX_TIMEOUT_MS,
         headers: {
           Authorization: `PVEAPIToken=${cfg.proxmox.tokenId}=${cfg.proxmox.tokenSecret}`,
         },
@@ -92,19 +107,20 @@ function getJson<T>(cfg: AgentConfig, path: string): Promise<T> {
       }
     );
     r.on("error", reject);
+    r.on("timeout", onSilent(r));
     r.end();
   });
 }
 
 /**
  * Each cluster node's status (`online` / `offline` / `unknown`) from `GET /nodes`, which any
- * member answers. Used to skip the ISO refresh on a powered-off host: arcane-mage reads the
+ * member answers; `nodeName` asks that node's own endpoint. Used to skip the ISO refresh on a powered-off host: arcane-mage reads the
  * ISO storage THROUGH the node, so an offline node reads as "ISO missing" and it downloads
  * and uploads 3 GB that can never land (2026-10-01/02: pve30 off, 16 × 3.3 GB left in
  * pve55's /var/tmp until its root disk was full).
  */
-export async function getNodeStatuses(cfg: AgentConfig): Promise<Map<string, string>> {
-  const raw = await getJson<{ node?: string; status?: string }[]>(cfg, "/api2/json/nodes");
+export async function getNodeStatuses(cfg: AgentConfig, nodeName?: string): Promise<Map<string, string>> {
+  const raw = await getJson<{ node?: string; status?: string }[]>(nodeName ? forNode(cfg, nodeName) : cfg, "/api2/json/nodes");
   const out = new Map<string, string>();
   for (const n of raw) if (n.node) out.set(n.node, n.status ?? "unknown");
   return out;
@@ -113,7 +129,7 @@ export async function getNodeStatuses(cfg: AgentConfig): Promise<Map<string, str
 /** The ISO file names on `storage` as seen from `node` (`…/content?content=iso`, volid basenames). */
 export async function getStorageIsoNames(cfg: AgentConfig, node: string, storage: string): Promise<string[]> {
   const raw = await getJson<{ volid?: string; content?: string }[]>(
-    cfg,
+    forNode(cfg, node),
     `/api2/json/nodes/${encodeURIComponent(node)}/storage/${encodeURIComponent(storage)}/content?content=iso`
   );
   return raw
@@ -129,7 +145,7 @@ export async function getStorageIsoNames(cfg: AgentConfig, node: string, storage
  */
 export async function getVmDescription(cfg: AgentConfig, nodeName: string, vmid: number): Promise<string | null> {
   const raw = await getJson<{ description?: string }>(
-    cfg,
+    forNode(cfg, nodeName),
     `/api2/json/nodes/${encodeURIComponent(nodeName)}/qemu/${vmid}/config`
   );
   return typeof raw?.description === "string" ? raw.description : null;
@@ -137,7 +153,7 @@ export async function getVmDescription(cfg: AgentConfig, nodeName: string, vmid:
 
 /** GET the VM list for one Proxmox node via the local API token. */
 export function getQemuList(cfg: AgentConfig, nodeName: string): Promise<Vm[]> {
-  return getJson<Vm[]>(cfg, `/api2/json/nodes/${encodeURIComponent(nodeName)}/qemu`);
+  return getJson<Vm[]>(forNode(cfg, nodeName), `/api2/json/nodes/${encodeURIComponent(nodeName)}/qemu`);
 }
 
 /**
@@ -148,9 +164,10 @@ export function getQemuList(cfg: AgentConfig, nodeName: string): Promise<Vm[]> {
  * Needs `VM.Config.Options` on the agent's token.
  */
 export function setVmName(cfg: AgentConfig, nodeName: string, vmid: number, name: string): Promise<void> {
+  const { proxmox } = forNode(cfg, nodeName);
   return new Promise((resolve, reject) => {
     const url = new URL(
-      `${cfg.proxmox.url}/api2/json/nodes/${encodeURIComponent(nodeName)}/qemu/${vmid}/config`
+      `${proxmox.url}/api2/json/nodes/${encodeURIComponent(nodeName)}/qemu/${vmid}/config`
     );
     const body = new URLSearchParams({ name }).toString();
     const r = https.request(
@@ -158,8 +175,9 @@ export function setVmName(cfg: AgentConfig, nodeName: string, vmid: number, name
       {
         method: "PUT",
         agent: insecureAgent,
+        timeout: PROXMOX_TIMEOUT_MS,
         headers: {
-          Authorization: `PVEAPIToken=${cfg.proxmox.tokenId}=${cfg.proxmox.tokenSecret}`,
+          Authorization: `PVEAPIToken=${proxmox.tokenId}=${proxmox.tokenSecret}`,
           "Content-Type": "application/x-www-form-urlencoded",
           "Content-Length": Buffer.byteLength(body),
         },
@@ -176,6 +194,7 @@ export function setVmName(cfg: AgentConfig, nodeName: string, vmid: number, name
       }
     );
     r.on("error", reject);
+    r.on("timeout", onSilent(r));
     r.end(body);
   });
 }
@@ -186,13 +205,14 @@ export function setVmName(cfg: AgentConfig, nodeName: string, vmid: number, name
  *
  * Cluster-wide on purpose: a VMID is unique per cluster, not per node, so a per-node
  * listing would happily hand out an id already taken on another host. `/cluster/resources`
- * answers from any member, which is why one `PROXMOX_URL` is enough.
+ * answers from any member. "The cluster" is the one `nodeName` is in: a standalone host with its
+ * own endpoint has its own id space.
  *
  * Foreign VMs are exactly why D3-B allocates here and not on the hub: MT holds no
  * hypervisor credentials and cannot see them.
  */
-export async function getClusterVmIds(cfg: AgentConfig): Promise<Set<number>> {
-  const raw = await getJson<{ vmid?: number | string }[]>(cfg, "/api2/json/cluster/resources?type=vm");
+export async function getClusterVmIds(cfg: AgentConfig, nodeName: string): Promise<Set<number>> {
+  const raw = await getJson<{ vmid?: number | string }[]>(forNode(cfg, nodeName), "/api2/json/cluster/resources?type=vm");
   const ids = new Set<number>();
   for (const r of raw) {
     const n = typeof r.vmid === "string" ? Number(r.vmid) : r.vmid;
@@ -231,20 +251,27 @@ export async function collectOwnedVms(
     byNode.set(n.nodeName, list);
   }
 
-  const out: OwnedVm[] = [];
-  for (const [nodeName, vmNames] of byNode) {
-    let vms: Vm[];
-    try {
-      vms = await getQemuList(cfg, nodeName);
-    } catch (err) {
-      console.error(
-        `[health] proxmox query failed for node ${nodeName}: ${(err as Error).message}`
-      );
-      continue; // skip — staleness will catch a persistently-unreachable hypervisor
-    }
-    out.push(...ownedVmsForNode(nodeName, vmNames, vms));
+  // One endpoint's nodes in turn, the endpoints side by side: a standalone host that is off costs
+  // its own timeout and delays nobody else's health.
+  const byEndpoint = new Map<string, string[]>();
+  for (const nodeName of byNode.keys()) {
+    const url = forNode(cfg, nodeName).proxmox.url ?? "";
+    byEndpoint.set(url, [...(byEndpoint.get(url) ?? []), nodeName]);
   }
-  return out;
+  const found = new Map<string, OwnedVm[]>();
+  await Promise.all(
+    [...byEndpoint.values()].map(async (nodeNames) => {
+      for (const nodeName of nodeNames) {
+        try {
+          found.set(nodeName, ownedVmsForNode(nodeName, byNode.get(nodeName)!, await getQemuList(cfg, nodeName)));
+        } catch (err) {
+          // skip — staleness will catch a persistently-unreachable hypervisor
+          console.error(`[health] proxmox query failed for node ${nodeName}: ${(err as Error).message}`);
+        }
+      }
+    })
+  );
+  return [...byNode.keys()].flatMap((nodeName) => found.get(nodeName) ?? []);
 }
 
 /**
@@ -286,17 +313,19 @@ export function ownedVmsForNode(
  * task's UPID. Used only by the teardown of a FRESH VM (`fresh-vm-stop.ts`).
  */
 export function stopVmNow(cfg: AgentConfig, nodeName: string, vmid: number): Promise<string> {
+  const { proxmox } = forNode(cfg, nodeName);
   return new Promise((resolve, reject) => {
     const url = new URL(
-      `${cfg.proxmox.url}/api2/json/nodes/${encodeURIComponent(nodeName)}/qemu/${vmid}/status/stop`
+      `${proxmox.url}/api2/json/nodes/${encodeURIComponent(nodeName)}/qemu/${vmid}/status/stop`
     );
     const r = https.request(
       url,
       {
         method: "POST",
         agent: insecureAgent,
+        timeout: PROXMOX_TIMEOUT_MS,
         headers: {
-          Authorization: `PVEAPIToken=${cfg.proxmox.tokenId}=${cfg.proxmox.tokenSecret}`,
+          Authorization: `PVEAPIToken=${proxmox.tokenId}=${proxmox.tokenSecret}`,
           "Content-Length": 0,
         },
       },
@@ -318,6 +347,7 @@ export function stopVmNow(cfg: AgentConfig, nodeName: string, vmid: number): Pro
       }
     );
     r.on("error", reject);
+    r.on("timeout", onSilent(r));
     r.end();
   });
 }
@@ -328,5 +358,5 @@ export async function getTaskStatus(
   nodeName: string,
   upid: string
 ): Promise<{ status?: string; exitstatus?: string }> {
-  return getJson(cfg, `/api2/json/nodes/${encodeURIComponent(nodeName)}/tasks/${encodeURIComponent(upid)}/status`);
+  return getJson(forNode(cfg, nodeName), `/api2/json/nodes/${encodeURIComponent(nodeName)}/tasks/${encodeURIComponent(upid)}/status`);
 }

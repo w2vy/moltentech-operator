@@ -1,4 +1,5 @@
-import type { AgentConfig } from "./config";
+import { credsComplete } from "@moltentech/protocol/proxmox-hosts";
+import { forNode, type AgentConfig } from "./config";
 import { getStorageIsoNames } from "./health";
 
 /**
@@ -48,7 +49,8 @@ export async function ensureDatedIso(
 ): Promise<string> {
   const current = cfg.host.arcaneIso;
   if (isDatedFluxLiveIso(current)) return current;
-  if (!cfg.proxmox?.url || !cfg.proxmox.tokenId || !cfg.proxmox.tokenSecret) return current;
+  if (!cfg.proxmox && !cfg.proxmoxHosts) return current;
+  if (!credsComplete(forNode(cfg, node).proxmox)) return current;
   try {
     const newest = newestFluxLiveIso(await listIsos(cfg, node, storage));
     if (!newest) {

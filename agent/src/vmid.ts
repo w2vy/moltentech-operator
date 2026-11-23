@@ -71,9 +71,13 @@ export function nextFree(from: number, inUse: ReadonlySet<number>): { vmId: numb
  */
 let cursor: number | null = null;
 
+/** Endpoints whose live VMs have been counted into the cursor (see `allocateVmId`). */
+const seeded = new Set<string>();
+
 /** Testing seam — reset the cursor between cases. */
 export function resetCursor(): void {
   cursor = null;
+  seeded.clear();
 }
 
 /** Current cursor, or null before the first allocation. Exposed for logging/tests. */
@@ -90,11 +94,18 @@ export function peekCursor(): number | null {
  * `/cluster/nextid`, which is exactly the pre-D3-B behaviour. Rotation is a
  * readability improvement, and it must never be the reason a customer's node fails
  * to build.
+ *
+ * With several endpoints (standalone hosts) there is still ONE cursor, so an id names one node
+ * across the operator's whole fleet, not one per host. Each endpoint's live maximum is counted in
+ * the first time it is used, so its destroyed VMs' ids are not handed out again either.
  */
-export async function allocateVmId(listInUse: () => Promise<Set<number>>): Promise<number | null> {
+export async function allocateVmId(listInUse: () => Promise<Set<number>>, endpoint = ""): Promise<number | null> {
   const inUse = await listInUse();
-  if (cursor == null) cursor = seedFrom(inUse);
-  const picked = nextFree(cursor, inUse);
+  if (!seeded.has(endpoint)) {
+    cursor = Math.max(cursor ?? VMID_MIN, seedFrom(inUse));
+    seeded.add(endpoint);
+  }
+  const picked = nextFree(cursor!, inUse);
   if (!picked) return null;
   cursor = picked.cursor;
   return picked.vmId;

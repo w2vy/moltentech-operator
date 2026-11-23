@@ -6,10 +6,11 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { Job, FailureClass, InventoryHost, VmMemoryMb } from "@moltentech/protocol";
 import type { AgentConfig } from "./config";
-import { reloadInventory } from "./config";
+import { forNode, hasOwnEndpoint, reloadInventory } from "./config";
+import { credsComplete, hostEnvKeys, hostEnvSuffix, missingHostKeys } from "@moltentech/protocol/proxmox-hosts";
 import { checkOwnerAuth } from "./owner-auth";
 import { allocateVmId, VMID_MIN, VMID_MAX } from "./vmid";
-import { getClusterVmIds, getQemuList, setVmName } from "./health";
+import { getClusterVmIds, getNodeStatuses, getQemuList, setVmName } from "./health";
 import { freshStopDeps, hardStopIfFresh, type FreshStopDeps } from "./fresh-vm-stop";
 import { existingVmFence, existingVmFor, planRename, toListing } from "./existing-vm";
 import { ensureDatedIso } from "./iso-name";
@@ -248,7 +249,21 @@ export function arcaneMageArgv(args: string[], url: string): string[] {
   return [subcommand!, "--url", url, ...rest];
 }
 
-function runArcaneMage(args: string[], cfg: AgentConfig, timeoutMs: number): Promise<AmResult> {
+/**
+ * Why Proxmox cannot be called for `nodeName`, or null when its credentials are all there. A host
+ * with some of its own three is refused, never sent to the plain endpoint: that is another machine.
+ */
+export function credsProblem(cfg: AgentConfig, nodeName: string): string | null {
+  const creds = forNode(cfg, nodeName).proxmox;
+  if (credsComplete(creds)) return null;
+  return hasOwnEndpoint(cfg, nodeName)
+    ? `Proxmox credentials for ${nodeName} are incomplete: set ${missingHostKeys(hostEnvSuffix(nodeName), creds).join(", ")} in .env.operator, then fh-agent restart`
+    : `Proxmox creds not configured for ${nodeName} (set PROXMOX_URL/TOKEN_ID/TOKEN_SECRET or AGENT_DRY_RUN=1)`;
+}
+
+/** arcane-mage against the endpoint that has `nodeName`. */
+function runArcaneMage(args: string[], agentCfg: AgentConfig, nodeName: string, timeoutMs: number): Promise<AmResult> {
+  const cfg = forNode(agentCfg, nodeName);
   const token = `${cfg.proxmox.tokenId}=${cfg.proxmox.tokenSecret}`;
   const fullArgs = arcaneMageArgv(args, cfg.proxmox.url!);
   return new Promise((resolve) => {
@@ -437,6 +452,34 @@ export function amFailure(r: AmResult, context?: string): string {
 }
 
 /**
+ * Why a teardown's "not found" must not be believed, or null when it can be.
+ *
+ * arcane-mage answers `VM '…' not found` both when the VM is gone and when the endpoint has no
+ * node by that name at all. The second is a wrong endpoint: a standalone host whose
+ * `PROXMOX_URL_<NODE>` line was lost falls back to the plain one. Reported as success, the hub
+ * ends the rental while the VM still runs (it parks the slot, or frees it after a loan). Worded
+ * so that it does not match the hub's own "VM was already absent" test (`VM '<name>' not found`).
+ */
+export async function notFoundDoubt(
+  cfg: AgentConfig,
+  nodeName: string,
+  nodeLister: typeof getNodeStatuses = getNodeStatuses
+): Promise<string | null> {
+  const url = forNode(cfg, nodeName).proxmox.url;
+  let nodes: Map<string, string>;
+  try {
+    nodes = await nodeLister(cfg, nodeName);
+  } catch (err) {
+    return `VM not found, but ${url} could not list its nodes to confirm ${nodeName} is there: ${(err as Error).message}`;
+  }
+  if (nodes.has(nodeName)) return null;
+  return (
+    `Proxmox at ${url} has no node ${nodeName} (it has ${[...nodes.keys()].join(", ") || "none"}), so "VM not found" ` +
+    `proves nothing. A standalone host needs ${Object.values(hostEnvKeys(nodeName)).join(", ")} in .env.operator.`
+  );
+}
+
+/**
  * Destroy one VM by name and node.
  *
  * Split out of `deprovision` below so the trial self-destruct sweep can reuse it without
@@ -445,7 +488,8 @@ export function amFailure(r: AmResult, context?: string): string {
  * operator's own agent acting on its own hypervisor, on a marker carried by the VM itself — and
  * routing it through `withOwnerAuthGate` would make it look like one.
  *
- * `not found` counts as success, so a repeat is harmless and the caller needs no state.
+ * `not found` counts as success, so a repeat is harmless and the caller needs no state — once
+ * `notFoundDoubt` has made sure it was the right Proxmox that said so.
  *
  * A VM only minutes old is hard-stopped first (`fresh-vm-stop.ts`): it has no FluxOS to give
  * a graceful shutdown to, so arcane-mage's graceful step would only fail or wait.
@@ -454,15 +498,24 @@ export async function deprovisionVm(
   vmName: string,
   nodeName: string,
   cfg: AgentConfig,
-  fresh: FreshStopDeps = freshStopDeps(cfg)
+  fresh: FreshStopDeps = freshStopDeps(cfg),
+  nodeLister: typeof getNodeStatuses = getNodeStatuses
 ): Promise<ExecResult> {
   const note = await hardStopIfFresh(vmName, nodeName, fresh);
   const r = await runArcaneMage(
     ["deprovision", "--json", "--force", "--vm-name", vmName, "--node", nodeName],
     cfg,
+    nodeName,
     TIMEOUT.delete
   );
-  const ok = r.json?.ok === true || !!r.json?.error?.includes("not found");
+  const notFound = r.json?.ok !== true && !!r.json?.error?.includes("not found");
+  if (notFound) {
+    const doubt = await notFoundDoubt(cfg, nodeName, nodeLister);
+    if (doubt) {
+      return { ok: false, message: (note ? note + "\n" : "") + doubt, failureClass: "unknown" };
+    }
+  }
+  const ok = r.json?.ok === true || notFound;
   return {
     ok,
     message: (note ? note + "\n" : "") + (ok ? clipMessage((r.stdout + "\n" + r.stderr).trim()) : amFailure(r)),
@@ -504,9 +557,12 @@ export function coerceVmId(v: unknown): number | undefined {
  */
 async function pickRotatedVmId(job: Job, cfg: AgentConfig): Promise<number | undefined> {
   if (job.slot.vmId != null) return undefined; // operator-declared pin wins
-  if (!cfg.proxmox.url || !cfg.proxmox.tokenId || !cfg.proxmox.tokenSecret) return undefined;
+  if (credsProblem(cfg, job.slot.nodeName)) return undefined;
   try {
-    const vmId = await allocateVmId(() => getClusterVmIds(cfg));
+    const vmId = await allocateVmId(
+      () => getClusterVmIds(cfg, job.slot.nodeName),
+      forNode(cfg, job.slot.nodeName).proxmox.url
+    );
     if (vmId == null) {
       console.error(`[vmid] no free VMID in ${VMID_MIN}-${VMID_MAX}; letting Proxmox allocate`);
       return undefined;
@@ -530,7 +586,7 @@ async function provision(job: Job, cfg: AgentConfig): Promise<ExecResult> {
   await ensureDatedIso(cfg, job.slot.nodeName, host.storageIso);
   writeFileSync(yamlPath, buildProvisionYaml(job, cfg, rotated, invHost), { mode: 0o600 });
   try {
-    const r = await runArcaneMage(["provision", "--json", "-c", yamlPath], cfg, TIMEOUT.provision);
+    const r = await runArcaneMage(["provision", "--json", "-c", yamlPath], cfg, job.slot.nodeName, TIMEOUT.provision);
     const ok = r.json?.ok === true;
     return {
       ok,
@@ -565,9 +621,11 @@ export async function refreshIso(
   storageIso: string,
   cfg: AgentConfig
 ): Promise<IsoRefreshResult> {
+  const problem = credsProblem(cfg, node);
+  if (problem) return { ok: false, error: problem };
   // Upstream arcane-mage (RunOnFlux 6.x) has no `--current-iso`: passing it fails the refresh.
   const args = ["refresh-iso", "--json", "--node", node, "--storage-iso", storageIso];
-  const r = await runArcaneMage(args, cfg, TIMEOUT.refreshIso);
+  const r = await runArcaneMage(args, cfg, node, TIMEOUT.refreshIso);
   if (r.json && typeof r.json.ok === "boolean") {
     return { ...r.json, ok: r.json.ok };
   }
@@ -576,12 +634,11 @@ export async function refreshIso(
 
 /**
  * Real executor: provisions/tears down on the LOCAL Proxmox via arcane-mage. The
- * agent injects its own creds (cfg.proxmox); the Job never carries them.
+ * agent injects its own creds (`forNode`: the slot's host's); the Job never carries them.
  */
 export const arcaneMageExecutor: Executor = async (job, cfg) => {
-  if (!cfg.proxmox.url || !cfg.proxmox.tokenId || !cfg.proxmox.tokenSecret) {
-    throw new Error("Proxmox creds not configured (set PROXMOX_URL/TOKEN_ID/TOKEN_SECRET or AGENT_DRY_RUN=1)");
-  }
+  const problem = credsProblem(cfg, job.slot.nodeName);
+  if (problem) throw new Error(problem);
   switch (job.action) {
     case "provision":
       return provision(job, cfg);

@@ -5,6 +5,7 @@ import {
   InventoryHost,
   FOUNDATION_VM_PREFIX,
 } from "@moltentech/protocol";
+import { credsComplete, credsForNode, hostEnvSuffix, parseHostEndpoints, type HostProxmoxCreds } from "@moltentech/protocol/proxmox-hosts";
 
 /** One tier's desired listing state, re-asserted to MT on a heartbeat. */
 const ListingTierConfig = z.object({
@@ -51,7 +52,12 @@ export type AgentConfig = {
   healthIntervalMs: number;
   refreshIsoIntervalMs: number;
   /** Local Proxmox the agent provisions against (creds NEVER leave the operator). */
-  proxmox: { url?: string; tokenId?: string; tokenSecret?: string };
+  proxmox: HostProxmoxCreds;
+  /**
+   * Standalone hosts with their own endpoint (`PROXMOX_URL_<NODE>` …), by env suffix. Never read
+   * this directly: `forNode` picks the right one, and a host not in here uses `proxmox`.
+   */
+  proxmoxHosts?: Record<string, HostProxmoxCreds>;
   /** Local Proxmox/node defaults the agent stamps into the arcane-mage YAML. */
   host: {
     network: string;
@@ -73,6 +79,23 @@ export type AgentConfig = {
   /** When true (or Proxmox unconfigured), jobs are acknowledged without touching Proxmox. */
   dryRun: boolean;
 };
+
+/**
+ * `cfg` with `proxmox` pointing at the endpoint that has `nodeName`.
+ *
+ * Called at the point of use, by every function that takes a node name, and never passed on to
+ * a call about another node: the result no longer holds the plain endpoint. Only `proxmox` is
+ * replaced: `host` is shared, because an adopted ISO name is written into it.
+ */
+export function forNode(cfg: AgentConfig, nodeName: string): AgentConfig {
+  const proxmox = credsForNode(nodeName, cfg.proxmox, cfg.proxmoxHosts);
+  return proxmox === cfg.proxmox ? cfg : { ...cfg, proxmox };
+}
+
+/** Does this node have its own endpoint, rather than the plain `PROXMOX_*` one? */
+export function hasOwnEndpoint(cfg: AgentConfig, nodeName: string): boolean {
+  return cfg.proxmoxHosts !== undefined && hostEnvSuffix(nodeName) in cfg.proxmoxHosts;
+}
 
 /** Re-read the inventory file (if configured) so console edits propagate without a restart. */
 export function reloadInventory(cfg: AgentConfig): InventoryHost[] {
@@ -107,7 +130,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AgentConfig {
     tokenId: env.PROXMOX_TOKEN_ID,
     tokenSecret: env.PROXMOX_TOKEN_SECRET,
   };
-  const dryRun = env.AGENT_DRY_RUN === "1" || !proxmox.url || !proxmox.tokenSecret;
+  const proxmoxHosts = parseHostEndpoints(env);
+  const anyHostUsable = Object.values(proxmoxHosts).some(credsComplete);
+  const dryRun = env.AGENT_DRY_RUN === "1" || ((!proxmox.url || !proxmox.tokenSecret) && !anyHostUsable);
 
   let listing: AgentConfig["listing"] = [];
   if (env.AGENT_LISTING_JSON) {
@@ -161,6 +186,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AgentConfig {
     healthIntervalMs: Number(env.AGENT_HEALTH_INTERVAL_MS ?? 60_000),
     refreshIsoIntervalMs: Number(env.AGENT_REFRESH_ISO_INTERVAL_MS ?? 6 * 60 * 60_000),
     proxmox,
+    proxmoxHosts,
     host: {
       network: env.PROXMOX_NETWORK ?? "vmbr0",
       storageImages: env.PROXMOX_STORAGE_IMAGES ?? "local-lvm",

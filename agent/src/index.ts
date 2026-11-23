@@ -1,6 +1,7 @@
 import { SCHEMA_VERSION, priceChangeMessage } from "@moltentech/protocol";
 import { verifyFluxSignature, verifyOwnerAuth } from "@moltentech/protocol/wallet";
-import { loadConfig, reloadInventory, declaresAnySlot } from "./config";
+import { loadConfig, reloadInventory, declaresAnySlot, forNode } from "./config";
+import { credsComplete, hostEnvSuffix, missingHostKeys } from "@moltentech/protocol/proxmox-hosts";
 import { agentBuildLabel } from "./version";
 import { MtClient, type MtClientAuth } from "./client";
 import { CoalitionClient } from "./coalition-client";
@@ -29,7 +30,8 @@ import { runPreflight, formatPreflight, checkManifestKey } from "./preflight";
 async function doctor(): Promise<never> {
   const cfg = loadConfig();
   const hosts = reloadInventory(cfg);
-  console.log(`fh-agent doctor — provider=${cfg.providerSlug} proxmox=${cfg.proxmox.url}\n`);
+  const urls = [...new Set(hosts.map((h) => forNode(cfg, h.nodeName).proxmox.url ?? "(unset)"))];
+  console.log(`fh-agent doctor — provider=${cfg.providerSlug} proxmox=${urls.join(", ") || cfg.proxmox.url}\n`);
 
   const results = await runPreflight(
     cfg,
@@ -84,6 +86,13 @@ async function main() {
     // chance the operator gets to learn the line in their env.json is dead, and without it
     // that line survives every future redeploy because nothing ever mentions it again.
     console.log("[agent] AGENT_KEY is set but no longer used — safe to delete");
+  }
+
+  for (const [suffix, creds] of Object.entries(cfg.proxmoxHosts ?? {})) {
+    const hosts = reloadInventory(cfg).filter((h) => hostEnvSuffix(h.nodeName) === suffix);
+    const who = hosts[0]?.nodeName ?? `${suffix} (no inventory host by that name yet)`;
+    if (credsComplete(creds)) console.log(`[agent] own Proxmox endpoint for ${who}: ${creds.url}`);
+    else console.error(`[agent] Proxmox endpoint for ${who} is incomplete — missing ${missingHostKeys(suffix, creds).join(", ")}; its jobs will fail`);
   }
 
   let stopping = false;

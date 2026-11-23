@@ -88,7 +88,9 @@ import { probeHub } from "./hub-probe";
 import { readBuildInfo, formatBuildInfo } from "./build-info";
 import { wrapperScript, wrapperStatus, WRAPPER_VERSION } from "./wrapper";
 import {
+  mergeSurveys,
   probeProxmox,
+  type ProxmoxCreds,
   roleAppendCommand,
   formatProbe,
   ssdImageStorages,
@@ -102,6 +104,7 @@ import {
   slotCanTakeExistingVm,
   tierForVm,
 } from "./proxmox-probe";
+import { credsComplete, hostEnvKeys, hostEnvSuffix, parseHostEndpoints } from "./proxmox-hosts";
 import {
   AGENT_ROLE,
   AGENT_TOKEN_ID,
@@ -1954,7 +1957,7 @@ async function offerRoleFix(ctx: Ctx, fix: RoleFix): Promise<boolean> {
     return false;
   }
   return withPrompts(ctx, async (ask, _askUntil, askHidden) => {
-    console.log(`\nThe FluxHubAgent role is missing: ${fix.privs.join(", ")}.`);
+    console.log(`\nThe FluxHubAgent role at ${fix.url} is missing: ${fix.privs.join(", ")}.`);
     const yes = (await ask("Add it now? Needs the Proxmox root password once, never saved (y/N)", "N")).toLowerCase();
     if (!yes.startsWith("y")) {
       console.log(`Not changed. To do it yourself, run on any node of the cluster (as root):\n  ${line}`);
@@ -1977,15 +1980,22 @@ async function offerRoleFix(ctx: Ctx, fix: RoleFix): Promise<boolean> {
   });
 }
 
+/** The complete per-host Proxmox logins in `.env.operator`, for standalone hosts. */
+function hostEndpoints(operator: Record<string, string>): Array<{ suffix: string; creds: ProxmoxCreds }> {
+  return Object.entries(parseHostEndpoints(operator)).flatMap(([suffix, creds]) =>
+    credsComplete(creds) ? [{ suffix, creds }] : []
+  );
+}
+
 /** Every `doctor` check, shared with `diagnose`. Probe chatter goes to `log`; the caller reports. */
 async function runDoctorChecks(
   ctx: Ctx,
   dir: string,
   checks: { stripe: boolean; proxmox: boolean; hub: boolean },
   log: (line: string) => void = console.log,
-): Promise<{ report: DoctorReport; survey?: ProxmoxSurvey; roleFix?: RoleFix }> {
+): Promise<{ report: DoctorReport; survey?: ProxmoxSurvey; roleFixes: RoleFix[] }> {
   let survey: ProxmoxSurvey | undefined;
-  let roleFix: RoleFix | undefined;
+  const roleFixes: RoleFix[] = [];
   // The runbook's "which value must match where" table, executed. File-level by
   // DEFAULT: no network, no secrets held. Two opt-in flags cross that line on
   // purpose — `--check-stripe` and `--check-proxmox` — because the two failures
@@ -2067,27 +2077,43 @@ async function runDoctorChecks(
     if (!url || !tokenId || !tokenSecret) {
       log("--check-proxmox: .env.operator is missing PROXMOX_URL / _TOKEN_ID / _TOKEN_SECRET — skipped.\n");
     } else {
-      const probe = await probeProxmox({ url, tokenId, tokenSecret });
-      survey = probe.survey;
-      log(`proxmox API — ${url}`);
-      log(formatProbe(probe.checks) + "\n");
-      noteUnproven(report, "proxmox", probe.checks);
-      for (const check of probe.checks) {
-        if (check.status !== "fail") continue;
-        report.findings.push({
-          severity: check.advisory ? "warning" : "error",
-          rule: check.advisory ? "PROXMOX_CHECK_ADVISORY" : "PROXMOX_CHECK_FAILED",
-          file: ".env.operator",
-          message: `${check.name}: ${check.detail}`,
-        });
+      const endpoints: Array<{ label: string; creds: ProxmoxCreds }> = [
+        { label: "", creds: { url, tokenId, tokenSecret } },
+        // Standalone hosts with their own login (an incomplete set is lintHostProxmox's finding).
+        ...hostEndpoints(operator).map(({ suffix, creds }) => ({ label: `${suffix}: `, creds })),
+      ];
+      for (const { label, creds } of endpoints) {
+        const probe = await probeProxmox(creds);
+        survey = mergeSurveys(survey, probe.survey);
+        log(`proxmox API — ${label}${creds.url}`);
+        log(formatProbe(probe.checks) + "\n");
+        noteUnproven(report, "proxmox", probe.checks);
+        for (const check of probe.checks) {
+          if (check.status !== "fail") continue;
+          report.findings.push({
+            severity: check.advisory ? "warning" : "error",
+            rule: check.advisory ? "PROXMOX_CHECK_ADVISORY" : "PROXMOX_CHECK_FAILED",
+            file: ".env.operator",
+            message: `${label}${check.name}: ${check.detail}`,
+          });
+        }
+        if (probe.missingPrivs?.length) roleFixes.push({ url: creds.url, privs: probe.missingPrivs });
+        // The lines named PVE31 must reach a node that is called that, or every job for it fails.
+        if (label && probe.survey && !probe.survey.nodes.some((n) => `${hostEnvSuffix(n)}: ` === label)) {
+          report.findings.push({
+            severity: "error",
+            rule: "HOST_PROXMOX_WRONG_NODE",
+            file: ".env.operator",
+            message: `${label}${creds.url} has no node by that name (it has ${probe.survey.nodes.join(", ") || "none"}).`,
+          });
+        }
       }
-      if (probe.missingPrivs?.length) roleFix = { url, privs: probe.missingPrivs };
       // The storage the operator actually configured, judged. This is the check that
       // exists because a `local-lvm` default on a WD Red provisions fine and then
       // fails every benchmark with nothing in any log to say why.
       // Same default as the agent (agent/src/config.ts): unset means `local`.
       const importStore = operator.PROXMOX_STORAGE_IMPORT || "local";
-      const storages = probe.survey?.storages ?? {};
+      const storages = survey?.storages ?? {};
       const { judged, skipped } = nodesToJudge(Object.keys(storages), inventory, {
         images: operator.PROXMOX_STORAGE_IMAGES,
         iso: operator.PROXMOX_STORAGE_ISO,
@@ -2180,7 +2206,7 @@ async function runDoctorChecks(
       fix: wrapper.fix,
     });
   }
-  return { report, survey, roleFix };
+  return { report, survey, roleFixes };
 }
 
 export async function runCommand(cmd: string | undefined, args: string[], ctx: Ctx): Promise<number> {
@@ -2377,10 +2403,25 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
       // it renders a fresh .env.operator from config.env's identity (storage lines blank
       // until `inventory`); afterwards it patches the three lines in place. The token
       // is probed here, where the operator can fix it, exactly as `init` does.
-      rejectUnknownFlags("proxmox", args, ["--dir", "--url", "--token-id", "--token-secret"], ["--no-probe", "--yes"]);
+      rejectUnknownFlags("proxmox", args, ["--dir", "--host", "--url", "--token-id", "--token-secret"], ["--no-probe", "--yes"]);
       const od = readOperatorDir("proxmox", dirFlag(args));
       const opEnv = od.operatorText !== undefined ? parseConfigEnv(od.operatorText) : {};
       const yes = args.includes("--yes");
+
+      // `--host pve31`: a standalone host's own three lines, instead of the plain ones.
+      const hostFlag = flag(args, "--host");
+      const keys = hostFlag
+        ? hostEnvKeys(hostFlag)
+        : { url: "PROXMOX_URL", tokenId: "PROXMOX_TOKEN_ID", tokenSecret: "PROXMOX_TOKEN_SECRET" };
+      if (hostFlag && od.operatorText === undefined) {
+        die(`${od.operatorPath} not found — run \`fh-toolkit proxmox\` for your first host, then \`--host ${hostFlag}\`.`);
+      }
+      const cur = { url: opEnv[keys.url], tokenId: opEnv[keys.tokenId], tokenSecret: opEnv[keys.tokenSecret] };
+      // The login must reach a node called that, or every job for it fails.
+      const wrongNode = (survey: ProxmoxSurvey | undefined): string | null =>
+        hostFlag && survey && !survey.nodes.includes(hostFlag)
+          ? `that Proxmox has no node called ${hostFlag} (it has ${survey.nodes.join(", ") || "none"}). --host takes the node name Proxmox shows.`
+          : null;
 
       let url: string;
       let tokenId: string;
@@ -2388,29 +2429,35 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
       const flagUrl = flag(args, "--url");
       if (flagUrl !== undefined || flag(args, "--token-id") !== undefined || flag(args, "--token-secret") !== undefined) {
         // Scripted: every flag is optional and the current file fills the gaps.
-        url = flagUrl ?? opEnv.PROXMOX_URL ?? "";
-        tokenId = flag(args, "--token-id") ?? opEnv.PROXMOX_TOKEN_ID ?? "";
-        tokenSecret = flag(args, "--token-secret") ?? opEnv.PROXMOX_TOKEN_SECRET ?? "";
+        url = flagUrl ?? cur.url ?? "";
+        tokenId = flag(args, "--token-id") ?? cur.tokenId ?? "";
+        tokenSecret = flag(args, "--token-secret") ?? cur.tokenSecret ?? "";
         if (!url || !tokenId || !tokenSecret) die("--url, --token-id and --token-secret are all needed (or already in .env.operator).");
         if (!args.includes("--no-probe")) {
           console.log("Verifying the token…");
           const probe = await probeProxmox({ url, tokenId, tokenSecret });
           console.log(formatProbe(probe.checks));
+          const wrong = wrongNode(probe.survey);
+          if (wrong && !yes) die(`${wrong} Nothing written.`);
           if (!probe.ok && !yes) die("the token did not verify — nothing written. Fix it, or pass --yes to write it anyway.");
         }
       } else {
         console.log(
-          od.operatorText !== undefined
+          hostFlag
+            ? `fh-toolkit proxmox — ${hostFlag}'s own login (a standalone host); Enter keeps each current value.\n`
+            : od.operatorText !== undefined
             ? `fh-toolkit proxmox — ${od.operatorPath} exists; Enter keeps each current value.\n`
             : "fh-toolkit proxmox — the agent's Proxmox credentials; `inventory` adds the hosts.\n"
         );
         const p = await withPrompts(ctx, (ask, _askUntil, askHidden) =>
           askProxmox(
             ask,
-            { url: opEnv.PROXMOX_URL, tokenId: opEnv.PROXMOX_TOKEN_ID, tokenSecret: opEnv.PROXMOX_TOKEN_SECRET },
+            cur,
             askHidden
           )
         );
+        const wrong = wrongNode(p.survey);
+        if (wrong) die(`${wrong} Nothing written.`);
         ({ proxmoxUrl: url, proxmoxTokenId: tokenId, proxmoxTokenSecret: tokenSecret } = p);
         if (!url) {
           console.log("nothing written.");
@@ -2452,10 +2499,10 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
       }
       let text = od.operatorText;
       const changes: string[] = [];
-      for (const [key, to] of [["PROXMOX_URL", url], ["PROXMOX_TOKEN_ID", tokenId], ["PROXMOX_TOKEN_SECRET", tokenSecret]] as const) {
+      for (const [key, to] of [[keys.url, url], [keys.tokenId, tokenId], [keys.tokenSecret, tokenSecret]] as const) {
         if ((opEnv[key] ?? "") === to) continue;
         text = upsertEnvLine(text, key, to);
-        changes.push(key === "PROXMOX_TOKEN_SECRET" ? `${key}: (changed)` : `${key}: ${opEnv[key] ?? "(unset)"} → ${to}`);
+        changes.push(key === keys.tokenSecret ? `${key}: (changed)` : `${key}: ${opEnv[key] ?? "(unset)"} → ${to}`);
       }
       if (changes.length === 0) {
         console.log("\nNothing to change — .env.operator already says exactly this.");
@@ -2686,6 +2733,11 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
           const probe = await probeProxmox({ url: opEnv.PROXMOX_URL, tokenId: opEnv.PROXMOX_TOKEN_ID, tokenSecret: opEnv.PROXMOX_TOKEN_SECRET });
           if (probe.ok) survey = probe.survey;
           else console.log(formatProbe(probe.checks) + "\n  → no survey; storage names are typed, not picked. `fh-toolkit proxmox` fixes the token.");
+          for (const { suffix, creds } of hostEndpoints(opEnv)) {
+            const own = await probeProxmox(creds);
+            if (own.ok) survey = mergeSurveys(survey, own.survey);
+            else console.log(formatProbe(own.checks) + `\n  → no survey of ${suffix} (${creds.url}); its storage names are typed.`);
+          }
         }
         // A mark whose VM was adopted (renamed to its slot) or is gone has done its job.
         const retired = retireAdoptedMarks(od.currentHosts, survey?.vms);
@@ -3045,14 +3097,14 @@ export async function runCommand(cmd: string | undefined, args: string[], ctx: C
     }
     case "doctor": {
       rejectUnknownFlags("doctor", args, ["--dir"], ["--check-hub", "--check-proxmox", "--check-stripe"]);
-      const { report, roleFix } = await runDoctorChecks(ctx, flag(args, "--dir") ?? ".", {
+      const { report, roleFixes } = await runDoctorChecks(ctx, flag(args, "--dir") ?? ".", {
         stripe: args.includes("--check-stripe"),
         proxmox: args.includes("--check-proxmox"),
         hub: args.includes("--check-hub"),
       });
       const { text, ok } = formatReport(report);
       console.log(text);
-      if (roleFix) await offerRoleFix(ctx, roleFix);
+      for (const fix of roleFixes) await offerRoleFix(ctx, fix);
       if (!ok) return 1;
       return 0;
     }

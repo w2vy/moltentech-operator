@@ -18,8 +18,8 @@ should not:
   holds this, and what breaks if I edit it".
 - **[`operator-app.md`](operator-app.md)** — the phone app: Issues, pairing a phone, push
   settings, the critical email and the wall status board.
-- **[`adding-a-proxmox-host.md`](adding-a-proxmox-host.md)** — adding another Proxmox host:
-  cluster join, attestation and inventory, in order.
+- **[`adding-a-proxmox-host.md`](adding-a-proxmox-host.md)** — adding another Proxmox host,
+  standalone or in a cluster: login, attestation and inventory, in order.
 
 ## Which are you?
 
@@ -1103,6 +1103,8 @@ AGENT_INVENTORY_PATH=/data/inventory.json
 PROXMOX_URL=https://<proxmox-lan-ip>:8006
 PROXMOX_TOKEN_ID='fh-agent@pve!agent'
 PROXMOX_TOKEN_SECRET=<secret from Step 0.1>
+# A host outside that cluster has its own three, ending in its node name (PROXMOX_URL_PVE2 …):
+# `fh-toolkit proxmox --host pve2` — see adding-a-proxmox-host.md.
 PROXMOX_NETWORK=vmbr0
 PROXMOX_STORAGE_IMAGES=<a ROTA=0 storage ID — see Step 0.2>
 PROXMOX_STORAGE_ISO=<your ISO storage ID>
@@ -1417,7 +1419,7 @@ notification settings, the critical email and the wall status board are all in
   `TIER_PRICES_JSON` and `AGENT_LISTING_JSON` together, then `fh-agent restart` (the agent
   reads its listing only at start) → `fh-toolkit env` → re-import `env.json` (free) so the
   Coalition's prices match. No re-sign: prices are deliberately NOT in the signed manifest.
-- **Add or remove a host** (the whole procedure for a new one, cluster join included:
+- **Add or remove a host** (the whole procedure for a new one, standalone or in a cluster:
   [adding-a-proxmox-host.md](adding-a-proxmox-host.md)): add its `ProxmoxHost.name` to `HOSTS` in `config.env`,
   re-`sign`, then `fh-toolkit env` → re-import `env.json` (Flux Hub reads the new manifest from your Coalition within 15 minutes; a paste at `/onboard` applies it at once). Until FH re-ingests, it **rejects the
   whole inventory assert** with a 409 naming the unattested host — that is the point of
