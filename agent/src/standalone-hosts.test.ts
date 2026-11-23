@@ -152,7 +152,9 @@ function fakeArcaneMage(reply: unknown): { log: string; restore: () => void } {
   const dir = mkdtempSync(join(tmpdir(), "am-"));
   const log = join(dir, "log");
   const bin = join(dir, "arcane-mage");
-  writeFileSync(bin, `#!/bin/sh\necho "$@" >> ${log}\ncat >> ${log}\necho '${JSON.stringify(reply)}'\n`);
+  // The reply from a file: the shell would eat the quotes in `VM 'vm1' not found`.
+  writeFileSync(join(dir, "reply"), JSON.stringify(reply));
+  writeFileSync(bin, `#!/bin/sh\necho "$@" >> ${log}\ncat >> ${log}\ncat ${join(dir, "reply")}\n`);
   chmodSync(bin, 0o755);
   const path = process.env.PATH;
   process.env.PATH = dir + delimiter + path;
@@ -190,10 +192,47 @@ test("teardown: `not found` from the right Proxmox is success; from one without 
   }
 });
 
-test("teardown: an OFFLINE cluster member is still that cluster's node", async () => {
-  const listed = async () => new Map([["pve30", "offline"], ["pve50", "online"]]);
-  assert.equal(await notFoundDoubt(cfg(), "pve30", listed), null);
-  assert.match((await notFoundDoubt(cfg(), "pve30", async () => { throw new Error("x"); }))!, /could not list its nodes/);
+/** The hub's own test for "the VM was already gone" (job-triage.ts VM_ALREADY_ABSENT). */
+const HUB_VM_ALREADY_ABSENT = /\bVM\s+(?:'[^']*'|id=\d+)\s+not found\b/i;
+const doubt = (nodes: () => Promise<Map<string, string>>, vms: () => Promise<{ name?: string }[]>) =>
+  notFoundDoubt(cfg(), "pve30", "vm1", { nodes, vms });
+const listed = (status: string) => async () => new Map([["pve30", status], ["pve50", "online"]]);
+const boom = async () => { throw new Error("proxmox 595"); };
+
+test("absence: believed only when the node's own list lacks the VM", async () => {
+  assert.equal(await doubt(listed("online"), async () => [{ name: "other" }]), null);
+  assert.equal(await doubt(listed("online"), async () => []), null);
+  // A token without Sys.Audit reads every node as `unknown`; the listing decides, not the status.
+  assert.equal(await doubt(listed("unknown"), async () => []), null);
+});
+
+test("absence: an offline cluster member, an unreadable one and a VM that is there are all doubted", async () => {
+  const offline = await doubt(listed("offline"), boom);
+  assert.match(offline!.message, /vm1 was not torn down: pve30 is offline, so it may still be there/);
+  const unreadable = await doubt(listed("online"), boom);
+  assert.match(unreadable!.message, /could not list its VMs \(proxmox 595\)/);
+  const there = await doubt(listed("online"), async () => [{ name: "vm1" }]);
+  assert.match(there!.message, /but it is on pve30/);
+  const noNodes = await doubt(boom, async () => []);
+  const noNode = await doubt(async () => new Map([["pve50", "online"]]), async () => []);
+  for (const d of [offline, unreadable, there, noNodes]) assert.equal(d!.failureClass, "transient");
+  assert.equal(noNode!.failureClass, "unknown", "a wrong endpoint does not clear by itself");
+  for (const d of [offline, unreadable, there, noNodes, noNode]) assert.doesNotMatch(d!.message, HUB_VM_ALREADY_ABSENT);
+});
+
+test("teardown on a powered-off cluster member fails, transient, through deprovisionVm", async () => {
+  const am = fakeArcaneMage({ ok: false, error: "VM 'vm1' not found" });
+  try {
+    const r = await deprovisionVm("vm1", "pve30", cfg(), noFresh, { nodes: listed("offline"), vms: boom });
+    assert.equal(r.ok, false);
+    assert.equal(r.failureClass, "transient");
+    assert.doesNotMatch(r.message!, HUB_VM_ALREADY_ABSENT);
+    const gone = await deprovisionVm("vm1", "pve30", cfg(), noFresh, { nodes: listed("online"), vms: async () => [] });
+    assert.equal(gone.ok, true);
+    assert.match(gone.message!, HUB_VM_ALREADY_ABSENT, "the hub still learns that nothing was destroyed");
+  } finally {
+    am.restore();
+  }
 });
 
 // ── ISO refresh ───────────────────────────────────────────────────────────────
