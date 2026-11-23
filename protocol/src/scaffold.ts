@@ -815,7 +815,7 @@ export function renderInventoryJson(a: Answers): string {
     name: h.name,
     nodeName: h.nodeName ?? h.name,
     // apiUrl is informational: each host's own URL, shown by Flux Hub. The agent does not
-    // connect with it; it reaches every host through PROXMOX_URL in .env.operator.
+    // connect with it: PROXMOX_URL in .env.operator does, or the host's own PROXMOX_URL_<NODE>.
     apiUrl: `https://${h.nodeName ?? h.name}:8006`,
     network: h.network ?? DEFAULT_NETWORK,
     storageImages: h.storageImages,
