@@ -637,7 +637,7 @@ previous bytes as `*.bak`, and says `Nothing to change` when the answers match.
 ### `proxmox`
 
 ```
-fh-toolkit proxmox [--dir <dir>] [--url <u> --token-id <id> --token-secret <s>] [--no-probe] [--yes]
+fh-toolkit proxmox [--dir <dir>] [--host <node>] [--url <u> --token-id <id> --token-secret <s>] [--no-probe] [--yes]
 ```
 
 The agent's Proxmox token — the three `PROXMOX_*` lines of `.env.operator`, which is the
@@ -650,6 +650,12 @@ Fresh (no `.env.operator`): renders the whole file from `config.env`'s identity,
 `MANIFEST_KEY`/`MANIFEST_PUBKEY` from the key when it is here and the storage lines blank
 until `inventory` fills them. Existing: the three lines, in place — then
 `fh-agent restart` (the agent reads its env only at start).
+
+`--host pve2` sets a **standalone host's own** three lines (`PROXMOX_URL_PVE2`,
+`PROXMOX_TOKEN_ID_PVE2`, `PROXMOX_TOKEN_SECRET_PVE2`) and leaves the plain ones alone. It takes the
+node name Proxmox shows, and refuses a login that reaches a host called something else. `doctor
+--check-proxmox`, `inventory` and `diagnose` check every login they find.
+See [adding-a-proxmox-host.md](adding-a-proxmox-host.md).
 
 ### `stripe`
 
@@ -1011,7 +1017,7 @@ message if any of the three is absent.
 lacks a privilege the agent uses, doctor names it and, at a terminal, asks:
 
 ```
-The FluxHubAgent role is missing: Sys.AccessNetwork.
+The FluxHubAgent role at https://192.168.1.11:8006 is missing: Sys.AccessNetwork.
 Add it now? Needs the Proxmox root password once, never saved (y/N) [N]:
 ```
 

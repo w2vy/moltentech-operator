@@ -195,6 +195,18 @@ export interface ProxmoxSurvey {
   cpu?: Record<string, HostCpu>;
 }
 
+/** Two endpoints' surveys as one (a cluster and the standalone hosts beside it). */
+export function mergeSurveys(a: ProxmoxSurvey | undefined, b: ProxmoxSurvey | undefined): ProxmoxSurvey | undefined {
+  if (!a || !b) return a ?? b;
+  return {
+    nodes: [...new Set([...a.nodes, ...b.nodes])].sort(),
+    storages: { ...a.storages, ...b.storages },
+    vms: a.vms || b.vms ? { ...a.vms, ...b.vms } : undefined,
+    memoryMb: a.memoryMb || b.memoryMb ? { ...a.memoryMb, ...b.memoryMb } : undefined,
+    cpu: a.cpu || b.cpu ? { ...a.cpu, ...b.cpu } : undefined,
+  };
+}
+
 /** The host's processor, as `cpuinfo` reports it. The clock speed is left out: it moves. */
 export interface HostCpu {
   model: string;

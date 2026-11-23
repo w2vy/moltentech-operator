@@ -97,3 +97,17 @@ test("refusals: no config.env; a flag set missing a value; a failed probe withou
     (e: unknown) => e instanceof CliError && /unknown/.test(e.message)
   );
 });
+
+test("--host: a standalone host's own three lines, the plain ones untouched", async () => {
+  const dir = await scaffolded();
+  const before = parseConfigEnv(readFileSync(join(dir, ".env.operator"), "utf8"));
+  const { result } = await quiet(() =>
+    runCommand("proxmox", ["--dir", dir, "--host", "pve31", "--url", "https://10.0.0.31:8006", "--token-id", "fh-agent@pve!agent", "--token-secret", "s31", "--no-probe"], { dir, interactive: false, fetch: fakeFetch() })
+  );
+  assert.equal(result, 0);
+  const env = parseConfigEnv(readFileSync(join(dir, ".env.operator"), "utf8"));
+  assert.equal(env.PROXMOX_URL_PVE31, "https://10.0.0.31:8006");
+  assert.equal(env.PROXMOX_TOKEN_ID_PVE31, "fh-agent@pve!agent");
+  assert.equal(env.PROXMOX_TOKEN_SECRET_PVE31, "s31");
+  for (const k of ["PROXMOX_URL", "PROXMOX_TOKEN_ID", "PROXMOX_TOKEN_SECRET"]) assert.equal(env[k], before[k], k);
+});

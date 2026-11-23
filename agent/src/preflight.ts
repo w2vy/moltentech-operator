@@ -23,7 +23,8 @@ import {
   type ProbeStatus,
   type ProxmoxCreds,
 } from "@moltentech/protocol/proxmox-probe";
-import type { AgentConfig } from "./config";
+import { forNode, hasOwnEndpoint, type AgentConfig } from "./config";
+import { credsComplete, hostEnvKeys, hostEnvSuffix, missingHostKeys } from "@moltentech/protocol/proxmox-hosts";
 
 // One implementation, two callers: `fh-toolkit init` runs these same checks the moment
 // the operator types the token, five steps before the agent exists. Re-exported because
@@ -122,6 +123,37 @@ export async function runPreflight(
   hosts: Array<{ nodeName: string; storageImages?: string; storageIso?: string }>,
   deps: PreflightDeps = {}
 ): Promise<CheckResult[]> {
+  const own = hosts.filter((h) => hasOwnEndpoint(cfg, h.nodeName));
+  const out: CheckResult[] = [];
+  // The plain endpoint first, exactly as with one endpoint; skipped only when no host uses it.
+  if (own.length === 0 || own.length < hosts.length) {
+    out.push(...(await preflightEndpoint(cfg, hosts.filter((h) => !own.includes(h)), deps)));
+  }
+  // Then each standalone host on its own: one that is down hides nothing about the others.
+  for (const suffix of new Set(own.map((h) => hostEnvSuffix(h.nodeName)))) {
+    const group = own.filter((h) => hostEnvSuffix(h.nodeName) === suffix);
+    const node = group[0]!.nodeName;
+    const scoped = forNode(cfg, node);
+    if (!credsComplete(scoped.proxmox)) {
+      out.push({
+        name: `${node}: own Proxmox credentials complete`,
+        status: "fail",
+        detail: `missing ${missingHostKeys(suffix, scoped.proxmox).join(", ")} in .env.operator`,
+      });
+      continue;
+    }
+    out.push(...(await preflightEndpoint(scoped, group, deps, `${node}: `)));
+  }
+  return out;
+}
+
+/** The checks for one endpoint and the hosts on it. `cfg.proxmox` is that endpoint. */
+async function preflightEndpoint(
+  cfg: AgentConfig,
+  hosts: Array<{ nodeName: string; storageImages?: string; storageIso?: string }>,
+  deps: PreflightDeps,
+  prefix = ""
+): Promise<CheckResult[]> {
   const get = deps.get ?? proxmoxGet;
   const out: CheckResult[] = [];
 
@@ -131,7 +163,7 @@ export async function runPreflight(
   const proxmoxUrl = cfg.proxmox.url ?? "(PROXMOX_URL unset)";
   try {
     await get<unknown>(cfg, "/api2/json/version");
-    out.push({ name: "Proxmox reachable and token accepted", status: "pass", detail: proxmoxUrl });
+    out.push({ name: `${prefix}Proxmox reachable and token accepted`, status: "pass", detail: proxmoxUrl });
   } catch (e) {
     const msg = (e as Error).message;
     const hint = /127\.0\.0\.1|localhost/.test(proxmoxUrl)
@@ -139,13 +171,13 @@ export async function runPreflight(
       : msg.includes("401")
         ? " — token id or secret is wrong, or the token lacks permission"
         : "";
-    out.push({ name: "Proxmox reachable and token accepted", status: "fail", detail: `${proxmoxUrl}: ${msg}${hint}` });
+    out.push({ name: `${prefix}Proxmox reachable and token accepted`, status: "fail", detail: `${proxmoxUrl}: ${msg}${hint}` });
     return out; // nothing else can be checked without a working API
   }
 
   // 2. The CA store. Its absence reads as a middlebox or TLS problem and is neither;
   // it silently broke ArcaneOS ISO auto-refresh for weeks.
-  out.push(
+  if (!prefix) out.push(
     process.env.NODE_EXTRA_CA_CERTS || existsSync("/etc/ssl/certs/ca-certificates.crt")
       ? { name: "CA trust store present", status: "pass", detail: "/etc/ssl/certs/ca-certificates.crt" }
       : {
@@ -161,7 +193,10 @@ export async function runPreflight(
     try {
       storages = await get<StorageStatus[]>(cfg, `/api2/json/nodes/${node}/storage`);
     } catch (e) {
-      out.push({ name: `${node}: storage list`, status: "fail", detail: (e as Error).message });
+      const hint = prefix
+        ? ` — is the Proxmox node at ${proxmoxUrl} really called ${node}?`
+        : ` — if ${node} is not in this cluster, it needs ${Object.values(hostEnvKeys(node)).join(", ")}`;
+      out.push({ name: `${node}: storage list`, status: "fail", detail: (e as Error).message + hint });
       continue;
     }
     const byName = new Map(storages.filter((s) => s.storage).map((s) => [s.storage as string, s]));

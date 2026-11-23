@@ -17,6 +17,7 @@
  * courier quietly never starting, costs a whole provision cycle and a beginner
  * cannot diagnose either. The silent rules are the reason this file exists.
  */
+import { hostEnvField, hostEnvSuffix, missingHostKeys, parseHostEndpoints } from "./proxmox-hosts";
 import { isFluxTAddress, looksLikeZelId } from "./flux-address";
 import { renderManifestBodyFromConfig } from "./manifest-config";
 import { canonicalize, verifyManifestObject } from "./signing";
@@ -237,7 +238,7 @@ function lintSecretPlacement(entries: EnvEntry[], file: string, bannedKeys: stri
   const found: Finding[] = [];
   for (const e of entries) {
     if (!e.value) continue; // an empty skeleton slot is "not yet filled", not a leak
-    if (bannedKeys.includes(e.key)) {
+    if (bannedKeys.includes(e.key) || (bannedKeys.includes("PROXMOX_TOKEN_SECRET") && hostEnvField(e.key)?.field === "tokenSecret")) {
       found.push({
         rule: "SECRET_IN_NONSECRET_CONFIG",
         severity: "error",
@@ -742,6 +743,60 @@ export function lintProxmoxCreds(
   return found;
 }
 
+/**
+ * The per-host Proxmox lines (`PROXMOX_URL_PVE31` …) of standalone hosts.
+ *
+ * A host with some of its three is an error: the agent refuses its jobs rather than send them to
+ * the plain endpoint. A set whose name matches no inventory host is only a warning, because the
+ * lines go in (and the agent restarts) BEFORE the inventory names the host. Two node names that
+ * end in the same letters share one set of lines, which is one machine answering for two.
+ */
+export function lintHostProxmox(
+  operator: Record<string, string>,
+  inventoryText: string | undefined,
+  operatorFile: string
+): Finding[] {
+  const found: Finding[] = [];
+  const perHost = parseHostEndpoints(operator);
+  let nodeNames: string[] | undefined;
+  try {
+    nodeNames = inventoryText
+      ? (normalizeInventory(JSON.parse(inventoryText)) ?? []).map((h) => h.nodeName ?? h.name).filter((n): n is string => !!n)
+      : undefined;
+  } catch {
+    // the inventory's own lint reports the bad file
+  }
+  for (const [suffix, creds] of Object.entries(perHost)) {
+    const missing = missingHostKeys(suffix, creds);
+    if (missing.length > 0) {
+      found.push({
+        rule: "HOST_PROXMOX_INCOMPLETE",
+        severity: "error",
+        file: operatorFile,
+        message: `${missing.join(", ")} missing — a host with its own Proxmox login needs all three, and the agent refuses its jobs until then.`,
+      });
+    }
+    const matches = [...new Set(nodeNames?.filter((n) => hostEnvSuffix(n) === suffix) ?? [])];
+    if (nodeNames && matches.length === 0) {
+      found.push({
+        rule: "HOST_PROXMOX_UNUSED",
+        severity: "warning",
+        file: operatorFile,
+        message: `PROXMOX_*_${suffix} matches no inventory host — expected before the host is added to the inventory; otherwise a typo in the name.`,
+      });
+    }
+    if (matches.length > 1) {
+      found.push({
+        rule: "HOST_PROXMOX_AMBIGUOUS",
+        severity: "error",
+        file: operatorFile,
+        message: `PROXMOX_*_${suffix} would be used for ${matches.join(" and ")} — their names are the same once written as a variable. Rename one host in Proxmox.`,
+      });
+    }
+  }
+  return found;
+}
+
 export function lintCourier(operator: Record<string, string>, operatorFile: string): Finding[] {
   const found: Finding[] = [];
   if (operator.COALITION_URL == null) {
@@ -1229,6 +1284,7 @@ export function runDoctor(input: DoctorInput): DoctorReport {
     findings.push(...lintSecretPlacement(entries, ".env.operator", SECRET_KEYS_BANNED_IN_OPERATOR));
     findings.push(...lintCourier(operatorRec, ".env.operator"));
     findings.push(...lintProxmoxCreds(operatorRec, ".env.operator"));
+    findings.push(...lintHostProxmox(operatorRec, input.inventoryJson, ".env.operator"));
   }
 
   if (input.configEnv != null && input.envOperator != null) {

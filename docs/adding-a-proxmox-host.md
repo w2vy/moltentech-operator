@@ -1,31 +1,57 @@
-# Adding a Proxmox host to your cluster
+# Adding a Proxmox host
 
 You already run an agent against one Proxmox host or cluster, and you have another machine to
-add. An agent talks to **one** Proxmox endpoint, so every host it manages has to be in the
-same cluster.
+add. There are two ways, and one agent serves both:
 
-| | Step | Where |
+| | **Standalone** | **In a cluster** |
 |---|---|---|
-| 1 | [Install Proxmox](#1-install-proxmox) | new host |
-| 2 | [Create the cluster](#2-create-the-cluster-first-time-only) (first time only) | existing host |
-| 3 | [Check and burn in the host](#3-check-and-burn-in-the-host) | agent host → new host |
-| 4 | [Join the cluster](#4-join-the-cluster) | new host |
-| 5 | [Attest the host](#5-attest-the-host) | agent host, Flux, `/onboard` |
-| 6 | [Add it to your inventory](#6-add-it-to-your-inventory) | agent host |
-| 7 | [Offer the slots](#7-offer-the-slots-operators-only) (Operators only) | agent host |
-| 8 | [Verify](#8-verify) | hub |
+| The new host | stays on its own | joins your existing host's cluster |
+| The agent reaches it | at its own address, with its own token | through the cluster's one address |
+| If one host is down | the others are not affected | two hosts: the other refuses changes |
+| Good for | two hosts, different sites, hosts with nodes on them already | three or more hosts side by side |
 
-⚠️ **The order matters in two places:**
+Standalone needs fh-agent 0.11.95 and fh-toolkit 0.6.52 or newer (`fh-agent version`,
+`fh-toolkit version`).
+
+| | Step | Where | Standalone | Cluster |
+|---|---|---|---|---|
+| 1 | [Install Proxmox](#1-install-proxmox) | new host | yes | yes |
+| 2 | [Create the cluster](#2-create-the-cluster-first-time-only) (first time only) | existing host | — | yes |
+| 3 | [Check and burn in the host](#3-check-and-burn-in-the-host) | agent host → new host | yes | yes |
+| 4 | [Join the cluster](#4-join-the-cluster) | new host | — | yes |
+| 4s | [Give the agent its login](#4s-standalone-give-the-agent-its-login) | agent host | yes | — |
+| 5 | [Attest the host](#5-attest-the-host) | agent host, Flux, `/onboard` | yes | yes |
+| 6 | [Add it to your inventory](#6-add-it-to-your-inventory) | agent host | yes | yes |
+| 7 | [Offer the slots](#7-offer-the-slots-operators-only) (Operators only) | agent host | yes | yes |
+| 8 | [Verify](#8-verify) | hub | yes | yes |
+
+⚠️ **The order matters:**
 
 - **Attest (5) before inventory (6).** Flux Hub answers an inventory that names an unattested
   host with a 409 and rejects **all** of it, your existing hosts included.
 - **Burn in (3) before inventory (6).** A new slot starts as `available`. Once the inventory is
   accepted, a node can be placed on it.
+- **Standalone: login (4s) before inventory (6).** Without it the agent looks for the new host at
+  your first host's address, and its jobs fail.
 
-The examples use `pve1` (`192.168.1.11`) for a host already in the cluster and `pve2`
+The examples use `pve1` (`192.168.1.11`) for the host you already have and `pve2`
 (`192.168.1.12`) for the new one.
 
 ## Before you start
+
+Both ways:
+
+- **Its Proxmox node name must be different from every other host's.** Jobs and signatures name a
+  host by it. Two hosts both called `pve` cannot be told apart; rename the new one at install.
+- **Time** is in sync on every host.
+- **A wallet session** if you paste the manifest at `/onboard` in step 5: it asks for your owner
+  wallet's signature.
+
+Standalone:
+
+- **The agent host reaches the new host on TCP 8006**, and you reach it by ssh for step 3.
+
+Cluster:
 
 - **The new host must have no VMs or containers.** A join replaces everything in its
   `/etc/pve`, and VM ids would clash. Back guests up with `vzdump` and restore them under a new
@@ -36,9 +62,6 @@ The examples use `pve1` (`192.168.1.11`) for a host already in the cluster and `
 - **Final hostname and IP.** Neither can be changed once the host is in a cluster.
 - **Network:** hosts reach each other on UDP 5405–5412 and TCP 22 and 8006, with low, steady
   latency. Do not stretch a cluster across sites.
-- **Time** is in sync on every host.
-- **A wallet session** if you paste the manifest at `/onboard` in step 5: it asks for your owner
-  wallet's signature.
 
 ⚠️ **A two-host cluster needs both hosts up.** With one down the other loses quorum: running VMs
 keep running, but Proxmox refuses changes, so nothing can be built or started until the other
@@ -61,7 +84,7 @@ always-on Linux box, fixes that.
    192.168.1.12 pve2.localdomain pve2
    ```
 
-**Storage.** A cluster has one storage list for all hosts, so after the join the new host uses
+**Storage, in a cluster.** A cluster has one storage list for all hosts, so after the join the new host uses
 the cluster's definitions. A `local-lvm` defined as volume group `pve`, thin pool `data` works
 only if this host has that too, which the standard installer creates. Check it:
 
@@ -70,7 +93,14 @@ lvs                    # expect LV "data" in VG "pve"
 lsblk -o NAME,ROTA,SIZE,TYPE,MODEL
 ```
 
-The pool must be solid state (`ROTA=0`) and hold every planned node: 220 GB per Cumulus, 440 GB
+**Storage, standalone.** Any names you like: they go in this host's inventory entry. `local` must
+take ISO images and imports:
+
+```bash
+pvesm set local --content iso,vztmpl,backup,import
+```
+
+**Both.** The pool must be solid state (`ROTA=0`) and hold every planned node: 220 GB per Cumulus, 440 GB
 per Nimbus, 880 GB per Stratus. A 1 TB drive leaves about 800 GB after Proxmox, which is **too
 small for a Stratus or two Nimbus**. To grow the pool with a second, empty drive:
 
@@ -86,7 +116,7 @@ The pool then spans both drives: if either fails, every node on it is lost.
 
 ## 2. Create the cluster (first time only)
 
-Skip this if `pvecm status` on the existing host already shows a cluster.
+**Cluster only.** Also skip this if `pvecm status` on the existing host already shows a cluster.
 
 On the **existing** host, the one with the nodes and your agent's token:
 
@@ -119,7 +149,7 @@ removes them. What the verdicts mean:
 [Step 0.7](operator-onboarding.md#07-burn-in-a-new-host-before-it-carries-nodes). Do not go on
 after a `FAIL`.
 
-Check that nothing is left behind, since the host must be empty to join:
+Check that nothing is left behind (to join a cluster the host must be empty):
 
 ```bash
 qm list; pct list                 # on pve2: both empty
@@ -127,7 +157,7 @@ qm list; pct list                 # on pve2: both empty
 
 ## 4. Join the cluster
 
-On the **new** host:
+**Cluster only.** On the **new** host:
 
 ```bash
 pvecm add 192.168.1.11 --link0 192.168.1.12
@@ -150,6 +180,40 @@ pvesh get /nodes/pve2/storage     # your image and ISO storages show active 1
 - **Leave `PROXMOX_URL` alone.** The agent reaches every host through that one endpoint.
 - **Other hosts' local storages** show inactive on the new host. Limit each to its own host
   under **Datacenter → Storage → Edit → Nodes**.
+
+## 4s. Standalone: give the agent its login
+
+In your operator directory on the agent host, with the node name Proxmox shows:
+
+```sh
+fh-toolkit proxmox --host pve2
+```
+
+Give it the new host's own address (`https://192.168.1.12:8006`; an IP always works). Answer **n**
+to "already have a token" and it creates `fh-agent@pve!agent` on the new host, then checks that the
+login works and that the host really is called `pve2`. It writes three lines to `.env.operator`:
+
+```
+PROXMOX_URL_PVE2=https://192.168.1.12:8006
+PROXMOX_TOKEN_ID_PVE2=fh-agent@pve!agent
+PROXMOX_TOKEN_SECRET_PVE2=…
+```
+
+The plain `PROXMOX_URL` / `_TOKEN_ID` / `_TOKEN_SECRET` stay as they are: every host without lines of
+its own uses them. A host with only some of its three lines is refused, never sent to the plain ones.
+
+```sh
+fh-agent restart                  # the agent reads .env.operator only at start
+fh-agent logs
+```
+
+The log shows `own Proxmox endpoint for PVE2 (no inventory host by that name yet)`. That is right
+until step 6. `PROXMOX_NETWORK` and `PROXMOX_STORAGE_*` are shared defaults: a host that differs says
+so in its inventory entry (`network`, `storageImages`, `storageIso`). The import storage has no
+per-host setting and must have the same name on every host, normally `local`.
+
+Keep these lines for as long as the host has nodes. Without them its teardowns fail, with a message
+naming the lines.
 
 ## 5. Attest the host
 
@@ -191,7 +255,7 @@ Add the host to `data/inventory.json`:
   "apiUrl": "https://pve2:8006",
   "network": "vmbr0",
   "storageImages": "local-lvm",
-  "storageIso": "shared-iso",
+  "storageIso": "local",
   "slots": [
     { "vmName": "mt-you-n2", "tier": "nimbus", "ipAddress": "203.0.113.51",
       "lanIp": "192.168.1.52/24", "gateway": "192.168.1.1", "apiPort": 16137,
@@ -200,7 +264,9 @@ Add the host to `data/inventory.json`:
 }
 ```
 
-- `name` matches `HOSTS`; `nodeName` is the name Proxmox shows.
+- `name` matches `HOSTS`; `nodeName` is the name Proxmox shows. Standalone: the `_PVE2` in step 4s
+  comes from `nodeName`.
+- `apiUrl` is for reading only. The agent never connects to it.
 - `vmName` is new, and starts with your VM name prefix.
 - Each `ipAddress` + `apiPort` pair is used once. `lanIp` needs its `/24`.
 - Every field: [Step 5 of onboarding](operator-onboarding.md#step-5--declare-your-inventory-no-db-hand-edits).
@@ -215,6 +281,9 @@ The agent re-reads the file within about a minute; no restart. The log shows the
 ```
 [agent] declared inventory: 2 host(s), 4 slot(s)
 ```
+
+A new standalone host gets its FluxLive ISO at the agent's next refresh, up to 6 hours away. To have
+it now: `fh-agent restart`. The first copy is about 3 GB.
 
 `inventory failed: 409` means the hub refused it; see [If something goes wrong](#if-something-goes-wrong).
 
@@ -246,6 +315,9 @@ A tier you have never sold also needs a price: `fh-toolkit stripe --price <tier>
 | You see | Do |
 |---|---|
 | `inventory failed: 409` | The hub does not have the host attested yet, or a `vmName` is outside your prefix or belongs to someone else. Take the new host back out of `data/inventory.json` now; your other hosts recover on the next heartbeat. Finish step 5, then add it again. **Do not leave it:** after two hours without an accepted inventory, your unrented slots are disavowed. |
+| `Proxmox credentials for pve2 are incomplete` | Step 4s: one of the three `_PVE2` lines is missing or empty. Add it, then `fh-agent restart`. |
+| A teardown fails with `Proxmox at … has no node pve2` | The agent asked another host: the `_PVE2` lines are gone, or their name does not match `nodeName`. Fix them, `fh-agent restart`, retry. Until then the VM may still be running. |
+| `doctor`: `HOST_PROXMOX_UNUSED` | Normal between 4s and 6. After 6, the name in the lines does not match a `nodeName`. |
 | `pvecm add` refuses: guests exist | Step 3's check. Move or remove every VM and container on the new host. |
 | `pvecm add` cannot connect | Firewall: UDP 5405–5412, TCP 22 and 8006, both ways. |
 | `local-lvm` inactive on the new host | Its volume group or thin pool is named differently (step 1). |
@@ -257,6 +329,7 @@ A tier you have never sold also needs a price: `fh-toolkit stripe --price <tier>
 ## Taking it out again
 
 Retire it from Flux Hub first:
-[Retiring a host](operator-onboarding.md#retiring-a-host). Then, with every VM off it and the
+[Retiring a host](operator-onboarding.md#retiring-a-host). Standalone: once its last node is gone,
+delete its three lines from `.env.operator` and `fh-agent restart`. In a cluster, with every VM off it and the
 host **powered off for good**, run `pvecm delnode pve2` on a remaining host. To put the same
 machine back in the cluster, reinstall Proxmox on it first.

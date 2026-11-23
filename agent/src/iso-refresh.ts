@@ -1,7 +1,7 @@
 import type { InventoryHost, IsoRefreshStatus } from "@moltentech/protocol";
-import { reloadInventory, type AgentConfig } from "./config";
+import { forNode, hasOwnEndpoint, reloadInventory, type AgentConfig } from "./config";
 import { refreshIso, type IsoRefreshResult } from "./executor";
-import { getNodeStatuses, getStorageIsoNames } from "./health";
+import { getNodeStatuses, getStorageIsoNames, isUnreachable } from "./health";
 import { ensureDatedIso, type ListIsosFn } from "./iso-name";
 import { ISO_DOWNLOAD_PRIV, roleAppendCommand } from "@moltentech/protocol/proxmox-probe";
 
@@ -9,6 +9,8 @@ export type IsoRefreshDeps = {
   /** Cluster node → status. Defaults to `GET /nodes`; null = could not tell (refresh as before).
    *  Only a node listed `offline` is skipped. */
   nodeStatuses?: (cfg: AgentConfig) => Promise<Map<string, string> | null>;
+  /** The same for a standalone host's own endpoint; throws when it does not answer. */
+  ownStatuses?: (cfg: AgentConfig, nodeName: string) => Promise<Map<string, string>>;
   listIsos?: ListIsosFn;
 };
 
@@ -74,6 +76,20 @@ async function defaultNodeStatuses(cfg: AgentConfig): Promise<Map<string, string
 }
 
 /**
+ * Is this standalone host off? Nothing else can say `offline` for it, so no answer from its own
+ * endpoint is the answer. An HTTP error (a bad token) is not: the refresh runs, fails, and is
+ * recorded where the operator will see it.
+ */
+async function standaloneIsOff(cfg: AgentConfig, nodeName: string, list: NonNullable<IsoRefreshDeps["ownStatuses"]>) {
+  if (!forNode(cfg, nodeName).proxmox.url) return false; // incomplete: refreshIso says which line
+  try {
+    return (await list(cfg, nodeName)).get(nodeName) === "offline";
+  } catch (err) {
+    return isUnreachable(err as Error);
+  }
+}
+
+/**
  * Check the RunOnFlux release feed and stage a newer ArcaneOS/FluxLive ISO on every
  * declared inventory host, so third-party operators don't have to hand-refresh it
  * (the gap MT's own `check_arcaneos_iso.sh` cron covers for first-party only).
@@ -111,7 +127,10 @@ export async function refreshIsoOnce(
     const storageIso = host.storageIso ?? cfg.host.storageIso;
     // Only an explicit `offline` skips: `GET /nodes` omits nodes the token cannot audit, and a
     // node we simply cannot see is checked exactly as before.
-    if (statuses?.get(host.nodeName) === "offline") {
+    const off = hasOwnEndpoint(cfg, host.nodeName)
+      ? await standaloneIsOff(cfg, host.nodeName, deps.ownStatuses ?? getNodeStatuses)
+      : statuses?.get(host.nodeName) === "offline";
+    if (off) {
       console.log(`[agent] ${host.nodeName} is offline — FluxLive ISO check skipped`);
       continue;
     }
