@@ -226,8 +226,9 @@ node the agent provisions on), `apiUrl`, `network`, `storageImages`, `storageIso
 optional `network`, `storagePool`, `vlan`, `vmId`, `dns1`/`dns2`, `priceCents`,
 `diskLimit`, `cpuLimit`, `networkLimit`, `rateLimit`, `startupConfig`.
 
-⚠️ **`apiUrl` is the cluster endpoint, the same for every host** — not a self-pointing URL
-per machine.
+**`apiUrl` is informational**: the host's own URL (`https://<nodeName>:8006`, which is what
+`fh-toolkit` writes), shown by Flux Hub. The agent does not use it to connect; it reaches
+every host through `PROXMOX_URL` in `.env.operator`.
 
 ⚠️ **`lanIp` needs its CIDR suffix.** A bare address silently becomes `/32`, and the node
 can then reach nothing. `doctor` flags it as `LANIP_NO_CIDR`.
