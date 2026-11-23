@@ -316,7 +316,8 @@ A tier you have never sold also needs a price: `fh-toolkit stripe --price <tier>
 |---|---|
 | `inventory failed: 409` | The hub does not have the host attested yet, or a `vmName` is outside your prefix or belongs to someone else. Take the new host back out of `data/inventory.json` now; your other hosts recover on the next heartbeat. Finish step 5, then add it again. **Do not leave it:** after two hours without an accepted inventory, your unrented slots are disavowed. |
 | `Proxmox credentials for pve2 are incomplete` | Step 4s: one of the three `_PVE2` lines is missing or empty. Add it, then `fh-agent restart`. |
-| A teardown fails with `Proxmox at … has no node pve2` | The agent asked another host: the `_PVE2` lines are gone, or their name does not match `nodeName`. Fix them, `fh-agent restart`, retry. Until then the VM may still be running. |
+| A teardown fails with `… was not torn down: Proxmox at … has no node pve2` | The agent asked another host: the `_PVE2` lines are gone, or their name does not match `nodeName`. Fix them, `fh-agent restart`, retry. Until then the VM may still be running. |
+| A teardown fails with `… was not torn down: pve2 is offline` | The host is off, so the VM may still be on it. Power it on, then retry the job (a signed one needs a new signature). |
 | `doctor`: `HOST_PROXMOX_UNUSED` | Normal between 4s and 6. After 6, the name in the lines does not match a `nodeName`. |
 | `pvecm add` refuses: guests exist | Step 3's check. Move or remove every VM and container on the new host. |
 | `pvecm add` cannot connect | Firewall: UDP 5405–5412, TCP 22 and 8006, both ways. |

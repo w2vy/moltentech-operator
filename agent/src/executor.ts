@@ -451,32 +451,70 @@ export function amFailure(r: AmResult, context?: string): string {
   return clipMessage(parts.join("\n\n") || r.stdout.trim() || "arcane-mage failed with no output");
 }
 
+/** What `notFoundDoubt` asks Proxmox. Injected in tests. */
+export type AbsenceDeps = { nodes: typeof getNodeStatuses; vms: typeof getQemuList };
+const absenceDeps: AbsenceDeps = { nodes: getNodeStatuses, vms: getQemuList };
+
 /**
  * Why a teardown's "not found" must not be believed, or null when it can be.
  *
- * arcane-mage answers `VM '…' not found` both when the VM is gone and when the endpoint has no
- * node by that name at all. The second is a wrong endpoint: a standalone host whose
- * `PROXMOX_URL_<NODE>` line was lost falls back to the plain one. Reported as success, the hub
- * ends the rental while the VM still runs (it parks the slot, or frees it after a loan). Worded
- * so that it does not match the hub's own "VM was already absent" test (`VM '<name>' not found`).
+ * arcane-mage answers `VM '…' not found` in three cases, and only the first means the VM is gone:
+ *
+ *   1. it listed the node's VMs and this one is not there;
+ *   2. the node's VMs could not be listed — a cluster member that is powered off — and it skips
+ *      such a node without a word;
+ *   3. the endpoint has no node by that name: a standalone host whose `PROXMOX_URL_<NODE>` line
+ *      was lost falls back to the plain one.
+ *
+ * Reported as success, 2 and 3 have the hub end the rental while the VM is still on the host (it
+ * parks the slot, or frees it after a loan). In case 2 the VM comes back when the host does, with
+ * the same identity key as the node that replaced it.
+ *
+ * So the agent lists the VMs itself. A listing it cannot read is `transient`: nothing was touched,
+ * and a host comes back. The wording must never match the hub's own "VM was already absent" test
+ * (`VM '<name>' not found`), which would read the failure as the thing it denies.
  */
 export async function notFoundDoubt(
   cfg: AgentConfig,
   nodeName: string,
-  nodeLister: typeof getNodeStatuses = getNodeStatuses
-): Promise<string | null> {
+  vmName: string,
+  deps: AbsenceDeps = absenceDeps
+): Promise<{ message: string; failureClass: FailureClass } | null> {
   const url = forNode(cfg, nodeName).proxmox.url;
   let nodes: Map<string, string>;
   try {
-    nodes = await nodeLister(cfg, nodeName);
+    nodes = await deps.nodes(cfg, nodeName);
   } catch (err) {
-    return `VM not found, but ${url} could not list its nodes to confirm ${nodeName} is there: ${(err as Error).message}`;
+    return {
+      message: `${vmName} was not torn down: ${url} could not list its nodes to confirm ${nodeName} is there (${(err as Error).message}).`,
+      failureClass: "transient",
+    };
   }
-  if (nodes.has(nodeName)) return null;
-  return (
-    `Proxmox at ${url} has no node ${nodeName} (it has ${[...nodes.keys()].join(", ") || "none"}), so "VM not found" ` +
-    `proves nothing. A standalone host needs ${Object.values(hostEnvKeys(nodeName)).join(", ")} in .env.operator.`
-  );
+  if (!nodes.has(nodeName)) {
+    return {
+      message:
+        `${vmName} was not torn down: Proxmox at ${url} has no node ${nodeName} (it has ${[...nodes.keys()].join(", ") || "none"}). ` +
+        `A standalone host needs ${Object.values(hostEnvKeys(nodeName)).join(", ")} in .env.operator.`,
+      failureClass: "unknown",
+    };
+  }
+  let vms: Awaited<ReturnType<AbsenceDeps["vms"]>>;
+  try {
+    vms = await deps.vms(cfg, nodeName);
+  } catch (err) {
+    const why = nodes.get(nodeName) === "offline" ? `${nodeName} is offline` : `${nodeName} could not list its VMs (${(err as Error).message})`;
+    return {
+      message: `${vmName} was not torn down: ${why}, so it may still be there. Bring ${nodeName} back, then retry.`,
+      failureClass: "transient",
+    };
+  }
+  if (vms.some((v) => v.name === vmName)) {
+    return {
+      message: `${vmName} was not torn down: arcane-mage did not find it, but it is on ${nodeName}. Retry.`,
+      failureClass: "transient",
+    };
+  }
+  return null;
 }
 
 /**
@@ -489,7 +527,7 @@ export async function notFoundDoubt(
  * routing it through `withOwnerAuthGate` would make it look like one.
  *
  * `not found` counts as success, so a repeat is harmless and the caller needs no state — once
- * `notFoundDoubt` has made sure it was the right Proxmox that said so.
+ * `notFoundDoubt` has confirmed it from the node's own VM list.
  *
  * A VM only minutes old is hard-stopped first (`fresh-vm-stop.ts`): it has no FluxOS to give
  * a graceful shutdown to, so arcane-mage's graceful step would only fail or wait.
@@ -499,7 +537,7 @@ export async function deprovisionVm(
   nodeName: string,
   cfg: AgentConfig,
   fresh: FreshStopDeps = freshStopDeps(cfg),
-  nodeLister: typeof getNodeStatuses = getNodeStatuses
+  absence: AbsenceDeps = absenceDeps
 ): Promise<ExecResult> {
   const note = await hardStopIfFresh(vmName, nodeName, fresh);
   const r = await runArcaneMage(
@@ -510,9 +548,9 @@ export async function deprovisionVm(
   );
   const notFound = r.json?.ok !== true && !!r.json?.error?.includes("not found");
   if (notFound) {
-    const doubt = await notFoundDoubt(cfg, nodeName, nodeLister);
+    const doubt = await notFoundDoubt(cfg, nodeName, vmName, absence);
     if (doubt) {
-      return { ok: false, message: (note ? note + "\n" : "") + doubt, failureClass: "unknown" };
+      return { ok: false, message: (note ? note + "\n" : "") + doubt.message, failureClass: doubt.failureClass };
     }
   }
   const ok = r.json?.ok === true || notFound;
