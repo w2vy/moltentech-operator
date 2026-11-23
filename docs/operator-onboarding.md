@@ -7,7 +7,7 @@ opens an inbound connection to you.
 
 ## The other documents
 
-This one is the ordered path from nothing to live. Three companions carry what a runbook
+This one is the ordered path from nothing to live. These companions carry what a runbook
 should not:
 
 - **[`fh-toolkit.md`](fh-toolkit.md)** — every `fh-toolkit` and `fh-agent` command with
@@ -18,6 +18,8 @@ should not:
   holds this, and what breaks if I edit it".
 - **[`operator-app.md`](operator-app.md)** — the phone app: Issues, pairing a phone, push
   settings, the critical email and the wall status board.
+- **[`adding-a-proxmox-host.md`](adding-a-proxmox-host.md)** — adding another Proxmox host:
+  cluster join, attestation and inventory, in order.
 
 ## Which are you?
 
@@ -1415,7 +1417,8 @@ notification settings, the critical email and the wall status board are all in
   `TIER_PRICES_JSON` and `AGENT_LISTING_JSON` together, then `fh-agent restart` (the agent
   reads its listing only at start) → `fh-toolkit env` → re-import `env.json` (free) so the
   Coalition's prices match. No re-sign: prices are deliberately NOT in the signed manifest.
-- **Add or remove a host**: add its `ProxmoxHost.name` to `HOSTS` in `config.env`,
+- **Add or remove a host** (the whole procedure for a new one, cluster join included:
+  [adding-a-proxmox-host.md](adding-a-proxmox-host.md)): add its `ProxmoxHost.name` to `HOSTS` in `config.env`,
   re-`sign`, then `fh-toolkit env` → re-import `env.json` (Flux Hub reads the new manifest from your Coalition within 15 minutes; a paste at `/onboard` applies it at once). Until FH re-ingests, it **rejects the
   whole inventory assert** with a 409 naming the unattested host — that is the point of
   the attestation, so plan a host addition around a signing session, not a config edit.
