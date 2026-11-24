@@ -125,7 +125,7 @@ fh-toolkit() {
       diag+=(-e "FH_AGENT_RUNNING=$(fh-agent-running-version)")
     fi
   fi
-  docker run --rm -i $tty -e FH_WRAPPER=11 "${diag[@]}" -v "$PWD:/work" \
+  docker run --rm -i $tty -e FH_WRAPPER=12 "${diag[@]}" -v "$PWD:/work" \
     -v /etc/hosts:/etc/hosts:ro -u "$(id -u):$(id -g)" "$img" "$@"
   local rc=$?
   [ -n "$diag_logs" ] && rm -f "$diag_logs"
@@ -231,6 +231,11 @@ docker run --rm --env-file .env.operator -v "$PWD/data:/data:ro" \
 docker run --rm --env-file .env.operator -v "$PWD/data:/data:ro" \
   -e AGENT_DRY_RUN=1 ghcr.io/w2vy/fh-agent:latest  # = fh-agent dry-run
 ```
+
+One thing the function adds: it runs them on the network the loop runs on (a throwaway one if the
+loop is stopped), so a host name in `PROXMOX_URL` resolves as it does for the loop. On Docker's
+default network, which the direct commands above use, a name from the host's `/etc/hosts` can fail
+with `ENOTFOUND` although the agent is fine. Needs wrapper v12 (`fh-toolkit --update-wrapper`).
 
 ⚠️ **`npm run doctor`, not a bare `doctor`.** The image sets `CMD` but no `ENTRYPOINT`, so
 it inherits node's: a bare subcommand is handed to `node` and dies

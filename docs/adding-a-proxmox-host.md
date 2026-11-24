@@ -283,7 +283,8 @@ The agent re-reads the file within about a minute; no restart. The log shows the
 ```
 
 A new standalone host gets its FluxLive ISO at the agent's next refresh, up to 6 hours away. To have
-it now: `fh-agent restart`. The first copy is about 3 GB.
+it now: `fh-agent restart`. The first copy is about 3 GB; `fh-agent doctor` fails on that host's ISO
+until it has landed.
 
 `inventory failed: 409` means the hub refused it; see [If something goes wrong](#if-something-goes-wrong).
 
@@ -301,6 +302,9 @@ Raise `availableSlots` for the tier, then:
 fh-agent restart                  # the agent reads its listing only at start
 ```
 
+Jobs go to a tier's oldest free slot first, so a first node would land on an existing host. To try
+the new host, **Park** the other free slots of that tier on My Fleet, claim, then **Return to sale**.
+
 A tier you have never sold also needs a price: `fh-toolkit stripe --price <tier>=<usd>`, then
 `fh-toolkit env` and the re-import from step 5. Supporters skip this step.
 
@@ -317,7 +321,11 @@ A tier you have never sold also needs a price: `fh-toolkit stripe --price <tier>
 | `inventory failed: 409` | The hub does not have the host attested yet, or a `vmName` is outside your prefix or belongs to someone else. Take the new host back out of `data/inventory.json` now; your other hosts recover on the next heartbeat. Finish step 5, then add it again. **Do not leave it:** after two hours without an accepted inventory, your unrented slots are disavowed. |
 | `Proxmox credentials for pve2 are incomplete` | Step 4s: one of the three `_PVE2` lines is missing or empty. Add it, then `fh-agent restart`. |
 | A teardown fails with `… was not torn down: Proxmox at … has no node pve2` | The agent asked another host: the `_PVE2` lines are gone, or their name does not match `nodeName`. Fix them, `fh-agent restart`, retry. Until then the VM may still be running. |
-| A teardown fails with `… was not torn down: pve2 is offline` | The host is off, so the VM may still be on it. Power it on, then retry the job (a signed one needs a new signature). |
+| A teardown fails with `… was not torn down: pve2 is offline`, or `Unable to discover hypervisor nodes` (standalone) | The host is off or does not answer, so the VM may still be on it. Bring it back, then sign the teardown again in the **Signing Queue**: a signature works once, so **Retry** on the Jobs page is refused. |
+| A teardown signed while the host shuts down fails with `can't lock file … got timeout` | Proxmox's own shutdown holds the VM. Once the host is back, sign it again. |
+| A teardown succeeds with `VM '…' not found`, and the slot is in maintenance | The VM was already gone. Check that, then **Return to sale** on My Fleet. |
+| `fh-agent doctor` says `ENOTFOUND` for a host name the running agent reaches | Wrapper older than v12: `fh-toolkit --update-wrapper`. Or use the IP. |
+| `fh-agent doctor` fails on the ISO of a host you just added | The first copy is still downloading (about 3 GB). Run it again once the log shows it landed. |
 | `doctor`: `HOST_PROXMOX_UNUSED` | Normal between 4s and 6. After 6, the name in the lines does not match a `nodeName`. |
 | `pvecm add` refuses: guests exist | Step 3's check. Move or remove every VM and container on the new host. |
 | `pvecm add` cannot connect | Firewall: UDP 5405–5412, TCP 22 and 8006, both ways. |
