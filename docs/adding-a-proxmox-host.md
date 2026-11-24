@@ -10,8 +10,9 @@ add. There are two ways, and one agent serves both:
 | If one host is down | the others are not affected | two hosts: the other refuses changes |
 | Good for | two hosts, different sites, hosts with nodes on them already | three or more hosts side by side |
 
-Standalone needs fh-agent 0.11.95 and fh-toolkit 0.6.52 or newer (`fh-agent version`,
-`fh-toolkit version`).
+Standalone needs fh-agent 0.11.97 and fh-toolkit 0.6.53 or newer (`fh-agent version`,
+`fh-toolkit version`). 0.11.95 and 0.11.96 work too, but can report a failed teardown for a VM that
+was destroyed.
 
 | | Step | Where | Standalone | Cluster |
 |---|---|---|---|---|
@@ -51,6 +52,9 @@ Standalone:
 
 - **The agent host reaches the new host on TCP 8006**, and you reach it by ssh for step 3.
 
+- **Flux nodes already on the new host** can stay: see
+  [A host that already runs Flux nodes](#a-host-that-already-runs-flux-nodes-standalone).
+
 Cluster:
 
 - **The new host must have no VMs or containers.** A join replaces everything in its
@@ -83,6 +87,37 @@ always-on Linux box, fixes that.
    ```
    192.168.1.12 pve2.localdomain pve2
    ```
+
+**Optional: Wake-on-LAN**, to start the host from another machine on its network. Turn it on in the
+BIOS (`Wake on LAN`, with `Deep Sleep` / `ErP` off). Many network drivers turn it off again at every
+boot, so check, with the port's name from `bridge-ports` in `/etc/network/interfaces`:
+
+```bash
+ethtool nic0 | grep Wake-on       # last line must be "Wake-on: g"; "d" is off
+```
+
+If it says `d`, a unit arms it at every boot:
+
+```bash
+cat > /etc/systemd/system/wol-nic0.service <<'EOF'
+[Unit]
+Description=Arm Wake-on-LAN on nic0
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/ethtool -s nic0 wol g
+
+[Install]
+WantedBy=multi-user.target
+EOF
+systemctl daemon-reload
+systemctl enable --now wol-nic0.service
+```
+
+Reboot and check again. Then test it once while someone can reach the power button.
 
 **Storage, in a cluster.** A cluster has one storage list for all hosts, so after the join the new host uses
 the cluster's definitions. A `local-lvm` defined as volume group `pve`, thin pool `data` works
@@ -293,6 +328,29 @@ the manifest in one go. Use it here, after step 5, when `HOSTS` already has the 
 
 Once it is accepted, delete the copy from step 3: `rm -r newhost`.
 
+### A host that already runs Flux nodes (standalone)
+
+Skip `burn` in step 3: it refuses a host with its node VMs on it. Do 4s and 5 as above. In this
+step, the slot that stands for a running VM carries an `existingVm` with the VM's id and its
+current Proxmox name:
+
+```json
+{ "vmName": "mt-you-n2", "tier": "nimbus", "ipAddress": "203.0.113.51",
+  "lanIp": "192.168.1.52/24", "gateway": "192.168.1.1", "apiPort": 16137,
+  "network": "vmbr0", "storagePool": "local-lvm",
+  "existingVm": { "vmid": 900, "name": "oldnode" } }
+```
+
+`ipAddress` and `apiPort` are the ones the node already answers on.
+[`fh-toolkit inventory`](fh-toolkit.md#inventory) finds such VMs and writes the mark for you.
+
+⚠️ **Put the mark in the first time the host goes into the inventory.** Without it the slot is
+`available`, and a second node can be built for the same IP and port.
+
+The slot shows in `maintenance` on My Fleet. Click **Adopt as my node**: the VM is renamed to the
+slot's `vmName`, keeps running, and is your own node. Ending that rental later **destroys the VM**,
+after your owner signature. The mark can then come out of the file.
+
 ## 7. Offer the slots (Operators only)
 
 Inventory says what you **have**; `AGENT_LISTING_JSON` in `.env.operator` says what you **offer**.
@@ -319,12 +377,15 @@ A tier you have never sold also needs a price: `fh-toolkit stripe --price <tier>
 | You see | Do |
 |---|---|
 | `inventory failed: 409` | The hub does not have the host attested yet, or a `vmName` is outside your prefix or belongs to someone else. Take the new host back out of `data/inventory.json` now; your other hosts recover on the next heartbeat. Finish step 5, then add it again. **Do not leave it:** after two hours without an accepted inventory, your unrented slots are disavowed. |
-| `Proxmox credentials for pve2 are incomplete` | Step 4s: one of the three `_PVE2` lines is missing or empty. Add it, then `fh-agent restart`. |
-| A teardown fails with `… was not torn down: Proxmox at … has no node pve2` | The agent asked another host: the `_PVE2` lines are gone, or their name does not match `nodeName`. Fix them, `fh-agent restart`, retry. Until then the VM may still be running. |
+| `Proxmox endpoint for pve2 is incomplete — missing …` in the log at start, or a job fails with `Proxmox credentials for pve2 are incomplete` | Step 4s: the named `_PVE2` line is missing or empty. Add it, then `fh-agent restart`. The other hosts keep working meanwhile. |
+| The log says `proxmox query failed for node pve2: proxmox 500` and `ISO refresh failed on pve2 … hostname lookup 'pve2' failed` | All three `_PVE2` lines are gone, so the agent asks your first host for pve2. Put them back (step 4s), then `fh-agent restart`. |
+| `fh-toolkit proxmox --host pve2`: `token … already exists` | Left from an earlier login. Use its secret if you have it. If not, on pve2: `pveum user token remove fh-agent@pve agent`, then run it again. |
+| A teardown fails with `… was not torn down: Proxmox at … has no node pve2` | The agent asked another host: the `_PVE2` lines are gone, or their name does not match `nodeName`. Fix them, `fh-agent restart`, then sign the teardown again in the **Signing Queue**. Nothing was destroyed; the VM is still running. |
 | A teardown fails with `… was not torn down: pve2 is offline`, or `Unable to discover hypervisor nodes` (standalone) | The host is off or does not answer, so the VM may still be on it. Bring it back, then sign the teardown again in the **Signing Queue**: a signature works once, so **Retry** on the Jobs page is refused. |
 | A teardown signed while the host shuts down fails with `can't lock file … got timeout` | Proxmox's own shutdown holds the VM. Once the host is back, sign it again. |
 | A teardown succeeds with `VM '…' not found`, and the slot is in maintenance | The VM was already gone. Check that, then **Return to sale** on My Fleet. |
 | `fh-agent doctor` says `ENOTFOUND` for a host name the running agent reaches | Wrapper older than v12: `fh-toolkit --update-wrapper`. Or use the IP. |
+| `fh-agent doctor` dies with `ENOENT … inventory.json` while the running agent is fine | `doctor` sees only `data/`. Move the inventory to `data/inventory.json`, mount `./data:/data:ro` in `compose.yaml`, set `AGENT_INVENTORY_PATH=/data/inventory.json` in `.env.operator`, then `fh-agent restart`. |
 | `fh-agent doctor` fails on the ISO of a host you just added | The first copy is still downloading (about 3 GB). Run it again once the log shows it landed. |
 | `doctor`: `HOST_PROXMOX_UNUSED` | Normal between 4s and 6. After 6, the name in the lines does not match a `nodeName`. |
 | `pvecm add` refuses: guests exist | Step 3's check. Move or remove every VM and container on the new host. |
@@ -337,8 +398,23 @@ A tier you have never sold also needs a price: `fh-toolkit stripe --price <tier>
 
 ## Taking it out again
 
-Retire it from Flux Hub first:
-[Retiring a host](operator-onboarding.md#retiring-a-host). Standalone: once its last node is gone,
-delete its three lines from `.env.operator` and `fh-agent restart`. In a cluster, with every VM off it and the
-host **powered off for good**, run `pvecm delnode pve2` on a remaining host. To put the same
-machine back in the cluster, reinstall Proxmox on it first.
+**Standalone**, in this order; your other hosts are not affected:
+
+1. End or move its nodes. Keep its three login lines until the last one is torn down.
+2. Take its entry out of `data/inventory.json`. Within about a minute its free slots show
+   `Disavowed` on My Fleet.
+3. **My Fleet → No longer in your inventory → Retire** each slot, then **Retire host** if it is still
+   listed. This deletes their history on Flux Hub and cannot be undone. More:
+   [Retiring a host](operator-onboarding.md#retiring-a-host).
+4. In `.env.operator`, lower `availableSlots` in `AGENT_LISTING_JSON` (Operators) and delete the
+   host's three lines, then `fh-agent restart`.
+5. On the host, remove the agent's token:
+   ```bash
+   pveum user token remove fh-agent@pve agent
+   ```
+
+Leaving its name in `HOSTS` is harmless. To put it back, with the name still in `HOSTS`: 4s, 6 and 7.
+
+**Cluster:** [retire it from Flux Hub](operator-onboarding.md#retiring-a-host) first. Then, with
+every VM off it and the host **powered off for good**, run `pvecm delnode pve2` on a remaining host.
+To put the same machine back in the cluster, reinstall Proxmox on it first.
