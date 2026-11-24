@@ -385,6 +385,27 @@ test("the storages reported are the ones the YAML wrote: slot storagePool wins f
   assert.equal(provisionStorages({ slot: {} } as Parameters<typeof provisionStorages>[0], h).images, "env-images");
 });
 
+test("⭐ a teardown's steps are at the top level, and its failure names the step (2026-11-24)", () => {
+  // What `deprovision --vm-name --json` really prints. Reading only `nodes[]` left the operator
+  // with "Deprovisioning failed" and the command line.
+  const r: AmResult = {
+    error: null,
+    stdout: "",
+    stderr: "",
+    json: {
+      ok: false,
+      error: "Deprovisioning failed",
+      vm_id: 100,
+      steps: [
+        { ok: true, message: "Deleting VM and disks..." },
+        { ok: false, message: "Failed to delete VM: task status unreadable (request timed out)" },
+      ],
+    },
+  };
+  assert.match(amFailure(r), /^\[step\] Failed to delete VM: task status unreadable \(request timed out\)\n\nDeprovisioning failed/);
+  assert.equal(classifyAmFailure(r), "unknown", "half-mutated: never retried blindly");
+});
+
 test("parseAmJson survives stray stdout above the payload", () => {
   // A single stray line used to drop the entire structured payload.
   const out = 'warning: deprecated flag\n{"ok":false,"error":"Provisioning failed"}';

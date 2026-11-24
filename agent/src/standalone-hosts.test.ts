@@ -235,6 +235,69 @@ test("teardown on a powered-off cluster member fails, transient, through deprovi
   }
 });
 
+const failedDelete = (deleting = true) => ({
+  ok: false,
+  error: "Deprovisioning failed",
+  vm_name: "vm1",
+  vm_id: 100,
+  steps: [
+    { ok: true, message: "Found VM vm1 (id=100, status=running)" },
+    ...(deleting ? [{ ok: true, message: "Deleting VM and disks..." }] : []),
+    { ok: false, message: deleting ? "Failed to delete VM: task status unreadable (request timed out)" : "Failed to stop VM: got timeout" },
+  ],
+});
+
+test("⭐ teardown: a failed delete whose VM then goes is a success, and not `already absent` to the hub", async () => {
+  const am = fakeArcaneMage(failedDelete());
+  try {
+    let lists = 0;
+    let slept = 0;
+    // The destroy is still running at the first two looks.
+    const vms = async () => (++lists <= 2 ? [{ name: "vm1" }] : []);
+    const r = await deprovisionVm("vm1", "pve30", cfg(), noFresh, { nodes: listed("online"), vms }, async () => void slept++);
+    assert.equal(r.ok, true);
+    assert.equal(r.failureClass, undefined);
+    assert.deepEqual([lists, slept], [3, 2]);
+    assert.match(r.message!, /vm1 was destroyed: .*task status unreadable \(request timed out\).*pve30 no longer lists the VM/);
+    assert.doesNotMatch(r.message!, HUB_VM_ALREADY_ABSENT, "destroyed, so the slot goes back on sale");
+  } finally {
+    am.restore();
+  }
+});
+
+test("teardown: a failed delete stays failed while the VM is there, or the host cannot say", async () => {
+  const am = fakeArcaneMage(failedDelete());
+  try {
+    for (const absence of [
+      { nodes: listed("online"), vms: async () => [{ name: "vm1" }] },
+      { nodes: listed("offline"), vms: boom },
+      { nodes: boom, vms: async () => [] },
+      { nodes: async () => new Map([["pve50", "online"]]), vms: async () => [] },
+    ]) {
+      const r = await deprovisionVm("vm1", "pve30", cfg(), noFresh, absence, async () => {});
+      assert.equal(r.ok, false);
+      assert.equal(r.failureClass, "unknown");
+      assert.match(r.message!, /^\[step\] Failed to delete VM/);
+    }
+  } finally {
+    am.restore();
+  }
+});
+
+test("teardown: no delete was started, so a VM that is not listed proves nothing and nothing waits", async () => {
+  const am = fakeArcaneMage(failedDelete(false));
+  try {
+    let asked = 0;
+    const vms = async () => { asked++; return []; };
+    const r = await deprovisionVm("vm1", "pve30", cfg(), noFresh, { nodes: listed("online"), vms }, async () => {});
+    assert.equal(r.ok, false);
+    assert.equal(asked, 0);
+    assert.match(r.message!, /^\[step\] Failed to stop VM: got timeout/);
+  } finally {
+    am.restore();
+  }
+});
+
 // ── ISO refresh ───────────────────────────────────────────────────────────────
 test("ISO refresh: a standalone host that is off is skipped; a refused token is not", async () => {
   const run = async () => {

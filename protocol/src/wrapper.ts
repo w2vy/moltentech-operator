@@ -29,7 +29,7 @@ export const TOOLKIT_IMAGE = "ghcr.io/w2vy/fh-toolkit:latest";
  * from a stale one from one predating the handshake entirely (`undefined`). That is the
  * whole point of the exercise — a stale wrapper used to be undetectable from either side.
  */
-export const WRAPPER_VERSION = 11;
+export const WRAPPER_VERSION = 12;
 
 /** Where `--update-wrapper` installs, unless the operator overrides it. */
 export const WRAPPER_RC = "${FH_TOOLKIT_RC:-$HOME/.fh-toolkit.sh}";
@@ -238,6 +238,33 @@ fh-agent-stale-note() {
   echo "    . $rc          (or just open a new terminal)" >&2
 }
 
+# A one-shot container on the network the loop runs on, so names resolve as they do for the
+# loop. Docker's default network has its own DNS: on 2026-11-24 a Proxmox name from the
+# host's /etc/hosts was ENOTFOUND for \`doctor\` and fine for the running agent. With no
+# loop running, a throwaway network gives the same DNS; if that cannot be made, the default.
+fh-agent-run() {
+  local cid net="" rc
+  cid="$(fh-agent-cid)"
+  if [ -n "$cid" ]; then
+    net="$(docker inspect --format '{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}' "$cid" 2>/dev/null)"
+    net="\${net%% *}"
+  fi
+  local own=""
+  if [ -z "$net" ]; then
+    own=fh-agent-check
+    if docker network create "$own" >/dev/null 2>&1 || docker network inspect "$own" >/dev/null 2>&1; then
+      net="$own"
+    fi
+  fi
+  local -a netarg=()
+  [ -n "$net" ] && netarg=(--network "$net")
+  docker run --rm "\${netarg[@]}" --env-file .env.operator -v "$PWD/data:/data:ro" "$@"
+  rc=$?
+  # Refused while another check is still using it; that one removes it.
+  [ -n "$own" ] && docker network rm "$own" >/dev/null 2>&1
+  return $rc
+}
+
 fh-agent() {
   local img
   img="$(fh-agent-image)"
@@ -264,7 +291,7 @@ fh-agent() {
       # inherits node's, and a bare subcommand is handed to \`node\` — which dies
       # MODULE_NOT_FOUND /app/agent/doctor. \`doctor\` IS the image's CLI (index.ts reads
       # argv[2]); it is only unreachable as a bare docker argument.
-      docker run --rm --env-file .env.operator -v "$PWD/data:/data:ro" "$img" npm run doctor "$@"
+      fh-agent-run "$img" npm run doctor "$@"
       ;;
     version)
       # Which agent is running, which is pulled, and whether a newer one is published.
@@ -316,8 +343,7 @@ fh-agent() {
       shift
       # The image takes this as an env var, not an argument — the whole reason it is worth
       # wrapping. Validates Flux Hub connectivity and auth WITHOUT touching Proxmox.
-      docker run --rm --env-file .env.operator -v "$PWD/data:/data:ro" \\
-        -e AGENT_DRY_RUN=1 "$img" "$@"
+      fh-agent-run -e AGENT_DRY_RUN=1 "$img" "$@"
       ;;
     *)
       # An unrecognised bare word is NOT handed to the container.
@@ -337,7 +363,7 @@ fh-agent() {
       # and \`fh-agent sh -c '...'\` all work as they always did.
       case "$1" in
         npm|npx|node|tsx|sh|bash|env|python3|arcane-mage|/*|./*|*/*|-*)
-          docker run --rm --env-file .env.operator -v "$PWD/data:/data:ro" "$img" "$@"
+          fh-agent-run "$img" "$@"
           ;;
         *)
           echo "fh-agent: unknown command '$1'" >&2

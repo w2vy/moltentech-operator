@@ -744,6 +744,49 @@ test("bare `fh-agent` also names a stale wrapper", () => {
   assert.match(err, /on disk is wrapper/);
 });
 
+// ---------------------------------------------------------------- the one-shots' network
+
+/** A docker that logs, and answers as if compose were running this directory's loop. */
+function loopBox(body: string): ReturnType<typeof shellBox> {
+  const box = shellBox();
+  writeFileSync(join(box.dir, ".env.operator"), "x=1\n");
+  writeFileSync(join(box.dir, "compose.yaml"), "name: fh-agent-demo\nservices:\n  agent:\n    image: x/fh-agent:staging\n");
+  const p = join(box.dir, "bin", "docker");
+  writeFileSync(p, `#!/bin/bash\nprintf '%s\\n' "$*" >> ${JSON.stringify(join(box.dir, "docker.log"))}\n${body}\nexit 0\n`);
+  chmodSync(p, 0o755);
+  return box;
+}
+const runLines = (box: ReturnType<typeof shellBox>): string[] =>
+  box.argv().filter((a) => a[0] === "run").map((a) => a.join(" "));
+
+test("⭐ doctor, dry-run and pass-through run on the running loop's network (2026-11-24)", () => {
+  const box = loopBox(
+    `case "$1 $3" in "ps {{.ID}}") echo abc123;; "inspect {{range "*) printf 'fh-agent-demo_default other ';; esac`
+  );
+  box.run("fh-agent doctor; fh-agent dry-run; fh-agent npm run x");
+  const lines = runLines(box);
+  assert.equal(lines.length, 3);
+  for (const l of lines) assert.match(l, /^run --rm --network fh-agent-demo_default --env-file \.env\.operator -v /);
+  assert.equal(box.argv().filter((a) => a[0] === "network").length, 0, "the loop's own network needs no other");
+});
+
+test("with no loop running, a throwaway network is made and removed", () => {
+  const box = loopBox("");
+  box.run("fh-agent doctor");
+  assert.match(runLines(box)[0]!, /--network fh-agent-check /);
+  assert.deepEqual(box.argv().filter((a) => a[0] === "network").map((a) => a.join(" ")), [
+    "network create fh-agent-check",
+    "network rm fh-agent-check",
+  ]);
+});
+
+test("a network that cannot be made leaves the default, and the check's own exit code survives", () => {
+  const box = loopBox(`[ "$1" = network ] && exit 1\n[ "$1" = run ] && exit 7`);
+  const out = box.run("fh-agent doctor; echo rc=$?");
+  assert.match(out, /rc=7/);
+  assert.doesNotMatch(runLines(box)[0]!, /--network/);
+});
+
 // ---------------------------------------------------------------- docs agreement
 
 test("⭐ the docs show the same bytes the image emits", () => {

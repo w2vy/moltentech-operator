@@ -213,6 +213,8 @@ export type AmResult = {
       vm_id?: number | string;
       steps?: AmStep[];
     }>;
+    /** `deprovision --vm-name` answers for one VM: its steps are here, with no `nodes[]`. */
+    steps?: AmStep[];
   } | null;
 };
 
@@ -327,15 +329,14 @@ export function parseAmJson(stdout: string): AmResult["json"] {
   return null;
 }
 
-/** Messages of the failed steps in arcane-mage's per-host trace, outermost first. */
+/** Every step arcane-mage reported: per host under `nodes[]`, or for the one VM of a teardown. */
+function amSteps(r: AmResult): AmStep[] {
+  return [...(r.json?.steps ?? []), ...(r.json?.nodes ?? []).flatMap((n) => n.steps ?? [])];
+}
+
+/** Messages of the failed steps in arcane-mage's trace, outermost first. */
 export function failedSteps(r: AmResult): string[] {
-  const out: string[] = [];
-  for (const node of r.json?.nodes ?? []) {
-    for (const step of node.steps ?? []) {
-      if (step.ok === false && step.message?.trim()) out.push(step.message.trim());
-    }
-  }
-  return out;
+  return amSteps(r).flatMap((s) => (s.ok === false && s.message?.trim() ? [s.message.trim()] : []));
 }
 
 /**
@@ -517,6 +518,37 @@ export async function notFoundDoubt(
   return null;
 }
 
+/** How long a teardown that failed after its delete was started is watched for the VM to go. */
+const GONE_WAIT_MS = 30_000;
+const GONE_POLL_MS = 3_000;
+const sleepMs = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Did the VM go although arcane-mage reported a failed teardown?
+ *
+ * arcane-mage fails the teardown on ONE task-status poll it cannot read, while Proxmox carries on:
+ * staging 2026-11-24, pve31 busy swapping, `qmdestroy` ended OK a second after the job was reported
+ * failed. The operator then signs a second teardown, which finds no VM and parks the slot.
+ *
+ * Asked only once arcane-mage had found the VM and started the delete (its own step), so this can
+ * never turn "never saw it" into "destroyed". The delete may still be running, hence the wait.
+ */
+async function goneAfterFailedDelete(
+  r: AmResult,
+  cfg: AgentConfig,
+  nodeName: string,
+  vmName: string,
+  absence: AbsenceDeps,
+  sleep: (ms: number) => Promise<void>
+): Promise<boolean> {
+  if (!amSteps(r).some((s) => s.ok !== false && /^Deleting VM\b/.test(s.message ?? ""))) return false;
+  for (let waited = 0; ; waited += GONE_POLL_MS) {
+    if ((await notFoundDoubt(cfg, nodeName, vmName, absence)) === null) return true;
+    if (waited >= GONE_WAIT_MS) return false;
+    await sleep(GONE_POLL_MS);
+  }
+}
+
 /**
  * Destroy one VM by name and node.
  *
@@ -537,7 +569,8 @@ export async function deprovisionVm(
   nodeName: string,
   cfg: AgentConfig,
   fresh: FreshStopDeps = freshStopDeps(cfg),
-  absence: AbsenceDeps = absenceDeps
+  absence: AbsenceDeps = absenceDeps,
+  sleep: (ms: number) => Promise<void> = sleepMs
 ): Promise<ExecResult> {
   const note = await hardStopIfFresh(vmName, nodeName, fresh);
   const r = await runArcaneMage(
@@ -554,6 +587,17 @@ export async function deprovisionVm(
     }
   }
   const ok = r.json?.ok === true || notFound;
+  if (!ok && (await goneAfterFailedDelete(r, cfg, nodeName, vmName, absence, sleep))) {
+    // Never "VM '…' not found": the hub reads that as a VM nobody saw destroyed, and parks the slot.
+    const why = failedSteps(r).join("; ") || r.json?.error || "no reason given";
+    return {
+      ok: true,
+      message: clipMessage(
+        (note ? note + "\n" : "") +
+          `${vmName} was destroyed: arcane-mage reported a failure (${why}), but its delete was started and ${nodeName} no longer lists the VM.`
+      ),
+    };
+  }
   return {
     ok,
     message: (note ? note + "\n" : "") + (ok ? clipMessage((r.stdout + "\n" + r.stderr).trim()) : amFailure(r)),
